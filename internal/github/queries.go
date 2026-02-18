@@ -8,6 +8,14 @@ import (
 	"strings"
 )
 
+// ghError extracts stderr from an exec.ExitError for better error messages.
+func ghError(err error) string {
+	if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+		return strings.TrimSpace(string(ee.Stderr))
+	}
+	return err.Error()
+}
+
 // ReviewRequest represents a PR review request.
 type ReviewRequest struct {
 	Number     int        `json:"number"`
@@ -45,7 +53,7 @@ func GetCurrentUser(ctx context.Context) (string, error) {
 	cmd := exec.CommandContext(ctx, "gh", "api", "user", "--jq", ".login")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("fetching current user: %w", err)
+		return "", fmt.Errorf("fetching current user: %s", ghError(err))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -95,7 +103,7 @@ func GetReviewRequests(ctx context.Context, repoFilter string) ([]ReviewRequest,
 	)
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("GraphQL query failed: %w", err)
+		return nil, fmt.Errorf("GraphQL query failed: %s", ghError(err))
 	}
 
 	var result struct {
@@ -160,7 +168,7 @@ func GetApprovedUnmerged(ctx context.Context, repoFilter string) ([]ApprovedPR, 
 	)
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("GraphQL query failed: %w", err)
+		return nil, fmt.Errorf("GraphQL query failed: %s", ghError(err))
 	}
 
 	var result struct {

@@ -32,6 +32,11 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println(ui.BoldText("Zen Setup"))
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
+	fmt.Println("Prerequisites:")
+	fmt.Println("  gh auth login       — authenticate GitHub CLI")
+	fmt.Println("  iTerm2 installed    — for tab management")
+	fmt.Println("  claude installed    — Claude Code CLI")
+	fmt.Println()
 
 	// Check for existing config
 	if _, err := os.Stat(configPath); err == nil {
@@ -51,9 +56,9 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		fmt.Println(ui.BoldText(fmt.Sprintf("Repository %d", len(repos)+1)))
 		fmt.Println("───────────────────────────────────────────────────────────────")
 
-		shortName := prompt(scanner, "Short name (e.g. mono)", "mono")
-		fullName := promptRequired(scanner, "GitHub full name (e.g. chainguard-dev/mono)")
-		basePath := promptRequired(scanner, "Base path for worktrees (e.g. ~/git/cgr/repo-mono)")
+		shortName := prompt(scanner, "Short name (e.g. apko)", "apko")
+		fullName := promptRequired(scanner, "GitHub full name (e.g. chainguard-dev/apko)")
+		basePath := promptRequired(scanner, "Base path for worktrees (e.g. ~/git/cgr/repo-apko)")
 
 		repos = append(repos, repoInput{
 			Short:    shortName,

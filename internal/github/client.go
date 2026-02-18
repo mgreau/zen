@@ -34,7 +34,7 @@ func ghAuthToken() (string, error) {
 	cmd := exec.Command("gh", "auth", "token")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("gh auth token failed: %w (is gh CLI installed and authenticated?)", err)
+		return "", fmt.Errorf("gh auth token failed: %s (is gh CLI installed and authenticated?)", ghError(err))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
