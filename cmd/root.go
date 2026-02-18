@@ -32,6 +32,10 @@ Silently prepares worktrees, retries failures, and cleans up after itself.`,
 			os.Setenv("ZEN_DEBUG", "1")
 		}
 
+		if cmd.Name() == "setup" {
+			return nil
+		}
+
 		var err error
 		cfg, err = config.Load()
 		if err != nil {

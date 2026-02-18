@@ -428,6 +428,16 @@ zen
 └── go.mod
 ```
 
+## Getting Started
+
+After building, run the interactive setup to create your config:
+
+```
+zen setup
+```
+
+This walks you through configuring your repositories, GitHub usernames for PR filtering, and watch daemon settings. The config is written to `~/.zen/config.yaml`.
+
 ## Prerequisites
 
 | Requirement | Why |

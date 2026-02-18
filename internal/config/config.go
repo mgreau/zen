@@ -92,7 +92,7 @@ func Load() (*Config, error) {
 	yamlPath := filepath.Join(zenHome(), "config.yaml")
 	data, err := os.ReadFile(yamlPath)
 	if err != nil {
-		return nil, fmt.Errorf("config file not found: %s\nCreate it with your repos, authors, and watch settings", yamlPath)
+		return nil, fmt.Errorf("config file not found: %s\nRun 'zen setup' to create it", yamlPath)
 	}
 
 	cfg := &Config{}
