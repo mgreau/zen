@@ -27,7 +27,7 @@ var (
 )
 
 func init() {
-	inboxCmd.Flags().StringVarP(&inboxRepo, "repo", "r", "mono", "Repository to check")
+	inboxCmd.Flags().StringVarP(&inboxRepo, "repo", "r", "", "Repository to check (default: all)")
 	inboxCmd.Flags().StringVarP(&inboxAuthors, "authors", "a", "", "Override authors list")
 	inboxCmd.Flags().BoolVar(&inboxAll, "all", false, "Show from all authors")
 	inboxCmd.Flags().StringVarP(&inboxPathFilter, "path", "p", "", "List PRs touching files under DIR")
@@ -46,8 +46,10 @@ type InboxPR struct {
 }
 
 func runInbox(_ *cobra.Command, _ []string) error {
-	ctx := context.Background()
-	fullRepo := cfg.RepoFullName(inboxRepo)
+	repos := []string{inboxRepo}
+	if inboxRepo == "" {
+		repos = cfg.RepoNames()
+	}
 
 	authors := cfg.Authors
 	if inboxAuthors != "" {
@@ -57,23 +59,58 @@ func runInbox(_ *cobra.Command, _ []string) error {
 		authors = nil
 	}
 
-	localPRs := getLocalPRNumbers(inboxRepo)
+	hasResults := false
+	for _, repo := range repos {
+		found, err := runInboxForRepo(repo, authors)
+		if err != nil {
+			return err
+		}
+		if found {
+			hasResults = true
+		}
+	}
+
+	if !hasResults {
+		if jsonFlag {
+			fmt.Println("[]")
+		} else {
+			fmt.Println()
+			fmt.Println(ui.BoldText("No PRs found"))
+			if inboxPathFilter != "" {
+				repoLabel := strings.Join(repos, ", ")
+				ui.Hint(fmt.Sprintf("Path: %s in %s", inboxPathFilter, repoLabel))
+			}
+			if !inboxAll && len(authors) > 0 {
+				ui.Hint(fmt.Sprintf("Authors: %s", strings.Join(authors, " ")))
+				ui.Hint("Use --all to check all authors")
+			}
+			fmt.Println()
+		}
+	}
+
+	return nil
+}
+
+func runInboxForRepo(repo string, authors []string) (bool, error) {
+	ctx := context.Background()
+	fullRepo := cfg.RepoFullName(repo)
+	localPRs := getLocalPRNumbers(repo)
 	hasResults := false
 
 	if inboxPathFilter != "" {
 		prs, err := fetchPRsByPath(ctx, fullRepo, inboxPathFilter, authors)
 		if err != nil {
-			return err
+			return false, err
 		}
 		pending := filterLocalPRs(prs, localPRs)
 		if len(prs) > 0 {
 			hasResults = true
-			displayPathResults(pending, len(prs))
+			displayPathResults(pending, len(prs), repo)
 		}
 	} else {
 		reviews, err := ghpkg.GetReviewRequests(ctx, fullRepo)
 		if err != nil {
-			return fmt.Errorf("fetching review requests: %w", err)
+			return false, fmt.Errorf("fetching review requests for %s: %w", repo, err)
 		}
 
 		filtered := filterByAuthors(reviews, authors)
@@ -81,7 +118,7 @@ func runInbox(_ *cobra.Command, _ []string) error {
 
 		if len(filtered) > 0 {
 			hasResults = true
-			displayReviewResults(pending, len(filtered))
+			displayReviewResults(pending, len(filtered), repo)
 		}
 
 		approved, err := ghpkg.GetApprovedUnmerged(ctx, fullRepo)
@@ -121,24 +158,7 @@ func runInbox(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	if !hasResults {
-		if jsonFlag {
-			fmt.Println("[]")
-		} else {
-			fmt.Println()
-			fmt.Println(ui.BoldText("No PRs found"))
-			if inboxPathFilter != "" {
-				ui.Hint(fmt.Sprintf("Path: %s in %s", inboxPathFilter, inboxRepo))
-			}
-			if !inboxAll && len(authors) > 0 {
-				ui.Hint(fmt.Sprintf("Authors: %s", strings.Join(authors, " ")))
-				ui.Hint("Use --all to check all authors")
-			}
-			fmt.Println()
-		}
-	}
-
-	return nil
+	return hasResults, nil
 }
 
 func getLocalPRNumbers(repo string) map[int]bool {
@@ -303,7 +323,7 @@ func fetchOpenPRs(ctx context.Context, fullRepo string, currentUser string) (wat
 	return watched, others, nil
 }
 
-func displayReviewResults(pending []ghpkg.ReviewRequest, total int) {
+func displayReviewResults(pending []ghpkg.ReviewRequest, total int, repo string) {
 	if jsonFlag {
 		var prs []InboxPR
 		for _, pr := range pending {
@@ -320,9 +340,9 @@ func displayReviewResults(pending []ghpkg.ReviewRequest, total int) {
 
 	fmt.Println()
 	if inboxAll {
-		fmt.Printf("%s %s\n", ui.BoldText("Pending PR Reviews — "+inboxRepo), ui.DimText("(all authors)"))
+		fmt.Printf("%s %s\n", ui.BoldText("Pending PR Reviews — "+repo), ui.DimText("(all authors)"))
 	} else {
-		fmt.Println(ui.BoldText("Pending PR Reviews — " + inboxRepo))
+		fmt.Println(ui.BoldText("Pending PR Reviews — " + repo))
 		ui.Hint(fmt.Sprintf("Authors: %s", strings.Join(cfg.Authors, " ")))
 	}
 	fmt.Println("═══════════════════════════════════════════════════════════════")
@@ -355,14 +375,14 @@ func displayReviewResults(pending []ghpkg.ReviewRequest, total int) {
 	fmt.Println()
 }
 
-func displayPathResults(pending []InboxPR, total int) {
+func displayPathResults(pending []InboxPR, total int, repo string) {
 	if jsonFlag {
 		printJSON(pending)
 		return
 	}
 
 	fmt.Println()
-	fmt.Printf("%s\n", ui.BoldText(fmt.Sprintf("Open PRs touching %s — %s", ui.CyanText(inboxPathFilter), inboxRepo)))
+	fmt.Printf("%s\n", ui.BoldText(fmt.Sprintf("Open PRs touching %s — %s", ui.CyanText(inboxPathFilter), repo)))
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
 
