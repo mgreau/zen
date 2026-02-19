@@ -10,6 +10,7 @@ import (
 	"github.com/mgreau/zen/internal/ui"
 	"github.com/mgreau/zen/internal/worktree"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 )
 
 var inboxCmd = &cobra.Command{
@@ -59,9 +60,13 @@ func runInbox(_ *cobra.Command, _ []string) error {
 		authors = nil
 	}
 
+	// Cache current user once for all repos.
+	ctx := context.Background()
+	currentUser, _ := ghpkg.GetCurrentUser(ctx)
+
 	hasResults := false
 	for _, repo := range repos {
-		found, err := runInboxForRepo(repo, authors)
+		found, err := runInboxForRepo(repo, authors, currentUser)
 		if err != nil {
 			return err
 		}
@@ -91,7 +96,7 @@ func runInbox(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
-func runInboxForRepo(repo string, authors []string) (bool, error) {
+func runInboxForRepo(repo string, authors []string, currentUser string) (bool, error) {
 	ctx := context.Background()
 	fullRepo := cfg.RepoFullName(repo)
 	localPRs := getLocalPRNumbers(repo)
@@ -108,9 +113,24 @@ func runInboxForRepo(repo string, authors []string) (bool, error) {
 			displayPathResults(pending, len(prs), repo)
 		}
 	} else {
-		reviews, err := ghpkg.GetReviewRequests(ctx, fullRepo)
-		if err != nil {
-			return false, fmt.Errorf("fetching review requests for %s: %w", repo, err)
+		// Fetch review requests and approved PRs concurrently.
+		var reviews []ghpkg.ReviewRequest
+		var approved []ghpkg.ApprovedPR
+		var reviewsErr, approvedErr error
+
+		g, gctx := errgroup.WithContext(ctx)
+		g.Go(func() error {
+			reviews, reviewsErr = ghpkg.GetReviewRequests(gctx, fullRepo)
+			return nil
+		})
+		g.Go(func() error {
+			approved, approvedErr = ghpkg.GetApprovedUnmerged(gctx, fullRepo)
+			return nil
+		})
+		_ = g.Wait()
+
+		if reviewsErr != nil {
+			return false, fmt.Errorf("fetching review requests for %s: %w", repo, reviewsErr)
 		}
 
 		filtered := filterByAuthors(reviews, authors)
@@ -121,14 +141,12 @@ func runInboxForRepo(repo string, authors []string) (bool, error) {
 			displayReviewResults(pending, len(filtered), repo)
 		}
 
-		approved, err := ghpkg.GetApprovedUnmerged(ctx, fullRepo)
-		if err == nil && len(approved) > 0 {
+		if approvedErr == nil && len(approved) > 0 {
 			hasResults = true
 			displayApprovedUnmerged(approved)
 		}
 
 		if len(cfg.WatchPaths) > 0 {
-			currentUser, _ := ghpkg.GetCurrentUser(ctx)
 			watched, others, err := fetchOpenPRs(ctx, fullRepo, currentUser)
 			if err == nil {
 				if len(watched) > 0 {
@@ -212,8 +230,6 @@ func filterLocalPRs(prs []InboxPR, local map[int]bool) []InboxPR {
 func fetchPRsByPath(ctx context.Context, fullRepo, pathPrefix string, authors []string) ([]InboxPR, error) {
 	pathPrefix = strings.TrimSuffix(pathPrefix, "/")
 
-	ui.LogInfo(fmt.Sprintf("Scanning open PRs in %s for files under %s/...", fullRepo, pathPrefix))
-
 	prs, err := ghpkg.ListOpenPRs(ctx, fullRepo, inboxLimit)
 	if err != nil {
 		return nil, err
@@ -228,44 +244,63 @@ func fetchPRsByPath(ctx context.Context, fullRepo, pathPrefix string, authors []
 		return nil, err
 	}
 
-	var results []InboxPR
-	for i, pr := range prs {
-		if !jsonFlag {
-			fmt.Fprintf(os.Stderr, "\r  Checking PR #%-6d (%d/%d)", pr.Number, i+1, len(prs))
-		}
-
-		files, err := ghClient.GetPRFiles(ctx, fullRepo, pr.Number)
-		if err != nil {
-			continue
-		}
-
-		count := 0
-		for _, f := range files {
-			if strings.HasPrefix(f, pathPrefix+"/") {
-				count++
-			}
-		}
-
-		if count > 0 {
-			results = append(results, InboxPR{
-				Number:       pr.Number,
-				Title:        pr.Title,
-				Author:       pr.Author.Login,
-				URL:          pr.URL,
-				MatchedCount: count,
-			})
-		}
+	if !jsonFlag {
+		fmt.Fprintf(os.Stderr, "  Scanning %d PRs in %s for %s/...", len(prs), fullRepo, pathPrefix)
 	}
+
+	type prResult struct {
+		entry   InboxPR
+		matched bool
+	}
+	slots := make([]prResult, len(prs))
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(5)
+	for i, pr := range prs {
+		g.Go(func() error {
+			files, err := ghClient.GetPRFiles(gctx, fullRepo, pr.Number)
+			if err != nil {
+				return nil
+			}
+			count := 0
+			for _, f := range files {
+				if strings.HasPrefix(f, pathPrefix+"/") {
+					count++
+				}
+			}
+			if count > 0 {
+				slots[i] = prResult{
+					entry: InboxPR{
+						Number:       pr.Number,
+						Title:        pr.Title,
+						Author:       pr.Author.Login,
+						URL:          pr.URL,
+						MatchedCount: count,
+					},
+					matched: true,
+				}
+			}
+			return nil
+		})
+	}
+	_ = g.Wait()
 
 	if !jsonFlag {
 		fmt.Fprintf(os.Stderr, "\r%-60s\r", "")
+	}
+
+	var results []InboxPR
+	for _, s := range slots {
+		if s.matched {
+			results = append(results, s.entry)
+		}
 	}
 	return results, nil
 }
 
 // fetchOpenPRs splits recent open PRs into two groups: those touching watched
 // paths and all others. The current user's PRs are excluded from both.
-func fetchOpenPRs(ctx context.Context, fullRepo string, currentUser string) (watched []InboxPR, others []InboxPR, err error) {
+func fetchOpenPRs(ctx context.Context, fullRepo string, currentUser string) ([]InboxPR, []InboxPR, error) {
 	prs, err := ghpkg.ListOpenPRs(ctx, fullRepo, 30)
 	if err != nil {
 		return nil, nil, err
@@ -276,49 +311,80 @@ func fetchOpenPRs(ctx context.Context, fullRepo string, currentUser string) (wat
 		return nil, nil, err
 	}
 
-	for i, pr := range prs {
+	// Filter out current user's PRs before scanning.
+	var candidates []ghpkg.ReviewRequest
+	for _, pr := range prs {
 		if currentUser != "" && pr.Author.Login == currentUser {
 			continue
 		}
-		if !jsonFlag {
-			fmt.Fprintf(os.Stderr, "\r  %s", ui.DimText(fmt.Sprintf("Scanning PR #%-6d (%d/%d)", pr.Number, i+1, len(prs))))
-		}
-
-		files, err := ghClient.GetPRFiles(ctx, fullRepo, pr.Number)
-		if err != nil {
-			continue
-		}
-
-		seen := make(map[string]bool)
-		for _, f := range files {
-			for _, wp := range cfg.WatchPaths {
-				if (strings.HasPrefix(f, wp+"/") || strings.HasPrefix(f, wp)) && !seen[wp] {
-					seen[wp] = true
-				}
-			}
-		}
-
-		entry := InboxPR{
-			Number: pr.Number,
-			Title:  pr.Title,
-			Author: pr.Author.Login,
-			URL:    pr.URL,
-		}
-
-		if len(seen) > 0 {
-			var paths []string
-			for p := range seen {
-				paths = append(paths, p)
-			}
-			entry.MatchedPaths = strings.Join(paths, ", ")
-			watched = append(watched, entry)
-		} else {
-			others = append(others, entry)
-		}
+		candidates = append(candidates, pr)
 	}
 
 	if !jsonFlag {
+		fmt.Fprintf(os.Stderr, "  %s", ui.DimText(fmt.Sprintf("Scanning %d open PRs...", len(candidates))))
+	}
+
+	type prResult struct {
+		entry   InboxPR
+		watched bool
+		ok      bool
+	}
+	slots := make([]prResult, len(candidates))
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(5)
+	for i, pr := range candidates {
+		g.Go(func() error {
+			files, err := ghClient.GetPRFiles(gctx, fullRepo, pr.Number)
+			if err != nil {
+				return nil
+			}
+
+			seen := make(map[string]bool)
+			for _, f := range files {
+				for _, wp := range cfg.WatchPaths {
+					if (strings.HasPrefix(f, wp+"/") || strings.HasPrefix(f, wp)) && !seen[wp] {
+						seen[wp] = true
+					}
+				}
+			}
+
+			entry := InboxPR{
+				Number: pr.Number,
+				Title:  pr.Title,
+				Author: pr.Author.Login,
+				URL:    pr.URL,
+			}
+
+			if len(seen) > 0 {
+				var paths []string
+				for p := range seen {
+					paths = append(paths, p)
+				}
+				entry.MatchedPaths = strings.Join(paths, ", ")
+				slots[i] = prResult{entry: entry, watched: true, ok: true}
+			} else {
+				slots[i] = prResult{entry: entry, watched: false, ok: true}
+			}
+			return nil
+		})
+	}
+	_ = g.Wait()
+
+	if !jsonFlag {
 		fmt.Fprintf(os.Stderr, "\r%-60s\r", "")
+	}
+
+	var watched, others []InboxPR
+	for _, s := range slots {
+		if !s.ok {
+			continue
+		}
+		if s.watched {
+			watched = append(watched, s.entry)
+		} else {
+			others = append(others, s.entry)
+		}
 	}
 	return watched, others, nil
 }

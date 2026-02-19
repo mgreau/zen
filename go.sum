@@ -1,5 +1,3 @@
-chainguard.dev/driftlessaf v0.0.0-20260210085235-dc26663150d8 h1:rznx0c82qHtL1/aw6mh200lhVANGwHC7XcbKnWIReWI=
-chainguard.dev/driftlessaf v0.0.0-20260210085235-dc26663150d8/go.mod h1:HEcZkPCtjRWEzk9CyHlUv7TSorkpr1j8g/cJbMcPaDk=
 chainguard.dev/driftlessaf v0.0.0-20260217015705-f583b916060f h1:nJ7J8/ICM/r9ogBX8lvl7fjx19R2GH6cg89OFGNfMwI=
 chainguard.dev/driftlessaf v0.0.0-20260217015705-f583b916060f/go.mod h1:FyWZCDZdTnc9nDlsEV4ahkSAt6ZS12pxI5dpRoypfuQ=
 chainguard.dev/go-grpc-kit v0.17.15 h1:y+FBjta2lsC0XxlkG+W5P1VxYl0zG74GRvoYN2o+p7s=
