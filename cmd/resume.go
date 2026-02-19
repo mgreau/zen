@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -171,7 +172,16 @@ func findWorktreeByPR(prNumber int) (*worktree.Worktree, error) {
 			return &wt, nil
 		}
 	}
-	return nil, fmt.Errorf("no PR review worktree for #%d\n  Create with: zen review %d", prNumber, prNumber)
+	return nil, &noWorktreeError{prNumber: prNumber}
+}
+
+// noWorktreeError is returned when no worktree exists for a PR.
+type noWorktreeError struct {
+	prNumber int
+}
+
+func (e *noWorktreeError) Error() string {
+	return fmt.Sprintf("no PR review worktree for #%d", e.prNumber)
 }
 
 // findWorktreeByName finds a feature worktree by name/term search.
@@ -228,6 +238,17 @@ func runReviewResume(cmd *cobra.Command, args []string) error {
 
 	wt, err := findWorktreeByPR(prNumber)
 	if err != nil {
+		var nwErr *noWorktreeError
+		if errors.As(err, &nwErr) {
+			fmt.Printf("No worktree found for PR #%d. Create one? [Y/n]: ", prNumber)
+			var resp string
+			fmt.Scanln(&resp)
+			resp = strings.ToLower(strings.TrimSpace(resp))
+			if resp == "n" || resp == "no" {
+				return nil
+			}
+			return runReview(cmd, args)
+		}
 		return err
 	}
 
