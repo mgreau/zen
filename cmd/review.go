@@ -231,7 +231,8 @@ func runReviewDelete(cmd *cobra.Command, args []string) error {
 }
 
 // detectRepoForPR tries each configured repo to find which one contains the
-// given PR number. Returns the repo short name or an error.
+// given PR number. If multiple repos have the same PR number, asks the user
+// to choose. Returns the repo short name or an error.
 func detectRepoForPR(ctx context.Context, prNumber int) (string, error) {
 	repos := cfg.RepoNames()
 	if len(repos) == 1 {
@@ -245,14 +246,60 @@ func detectRepoForPR(ctx context.Context, prNumber int) (string, error) {
 		return "", fmt.Errorf("creating GitHub client: %w", err)
 	}
 
+	type match struct {
+		repo   string
+		title  string
+		author string
+	}
+	var matches []match
 	for _, repo := range repos {
 		fullRepo := cfg.RepoFullName(repo)
-		if _, err := client.GetPRDetails(ctx, fullRepo, prNumber); err == nil {
-			ui.LogInfo(fmt.Sprintf("Found PR #%d in %s", prNumber, repo))
-			return repo, nil
+		details, err := client.GetPRDetails(ctx, fullRepo, prNumber)
+		if err == nil {
+			matches = append(matches, match{repo: repo, title: details.Title, author: details.Author})
 		}
 	}
 
-	return "", fmt.Errorf("PR #%d not found in any configured repo (%s)\n  Specify with: zen review --repo <name> %d",
-		prNumber, strings.Join(repos, ", "), prNumber)
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("PR #%d not found in any configured repo (%s)\n  Specify with: zen review --repo <name> %d",
+			prNumber, strings.Join(repos, ", "), prNumber)
+	case 1:
+		ui.LogInfo(fmt.Sprintf("Found PR #%d in %s", prNumber, matches[0].repo))
+		return matches[0].repo, nil
+	default:
+		// Check if the user is a requested reviewer on exactly one of them.
+		currentUser, _ := github.GetCurrentUser(ctx)
+		if currentUser != "" {
+			var reviewMatches []match
+			for _, m := range matches {
+				fullRepo := cfg.RepoFullName(m.repo)
+				if ok, _ := client.IsRequestedReviewer(ctx, fullRepo, prNumber, currentUser); ok {
+					reviewMatches = append(reviewMatches, m)
+				}
+			}
+			if len(reviewMatches) == 1 {
+				ui.LogInfo(fmt.Sprintf("Found PR #%d in %s (you're a requested reviewer)", prNumber, reviewMatches[0].repo))
+				return reviewMatches[0].repo, nil
+			}
+		}
+
+		// Multiple matches, ask the user.
+		fmt.Printf("PR #%d exists in multiple repos:\n", prNumber)
+		for i, m := range matches {
+			fmt.Printf("  [%d] %s — %s (by %s)\n", i+1, m.repo, ui.Truncate(m.title, 50), m.author)
+		}
+		fmt.Print("Which repo? [1]: ")
+		var resp string
+		fmt.Scanln(&resp)
+		resp = strings.TrimSpace(resp)
+		if resp == "" {
+			resp = "1"
+		}
+		idx, err := strconv.Atoi(resp)
+		if err != nil || idx < 1 || idx > len(matches) {
+			return "", fmt.Errorf("invalid choice %q", resp)
+		}
+		return matches[idx-1].repo, nil
+	}
 }

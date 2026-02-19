@@ -146,6 +146,21 @@ func (c *Client) GetPRStateByBranch(ctx context.Context, fullRepo, branch string
 	return strings.ToUpper(pr.GetState()), pr.GetNumber(), nil
 }
 
+// IsRequestedReviewer checks if the given user login is a requested reviewer on a PR.
+func (c *Client) IsRequestedReviewer(ctx context.Context, fullRepo string, prNumber int, login string) (bool, error) {
+	owner, repo := splitRepo(fullRepo)
+	reviewers, _, err := c.gh.PullRequests.ListReviewers(ctx, owner, repo, prNumber, nil)
+	if err != nil {
+		return false, err
+	}
+	for _, u := range reviewers.Users {
+		if u.GetLogin() == login {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func splitRepo(fullRepo string) (string, string) {
 	parts := strings.SplitN(fullRepo, "/", 2)
 	if len(parts) != 2 {

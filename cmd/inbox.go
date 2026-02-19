@@ -75,6 +75,10 @@ func runInbox(_ *cobra.Command, _ []string) error {
 		}
 	}
 
+	if hasResults && !jsonFlag {
+		printWorktreeLegend()
+	}
+
 	if !hasResults {
 		if jsonFlag {
 			fmt.Println("[]")
@@ -167,10 +171,6 @@ func runInboxForRepo(repo string, authors []string, currentUser string) (bool, e
 				if len(reviewOthers) > 0 {
 					hasResults = true
 					displayOtherPRs(reviewOthers, localPRs, repo)
-				}
-				if !jsonFlag && (len(watched) > 0 || len(reviewOthers) > 0) {
-					printWorktreeLegend()
-					fmt.Println()
 				}
 			}
 		}
@@ -406,9 +406,9 @@ func displayReviewResults(pending []ghpkg.ReviewRequest, total int, repo string)
 
 	fmt.Println()
 	if inboxAll {
-		fmt.Printf("%s %s\n", ui.BoldText("Pending PR Reviews — "+repo), ui.DimText("(all authors)"))
+		fmt.Printf("%s %s\n", ui.BoldText("Pending PR Reviews — "+ui.YellowText(repo)), ui.DimText("(all authors)"))
 	} else {
-		fmt.Println(ui.BoldText("Pending PR Reviews — " + repo))
+		fmt.Println(ui.BoldText("Pending PR Reviews — " + ui.YellowText(repo)))
 		ui.Hint(fmt.Sprintf("Authors: %s", strings.Join(cfg.Authors, " ")))
 	}
 	fmt.Println("═══════════════════════════════════════════════════════════════")
@@ -448,7 +448,7 @@ func displayPathResults(pending []InboxPR, total int, repo string) {
 	}
 
 	fmt.Println()
-	fmt.Printf("%s\n", ui.BoldText(fmt.Sprintf("Open PRs touching %s — %s", ui.CyanText(inboxPathFilter), repo)))
+	fmt.Printf("%s\n", ui.BoldText(fmt.Sprintf("Open PRs touching %s — %s", ui.CyanText(inboxPathFilter), ui.YellowText(repo))))
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
 
@@ -519,7 +519,7 @@ func displayWatchedPRs(prs []InboxPR, localPRs map[int]bool, repo string) {
 
 	fmt.Println()
 	watchPathsStr := strings.Join(cfg.WatchPaths, "/ and ") + "/"
-	fmt.Printf("%s\n", ui.BoldText(fmt.Sprintf("Open PRs touching %s — %s", ui.CyanText(watchPathsStr), repo)))
+	fmt.Printf("%s\n", ui.BoldText(fmt.Sprintf("Open PRs touching %s — %s", ui.CyanText(watchPathsStr), ui.YellowText(repo))))
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
 
@@ -538,7 +538,7 @@ func displayOtherPRs(prs []InboxPR, localPRs map[int]bool, repo string) {
 	}
 
 	fmt.Println()
-	fmt.Println(ui.BoldText(fmt.Sprintf("Other PRs Requesting Your Review — %s", repo)))
+	fmt.Println(ui.BoldText(fmt.Sprintf("Other PRs Requesting Your Review — %s", ui.YellowText(repo))))
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
 
@@ -570,10 +570,13 @@ func printPRTable(prs []InboxPR, localPRs map[int]bool) {
 	}
 }
 
-// printWorktreeLegend prints a legend explaining the W column.
+// printWorktreeLegend prints a legend explaining the W column and worktree indicators.
 func printWorktreeLegend() {
-	fmt.Printf("  %s = local worktree exists (%s to open, %s to create)\n",
-		ui.GreenText("*"),
+	fmt.Println(ui.DimText("───────────────────────────────────────────────────────────────"))
+	fmt.Printf("  %s  W = Worktree\n", ui.BoldText("Legend"))
+	fmt.Printf("       %s = local worktree exists\n", ui.GreenText("*"))
+	fmt.Printf("       %s to open  |  %s to create\n",
 		ui.DimText("zen review resume <number>"),
 		ui.DimText("zen review <number>"))
+	fmt.Println()
 }

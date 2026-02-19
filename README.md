@@ -104,7 +104,7 @@ Authors: alice bob charlie dave
 ───────────────────────────────────────────────────────────────
 2 pending review(s)
 
-Open PRs touching platform/ and agents/
+Open PRs touching platform/ and agents/ — app
 ═══════════════════════════════════════════════════════════════
 
   W   PR      Author                Title                                       Link
@@ -116,7 +116,7 @@ Open PRs touching platform/ and agents/
 ───────────────────────────────────────────────────────────────
 3 open PR(s)
 
-Other PRs Requesting Your Review
+Other PRs Requesting Your Review — app
 ═══════════════════════════════════════════════════════════════
 
   W   PR      Author                Title                                       Link
@@ -127,21 +127,24 @@ Other PRs Requesting Your Review
 ───────────────────────────────────────────────────────────────
 2 open PR(s)
 
-  * = local worktree exists (zen review resume <number> to open, zen review <number> to create)
+───────────────────────────────────────────────────────────────
+  Legend  W = Worktree
+         * = local worktree exists
+         zen review resume <number> to open  |  zen review <number> to create
 ```
 
 ### Review
 
 ```
-zen review 42                    # Create worktree + open iTerm tab
-zen review 42 --repo other       # Specify repo (default: mono)
+zen review 42                    # Create worktree + open iTerm tab (auto-detects repo)
+zen review 42 --repo other       # Specify repo explicitly
 zen review 42 --no-iterm         # Create worktree only, print command
 zen review resume 42             # Open existing worktree in new iTerm tab
 zen review resume 42 --list      # List available sessions
 zen review resume 42 --session 2 # Resume specific session
 ```
 
-Manually create a PR review worktree: fetches the PR branch, creates the worktree, injects CLAUDE.md context, and opens an iTerm tab with Claude. Use this when the daemon hasn't picked up a PR yet or you want to start immediately. If the worktree already exists, use `zen review resume` instead.
+Manually create a PR review worktree: fetches the PR branch, creates the worktree, injects CLAUDE.md context, and opens an iTerm tab with Claude. When `--repo` is omitted, zen auto-detects the repo by querying GitHub — if the PR number exists in multiple repos, it prefers the one where you're a requested reviewer, or asks you to choose. Use this when the daemon hasn't picked up a PR yet or you want to start immediately. If the worktree already exists, use `zen review resume` instead. If you run `zen review resume` and no worktree exists, it offers to create one.
 
 ### Reviews
 
@@ -265,6 +268,21 @@ Starts a Model Context Protocol server on stdio, exposing zen tools for Claude s
 - `zen_agent_status` — session info
 - `zen_config_repos` — configured repositories
 
+To register with Claude Code:
+
+```
+claude mcp add --scope user zen -- zen mcp serve
+```
+
+This lets Claude call zen tools directly during sessions (e.g. list worktrees, check inbox, fetch PR details).
+
+### Other Commands
+
+```
+zen version                      # Show version and commit SHA
+zen setup                        # Interactive first-time setup
+```
+
 ### Global Flags
 
 ```
@@ -280,7 +298,7 @@ Config file: `~/.zen/config.yaml`
 repos:
   app:
     full_name: octo-sts/app
-    base_path: ~/git/cgr/repo-octo-sts-app
+    base_path: ~/git/repo-octo-sts-app
 
 authors:
   - mattmoor
@@ -303,7 +321,7 @@ Each repo key (e.g. `app`) is a short name you choose — it doesn't have to mat
 repos:
   octo-app:
     full_name: octo-sts/app
-    base_path: ~/git/cgr/repo-octo-sts-app
+    base_path: ~/git/repo-octo-sts-app
   other-app:
     full_name: other-org/app
     base_path: ~/git/other/repo-app
@@ -328,7 +346,7 @@ All state lives in `~/.zen/state/`:
 
 ### Daemon Architecture
 
-Under the hood, the daemon uses [driftlessaf](https://github.com/chainguard-dev/driftlessaf) workqueues with two reconcilers — one for setup, one for cleanup:
+Under the hood, the daemon uses [driftlessaf](https://github.com/driftlessaf) workqueues with two reconcilers — one for setup, one for cleanup:
 
 ```
                           ┌─────────────────────────────────────────────────────────┐
@@ -414,6 +432,7 @@ PR metadata (titles, authors) is cached in a lightweight JSON file (`~/.zen/stat
 ```
 zen
 ├── cmd/                          # CLI commands (cobra)
+├── commands/                     # Claude Code commands (embedded in binary)
 ├── internal/
 │   ├── config/                   # YAML config (~/.zen/config.yaml)
 │   ├── context/                  # CLAUDE.md generation for PR reviews
@@ -454,13 +473,25 @@ This walks you through configuring your repositories, GitHub usernames for PR fi
 ## Building
 
 ```
+make build                       # Includes version + commit SHA via ldflags
+```
+
+Or manually:
+
+```
 go build -o zen .
+```
+
+Check your build:
+
+```
+zen version                      # Shows version and commit SHA
 ```
 
 ## Testing
 
 ```
-go test ./...
+make test
 ```
 
 ## Why "zen"?
