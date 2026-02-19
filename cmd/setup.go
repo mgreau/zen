@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bufio"
+	"embed"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,10 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
+
+// EmbeddedCommands holds the embedded Claude Code command files.
+// Set by main.go before Execute().
+var EmbeddedCommands embed.FS
 
 var setupCmd = &cobra.Command{
 	Use:   "setup",
@@ -58,7 +64,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 
 		shortName := prompt(scanner, "Short name (e.g. apko)", "apko")
 		fullName := promptRequired(scanner, "GitHub full name (e.g. chainguard-dev/apko)")
-		basePath := promptRequired(scanner, "Base path for worktrees (e.g. ~/git/cgr/repo-apko)")
+		basePath := promptRequired(scanner, "Base path for worktrees (e.g. ~/git/repo-apko)")
 
 		repos = append(repos, repoInput{
 			Short:    shortName,
@@ -127,10 +133,20 @@ func runSetup(cmd *cobra.Command, args []string) error {
 
 	fmt.Println(ui.GreenText("✓ Config written to " + configPath))
 	fmt.Println()
+
+	// Install Claude Code commands
+	installedCount, err := installClaudeCommands(scanner)
+	if err != nil {
+		return err
+	}
+
 	fmt.Println("Next steps:")
 	fmt.Println("  zen status          — see dashboard")
 	fmt.Println("  zen watch start     — start background daemon")
 	fmt.Println("  zen inbox           — check pending PR reviews")
+	if installedCount > 0 {
+		fmt.Println("  claude /review-pr   — review a PR with Claude")
+	}
 	fmt.Println()
 
 	return nil
@@ -164,4 +180,75 @@ func promptRequired(scanner *bufio.Scanner, label string) string {
 		}
 		fmt.Println("  (required)")
 	}
+}
+
+// installClaudeCommands prompts the user and installs embedded Claude Code
+// command files to ~/.claude/commands/.
+func installClaudeCommands(scanner *bufio.Scanner) (int, error) {
+	// List available commands from the embedded FS
+	entries, err := fs.ReadDir(EmbeddedCommands, "commands")
+	if err != nil {
+		// No embedded commands (shouldn't happen with a proper build)
+		return 0, nil
+	}
+
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			names = append(names, strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())))
+		}
+	}
+	if len(names) == 0 {
+		return 0, nil
+	}
+
+	fmt.Println("Install Claude Code commands?")
+	fmt.Printf("  Commands: %s\n", strings.Join(names, ", "))
+	fmt.Println("  Target:   ~/.claude/commands/")
+	fmt.Print("Install? [Y/n]: ")
+	scanner.Scan()
+	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
+	if answer == "n" || answer == "no" {
+		fmt.Println()
+		return 0, nil
+	}
+
+	targetDir := filepath.Join(os.Getenv("HOME"), ".claude", "commands")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return 0, fmt.Errorf("creating %s: %w", targetDir, err)
+	}
+
+	installed := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+
+		srcData, err := fs.ReadFile(EmbeddedCommands, filepath.Join("commands", e.Name()))
+		if err != nil {
+			return installed, fmt.Errorf("reading embedded %s: %w", e.Name(), err)
+		}
+
+		dst := filepath.Join(targetDir, e.Name())
+
+		// Check if file already exists
+		if _, err := os.Stat(dst); err == nil {
+			fmt.Printf("  %s already exists. Overwrite? [y/N]: ", dst)
+			scanner.Scan()
+			if strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
+				fmt.Printf("  Skipped %s\n", e.Name())
+				continue
+			}
+		}
+
+		if err := os.WriteFile(dst, srcData, 0o644); err != nil {
+			return installed, fmt.Errorf("writing %s: %w", dst, err)
+		}
+		installed++
+	}
+
+	fmt.Println(ui.GreenText(fmt.Sprintf("✓ Installed %d command(s) to %s", installed, targetDir)))
+	fmt.Println()
+
+	return installed, nil
 }

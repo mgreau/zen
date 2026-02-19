@@ -35,7 +35,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
         run: |
-          go build -ldflags "-s -w -X github.com/mgreau/zen/cmd.Version=${{ github.ref_name }}" \
+          go build -ldflags "-s -w -X github.com/mgreau/zen/cmd.Version=${{ github.ref_name }} -X github.com/mgreau/zen/cmd.Commit=${{ github.sha }}" \
             -o zen-${{ matrix.goos }}-${{ matrix.goarch }} .
 
       - name: Upload artifact

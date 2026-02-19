@@ -151,7 +151,7 @@ func runInboxForRepo(repo string, authors []string, currentUser string) (bool, e
 			if err == nil {
 				if len(watched) > 0 {
 					hasResults = true
-					displayWatchedPRs(watched, localPRs)
+					displayWatchedPRs(watched, localPRs, repo)
 				}
 				// Only show "other" PRs where the user is a requested reviewer
 				reviewPRs := make(map[int]bool, len(reviews))
@@ -166,7 +166,7 @@ func runInboxForRepo(repo string, authors []string, currentUser string) (bool, e
 				}
 				if len(reviewOthers) > 0 {
 					hasResults = true
-					displayOtherPRs(reviewOthers, localPRs)
+					displayOtherPRs(reviewOthers, localPRs, repo)
 				}
 				if !jsonFlag && (len(watched) > 0 || len(reviewOthers) > 0) {
 					printWorktreeLegend()
@@ -511,7 +511,7 @@ func displayApprovedUnmerged(prs []ghpkg.ApprovedPR) {
 	fmt.Println()
 }
 
-func displayWatchedPRs(prs []InboxPR, localPRs map[int]bool) {
+func displayWatchedPRs(prs []InboxPR, localPRs map[int]bool, repo string) {
 	if jsonFlag {
 		printJSON(prs)
 		return
@@ -519,7 +519,7 @@ func displayWatchedPRs(prs []InboxPR, localPRs map[int]bool) {
 
 	fmt.Println()
 	watchPathsStr := strings.Join(cfg.WatchPaths, "/ and ") + "/"
-	fmt.Printf("%s\n", ui.BoldText(fmt.Sprintf("Open PRs touching %s", ui.CyanText(watchPathsStr))))
+	fmt.Printf("%s\n", ui.BoldText(fmt.Sprintf("Open PRs touching %s — %s", ui.CyanText(watchPathsStr), repo)))
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
 
@@ -531,14 +531,14 @@ func displayWatchedPRs(prs []InboxPR, localPRs map[int]bool) {
 	fmt.Println()
 }
 
-func displayOtherPRs(prs []InboxPR, localPRs map[int]bool) {
+func displayOtherPRs(prs []InboxPR, localPRs map[int]bool, repo string) {
 	if jsonFlag {
 		printJSON(prs)
 		return
 	}
 
 	fmt.Println()
-	fmt.Println(ui.BoldText("Other PRs Requesting Your Review"))
+	fmt.Println(ui.BoldText(fmt.Sprintf("Other PRs Requesting Your Review — %s", repo)))
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
 

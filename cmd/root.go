@@ -10,8 +10,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Version is set at build time via -ldflags.
-var Version = "dev"
+// Version and Commit are set at build time via -ldflags.
+var (
+	Version = "dev"
+	Commit  = "unknown"
+)
 
 var (
 	debugFlag bool
@@ -32,7 +35,7 @@ Silently prepares worktrees, retries failures, and cleans up after itself.`,
 			os.Setenv("ZEN_DEBUG", "1")
 		}
 
-		if cmd.Name() == "setup" {
+		if cmd.Name() == "setup" || cmd.Name() == "version" {
 			return nil
 		}
 

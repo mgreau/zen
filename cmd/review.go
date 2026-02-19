@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	ctxpkg "github.com/mgreau/zen/internal/context"
 	"github.com/mgreau/zen/internal/github"
@@ -51,7 +52,7 @@ var (
 )
 
 func init() {
-	reviewCmd.Flags().StringVar(&reviewRepo, "repo", "mono", "Repository short name from config")
+	reviewCmd.Flags().StringVar(&reviewRepo, "repo", "", "Repository short name from config (auto-detected if omitted)")
 	reviewCmd.Flags().BoolVar(&reviewNoITerm, "no-iterm", false, "Create worktree only, don't open iTerm2 tab")
 	addResumeFlags(reviewResumeCmd)
 	reviewDeleteCmd.Flags().BoolVarP(&reviewDeleteForce, "force", "f", false, "Skip confirmation")
@@ -77,6 +78,17 @@ func runReview(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid PR number %q: %w", args[0], err)
 	}
 
+	ctx := context.Background()
+
+	// Auto-detect repo if not specified
+	if reviewRepo == "" {
+		detected, err := detectRepoForPR(ctx, prNumber)
+		if err != nil {
+			return err
+		}
+		reviewRepo = detected
+	}
+
 	// Validate repo exists in config
 	basePath := cfg.RepoBasePath(reviewRepo)
 	if basePath == "" {
@@ -93,8 +105,6 @@ func runReview(cmd *cobra.Command, args []string) error {
 	if _, err := os.Stat(worktreePath); err == nil {
 		return fmt.Errorf("worktree already exists: %s\n  Resume with: zen review resume %d", worktreePath, prNumber)
 	}
-
-	ctx := context.Background()
 
 	// Fetch PR details from GitHub
 	ui.LogInfo(fmt.Sprintf("Fetching PR #%d from %s...", prNumber, fullRepo))
@@ -218,4 +228,31 @@ func runReviewDelete(cmd *cobra.Command, args []string) error {
 
 	ui.LogSuccess(fmt.Sprintf("Deleted worktree: %s", shortPath))
 	return nil
+}
+
+// detectRepoForPR tries each configured repo to find which one contains the
+// given PR number. Returns the repo short name or an error.
+func detectRepoForPR(ctx context.Context, prNumber int) (string, error) {
+	repos := cfg.RepoNames()
+	if len(repos) == 1 {
+		return repos[0], nil
+	}
+
+	ui.LogInfo(fmt.Sprintf("Detecting repo for PR #%d...", prNumber))
+
+	client, err := github.NewClient(ctx)
+	if err != nil {
+		return "", fmt.Errorf("creating GitHub client: %w", err)
+	}
+
+	for _, repo := range repos {
+		fullRepo := cfg.RepoFullName(repo)
+		if _, err := client.GetPRDetails(ctx, fullRepo, prNumber); err == nil {
+			ui.LogInfo(fmt.Sprintf("Found PR #%d in %s", prNumber, repo))
+			return repo, nil
+		}
+	}
+
+	return "", fmt.Errorf("PR #%d not found in any configured repo (%s)\n  Specify with: zen review --repo <name> %d",
+		prNumber, strings.Join(repos, ", "), prNumber)
 }
