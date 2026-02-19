@@ -92,7 +92,12 @@ Shows pending PR reviews that don't yet have a local worktree. Also shows your o
 Example output:
 
 ```
-Pending PR Reviews — app
+───────────────────────────────────────────────────────────────
+  Legend  W = Worktree
+       * = local worktree exists
+       zen review resume <number> to open  |  zen review <number> to create
+
+2 Pending PR Reviews — app
 Authors: alice bob charlie dave
 ═══════════════════════════════════════════════════════════════
 
@@ -101,10 +106,7 @@ Authors: alice bob charlie dave
   #1042   alice                 api: Add pagination to ListUsers endpoi...  https://github.com/acme/app/pull/1042
   #1038   bob                   fix(auth): Handle expired refresh tokens    https://github.com/acme/app/pull/1038
 
-───────────────────────────────────────────────────────────────
-2 pending review(s)
-
-Open PRs touching platform/ and agents/ — app
+3 Open PRs touching platform/ and agents/ — app
 ═══════════════════════════════════════════════════════════════
 
   W   PR      Author                Title                                       Link
@@ -113,24 +115,13 @@ Open PRs touching platform/ and agents/ — app
       #1041   app/dependabot        build(deps): bump the all-others grou...    https://github.com/acme/app/pull/1041
   *   #1035   alice                 Surface a Tool for `format_config`          https://github.com/acme/app/pull/1035
 
-───────────────────────────────────────────────────────────────
-3 open PR(s)
-
-Other PRs Requesting Your Review — app
+2 Other PRs Requesting Your Review — app
 ═══════════════════════════════════════════════════════════════
 
   W   PR      Author                Title                                       Link
   ──  ──────  ────────────────────  ──────────────────────────────────────────  ────────────────────────
       #1039   app/dependabot        build(deps): bump the anchore group a...    https://github.com/acme/app/pull/1039
   *   #1036   alice                 Create a module for the metareconciler.     https://github.com/acme/app/pull/1036
-
-───────────────────────────────────────────────────────────────
-2 open PR(s)
-
-───────────────────────────────────────────────────────────────
-  Legend  W = Worktree
-         * = local worktree exists
-         zen review resume <number> to open  |  zen review <number> to create
 ```
 
 ### Review

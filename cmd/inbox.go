@@ -64,6 +64,10 @@ func runInbox(_ *cobra.Command, _ []string) error {
 	ctx := context.Background()
 	currentUser, _ := ghpkg.GetCurrentUser(ctx)
 
+	if !jsonFlag {
+		printWorktreeLegend()
+	}
+
 	hasResults := false
 	for _, repo := range repos {
 		found, err := runInboxForRepo(repo, authors, currentUser)
@@ -73,10 +77,6 @@ func runInbox(_ *cobra.Command, _ []string) error {
 		if found {
 			hasResults = true
 		}
-	}
-
-	if hasResults && !jsonFlag {
-		printWorktreeLegend()
 	}
 
 	if !hasResults {
@@ -406,9 +406,9 @@ func displayReviewResults(pending []ghpkg.ReviewRequest, total int, repo string)
 
 	fmt.Println()
 	if inboxAll {
-		fmt.Printf("%s %s\n", ui.BoldText("Pending PR Reviews — "+ui.YellowText(repo)), ui.DimText("(all authors)"))
+		fmt.Printf("%s %s\n", ui.BoldText(fmt.Sprintf("%d Pending PR Reviews — %s", len(pending), ui.YellowText(repo))), ui.DimText("(all authors)"))
 	} else {
-		fmt.Println(ui.BoldText("Pending PR Reviews — " + ui.YellowText(repo)))
+		fmt.Println(ui.BoldText(fmt.Sprintf("%d Pending PR Reviews — %s", len(pending), ui.YellowText(repo))))
 		ui.Hint(fmt.Sprintf("Authors: %s", strings.Join(cfg.Authors, " ")))
 	}
 	fmt.Println("═══════════════════════════════════════════════════════════════")
@@ -416,8 +416,6 @@ func displayReviewResults(pending []ghpkg.ReviewRequest, total int, repo string)
 
 	if len(pending) == 0 {
 		fmt.Println("All review requests already have local worktrees.")
-		fmt.Println()
-		ui.Hint(fmt.Sprintf("Total PRs matched: %d (all have worktrees)", total))
 		fmt.Println()
 		return
 	}
@@ -433,11 +431,6 @@ func displayReviewResults(pending []ghpkg.ReviewRequest, total int, repo string)
 			shortTitle,
 			ui.DimText(pr.URL))
 	}
-
-	fmt.Println()
-	ui.Separator()
-	fmt.Printf("%s PRs without local worktree (%d total matched)\n",
-		ui.BoldText(fmt.Sprintf("%d", len(pending))), total)
 	fmt.Println()
 }
 
@@ -448,7 +441,7 @@ func displayPathResults(pending []InboxPR, total int, repo string) {
 	}
 
 	fmt.Println()
-	fmt.Printf("%s\n", ui.BoldText(fmt.Sprintf("Open PRs touching %s — %s", ui.CyanText(inboxPathFilter), ui.YellowText(repo))))
+	fmt.Printf("%s\n", ui.BoldText(fmt.Sprintf("%d Open PRs touching %s — %s", len(pending), ui.CyanText(inboxPathFilter), ui.YellowText(repo))))
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
 
@@ -474,11 +467,6 @@ func displayPathResults(pending []InboxPR, total int, repo string) {
 			ui.DimText(files),
 			ui.DimText(pr.URL))
 	}
-
-	fmt.Println()
-	ui.Separator()
-	fmt.Printf("%s PRs without local worktree (%d total matched)\n",
-		ui.BoldText(fmt.Sprintf("%d", len(pending))), total)
 	fmt.Println()
 }
 
@@ -489,7 +477,7 @@ func displayApprovedUnmerged(prs []ghpkg.ApprovedPR) {
 	}
 
 	fmt.Println()
-	fmt.Println(ui.BoldText("Your PRs — Approved, Ready to Merge"))
+	fmt.Println(ui.BoldText(fmt.Sprintf("%d Your PRs — Approved, Ready to Merge", len(prs))))
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
 
@@ -503,11 +491,6 @@ func displayApprovedUnmerged(prs []ghpkg.ApprovedPR) {
 			shortTitle,
 			ui.DimText(pr.URL))
 	}
-
-	fmt.Println()
-	ui.Separator()
-	fmt.Printf("%s PR(s) approved and ready to merge\n",
-		ui.BoldText(fmt.Sprintf("%d", len(prs))))
 	fmt.Println()
 }
 
@@ -519,15 +502,11 @@ func displayWatchedPRs(prs []InboxPR, localPRs map[int]bool, repo string) {
 
 	fmt.Println()
 	watchPathsStr := strings.Join(cfg.WatchPaths, "/ and ") + "/"
-	fmt.Printf("%s\n", ui.BoldText(fmt.Sprintf("Open PRs touching %s — %s", ui.CyanText(watchPathsStr), ui.YellowText(repo))))
+	fmt.Printf("%s\n", ui.BoldText(fmt.Sprintf("%d Open PRs touching %s — %s", len(prs), ui.CyanText(watchPathsStr), ui.YellowText(repo))))
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
 
 	printPRTable(prs, localPRs)
-
-	fmt.Println()
-	ui.Separator()
-	fmt.Printf("%s open PR(s)\n", ui.BoldText(fmt.Sprintf("%d", len(prs))))
 	fmt.Println()
 }
 
@@ -538,15 +517,11 @@ func displayOtherPRs(prs []InboxPR, localPRs map[int]bool, repo string) {
 	}
 
 	fmt.Println()
-	fmt.Println(ui.BoldText(fmt.Sprintf("Other PRs Requesting Your Review — %s", ui.YellowText(repo))))
+	fmt.Println(ui.BoldText(fmt.Sprintf("%d Other PRs Requesting Your Review — %s", len(prs), ui.YellowText(repo))))
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
 
 	printPRTable(prs, localPRs)
-
-	fmt.Println()
-	ui.Separator()
-	fmt.Printf("%s open PR(s)\n", ui.BoldText(fmt.Sprintf("%d", len(prs))))
 	fmt.Println()
 }
 
