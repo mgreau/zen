@@ -2,7 +2,9 @@
 
 A worktree orchestrator for AI-assisted PR reviews and feature work with [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
-LLMs are writing code now. Engineers spend more time reviewing PRs than writing them, and the volume keeps growing. The old workflow — one IDE, one branch, one PR at a time — doesn't scale. You need many reviews open in parallel, each with its own worktree, each with Claude Code ready to assist. Zen manages this silently: it watches GitHub, creates worktrees, injects PR context into CLAUDE.md files, retries failures, and cleans up after itself. You just open a tab and start working with Claude.
+AI-assisted development is changing how engineers work — more PRs to review, more context to juggle across parallel tasks. The old workflow — one IDE, one branch, one PR at a time — doesn't scale. You need many reviews and feature branches open in parallel, each with its own worktree, each with Claude Code ready to assist.
+
+Zen manages this silently: a background daemon watches GitHub, creates worktrees, injects PR context into `CLAUDE.local.md` files (never touching the repo's own `CLAUDE.md`), retries git failures, and cleans up worktrees for merged PRs. For feature work, the same isolation — dedicated worktrees with persistent context. You just open a tab and start working with Claude.
 
 ## Table of Contents
 
