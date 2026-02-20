@@ -169,44 +169,7 @@ zen dashboard                    # Alias for zen status
 
 Overview of all active work: worktree counts, PR reviews (with remote state and cleanup ETA), feature work, and daemon state.
 
-Example output:
-
-```
-═══════════════════════════════════════════════════════════════
-  Zen Status Dashboard
-═══════════════════════════════════════════════════════════════
-
-Worktrees
-───────────────────────────────────────────────────────────────
-  Total: 12  |  PR Reviews: 4  |  Features: 8
-
-PR Reviews
-───────────────────────────────────────────────────────────────
-  State     PR      Title                                       Path
-  ────────  ──────  ──────────────────────────────────────────  ──────────────────────────────
-  OPEN      #1042   api: Add pagination to ListUsers endpoi...  ~/git/acme/repo-app/app-pr-1042
-  OPEN      #1038   fix(auth): Handle expired refresh tokens    ~/git/acme/repo-app/app-pr-1038
-  OPEN      #1035   Surface a Tool for `format_config`          ~/git/acme/repo-app/app-pr-1035
-  MERGED    #1019   Migrate reconciler to workqueue pattern     ~/git/acme/repo-app/app-pr-1019
-'zen review resume <number>' to open  |  'zen inbox' for new PRs
-
-Feature Work
-───────────────────────────────────────────────────────────────
-  Name                                        Age    Path
-  ──────────────────────────────────────────  ─────  ──────────────────────────────
-  app-add-oidc-claims                         11d    ~/git/acme/repo-app/app-add-oidc-claims
-  app-platform-workshop                       7d     ~/git/acme/repo-app/app-platform-workshop
-  app-fix-model-schema                        7d     ~/git/acme/repo-app/app-fix-model-schema
-  app-reduce-toolcall-duplication             2d     ~/git/acme/repo-app/app-reduce-toolcall-duplication
-  app-skills-refactoring                      0d     ~/git/acme/repo-app/app-skills-refactoring
-  ... and 3 more
-'zen work resume <name>' to continue  |  'zen work new <repo> <branch>' to start
-
-Watch Daemon
-───────────────────────────────────────────────────────────────
-  Status: Running (PID: 94998)
-'zen watch start/stop' to control  |  'zen watch logs' for logs
-```
+![zen dashboard](docs/zen-dashboard.png)
 
 ### Search
 
