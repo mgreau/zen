@@ -6,6 +6,8 @@ AI-assisted development is changing how engineers work — more PRs to review, m
 
 Zen manages this silently: a background daemon watches GitHub, creates worktrees, injects PR context into `CLAUDE.local.md` files (never touching the repo's own `CLAUDE.md`), retries git failures, and cleans up worktrees for merged PRs. For feature work, the same isolation — dedicated worktrees with persistent context. You just open a tab and start working with Claude.
 
+![zen dashboard](docs/zen-dashboard.png)
+
 ## Table of Contents
 
 - [How It Works](#how-it-works)
@@ -168,8 +170,6 @@ zen dashboard                    # Alias for zen status
 ```
 
 Overview of all active work: worktree counts, PR reviews (with remote state and cleanup ETA), feature work, and daemon state.
-
-![zen dashboard](docs/zen-dashboard.png)
 
 ### Search
 
