@@ -406,16 +406,16 @@ func displayReviewResults(pending []ghpkg.ReviewRequest, total int, repo string)
 
 	fmt.Println()
 	if inboxAll {
-		fmt.Printf("%s %s\n", ui.BoldText(fmt.Sprintf("%d Pending PR Reviews — %s", len(pending), ui.YellowText(repo))), ui.DimText("(all authors)"))
+		fmt.Printf("%s %s\n", ui.BoldText(fmt.Sprintf("%d Pending PR Reviews — %s", total, ui.YellowText(repo))), ui.DimText("(all authors)"))
 	} else {
-		fmt.Println(ui.BoldText(fmt.Sprintf("%d Pending PR Reviews — %s", len(pending), ui.YellowText(repo))))
+		fmt.Println(ui.BoldText(fmt.Sprintf("%d Pending PR Reviews — %s", total, ui.YellowText(repo))))
 		ui.Hint(fmt.Sprintf("Authors: %s", strings.Join(cfg.Authors, " ")))
 	}
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
 
 	if len(pending) == 0 {
-		fmt.Println("All review requests already have local worktrees.")
+		fmt.Printf("All %d review requests already have local worktrees.\n", total)
 		fmt.Println()
 		return
 	}
