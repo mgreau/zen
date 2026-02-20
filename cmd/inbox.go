@@ -138,11 +138,10 @@ func runInboxForRepo(repo string, authors []string, currentUser string) (bool, e
 		}
 
 		filtered := filterByAuthors(reviews, authors)
-		pending := filterLocalPRsFromReviews(filtered, localPRs)
 
 		if len(filtered) > 0 {
 			hasResults = true
-			displayReviewResults(pending, len(filtered), repo)
+			displayReviewResults(filtered, localPRs, repo)
 		}
 
 		if approvedErr == nil && len(approved) > 0 {
@@ -205,16 +204,6 @@ func filterByAuthors(prs []ghpkg.ReviewRequest, authors []string) []ghpkg.Review
 		}
 	}
 	return filtered
-}
-
-func filterLocalPRsFromReviews(prs []ghpkg.ReviewRequest, local map[int]bool) []ghpkg.ReviewRequest {
-	var pending []ghpkg.ReviewRequest
-	for _, pr := range prs {
-		if !local[pr.Number] {
-			pending = append(pending, pr)
-		}
-	}
-	return pending
 }
 
 func filterLocalPRs(prs []InboxPR, local map[int]bool) []InboxPR {
@@ -389,43 +378,42 @@ func fetchOpenPRs(ctx context.Context, fullRepo string, currentUser string) ([]I
 	return watched, others, nil
 }
 
-func displayReviewResults(pending []ghpkg.ReviewRequest, total int, repo string) {
+func displayReviewResults(prs []ghpkg.ReviewRequest, localPRs map[int]bool, repo string) {
 	if jsonFlag {
-		var prs []InboxPR
-		for _, pr := range pending {
-			prs = append(prs, InboxPR{
+		var out []InboxPR
+		for _, pr := range prs {
+			out = append(out, InboxPR{
 				Number: pr.Number,
 				Title:  pr.Title,
 				Author: pr.Author.Login,
 				URL:    pr.URL,
 			})
 		}
-		printJSON(prs)
+		printJSON(out)
 		return
 	}
 
 	fmt.Println()
 	if inboxAll {
-		fmt.Printf("%s %s\n", ui.BoldText(fmt.Sprintf("%d Pending PR Reviews — %s", total, ui.YellowText(repo))), ui.DimText("(all authors)"))
+		fmt.Printf("%s %s\n", ui.BoldText(fmt.Sprintf("%d Pending PR Reviews — %s", len(prs), ui.YellowText(repo))), ui.DimText("(all authors)"))
 	} else {
-		fmt.Println(ui.BoldText(fmt.Sprintf("%d Pending PR Reviews — %s", total, ui.YellowText(repo))))
+		fmt.Println(ui.BoldText(fmt.Sprintf("%d Pending PR Reviews — %s", len(prs), ui.YellowText(repo))))
 		ui.Hint(fmt.Sprintf("Authors: %s", strings.Join(cfg.Authors, " ")))
 	}
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
 
-	if len(pending) == 0 {
-		fmt.Printf("All %d review requests already have local worktrees.\n", total)
-		fmt.Println()
-		return
-	}
+	fmt.Printf("  %-2s  %-6s  %-20s  %-42s  %s\n", "W", "PR", "Author", "Title", "Link")
+	fmt.Printf("  %-2s  %-6s  %-20s  %-42s  %s\n", "──", "──────", "────────────────────", "──────────────────────────────────────────", "────────────────────────")
 
-	fmt.Printf("  %-6s  %-20s  %-42s  %s\n", "PR", "Author", "Title", "Link")
-	fmt.Printf("  %-6s  %-20s  %-42s  %s\n", "──────", "────────────────────", "──────────────────────────────────────────", "────────────────────────")
-
-	for _, pr := range pending {
+	for _, pr := range prs {
+		wtMarker := "  "
+		if localPRs[pr.Number] {
+			wtMarker = ui.GreenText("* ")
+		}
 		shortTitle := ui.Truncate(pr.Title, 40)
-		fmt.Printf("  %s  %-20s  %-42s  %s\n",
+		fmt.Printf("  %s  %s  %-20s  %-42s  %s\n",
+			wtMarker,
 			ui.CyanText(fmt.Sprintf("#%-5d", pr.Number)),
 			pr.Author.Login,
 			shortTitle,
