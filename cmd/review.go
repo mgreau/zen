@@ -101,9 +101,10 @@ func runReview(cmd *cobra.Command, args []string) error {
 	worktreeName := fmt.Sprintf("%s-pr-%d", reviewRepo, prNumber)
 	worktreePath := filepath.Join(basePath, worktreeName)
 
-	// Check if worktree already exists
+	// If worktree already exists, resume it
 	if _, err := os.Stat(worktreePath); err == nil {
-		return fmt.Errorf("worktree already exists: %s\n  Resume with: zen review resume %d", worktreePath, prNumber)
+		ui.LogInfo(fmt.Sprintf("Worktree already exists, resuming PR #%d...", prNumber))
+		return openReviewTab(worktreePath, worktreeName)
 	}
 
 	// Fetch PR details from GitHub
@@ -228,6 +229,16 @@ func runReviewDelete(cmd *cobra.Command, args []string) error {
 
 	ui.LogSuccess(fmt.Sprintf("Deleted worktree: %s", shortPath))
 	return nil
+}
+
+// openReviewTab resumes an existing worktree in a new iTerm tab.
+func openReviewTab(worktreePath, worktreeName string) error {
+	w := wt.Worktree{
+		Path:   worktreePath,
+		Name:   worktreeName,
+		Type:   wt.TypePRReview,
+	}
+	return resumeWorktree(w, fmt.Sprintf("zen review resume %s", worktreeName))
 }
 
 // detectRepoForPR tries each configured repo to find which one contains the
