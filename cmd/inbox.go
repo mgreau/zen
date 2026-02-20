@@ -548,7 +548,8 @@ func printPRTable(prs []InboxPR, localPRs map[int]bool) {
 // printWorktreeLegend prints a legend explaining the W column and worktree indicators.
 func printWorktreeLegend() {
 	fmt.Println(ui.DimText("───────────────────────────────────────────────────────────────"))
-	fmt.Printf("  %s  W = Worktree\n", ui.BoldText("Legend"))
+	fmt.Printf("  %s\n", ui.BoldText("Legend"))
+	fmt.Printf("       W = Worktree\n")
 	fmt.Printf("       %s = local worktree exists\n", ui.GreenText("*"))
 	fmt.Printf("       %s to open  |  %s to create\n",
 		ui.DimText("zen review resume <number>"),
