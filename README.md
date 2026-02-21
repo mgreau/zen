@@ -129,15 +129,15 @@ Authors: alice bob charlie dave
 ### Review
 
 ```
-zen review 42                    # Create worktree + open iTerm tab (auto-detects repo)
+zen review 42                    # Create worktree + open terminal tab (auto-detects repo)
 zen review 42 --repo other       # Specify repo explicitly
-zen review 42 --no-iterm         # Create worktree only, print command
-zen review resume 42             # Open existing worktree in new iTerm tab
+zen review 42 --no-terminal      # Create worktree only, print command
+zen review resume 42             # Open existing worktree in new terminal tab
 zen review resume 42 --list      # List available sessions
 zen review resume 42 --session 2 # Resume specific session
 ```
 
-Manually create a PR review worktree: fetches the PR branch, creates the worktree, injects CLAUDE.md context, and opens an iTerm tab with Claude. When `--repo` is omitted, zen auto-detects the repo by querying GitHub — if the PR number exists in multiple repos, it prefers the one where you're a requested reviewer, or asks you to choose. Use this when the daemon hasn't picked up a PR yet or you want to start immediately. If the worktree already exists, use `zen review resume` instead. If you run `zen review resume` and no worktree exists, it offers to create one.
+Manually create a PR review worktree: fetches the PR branch, creates the worktree, injects CLAUDE.md context, and opens a terminal tab with Claude. When `--repo` is omitted, zen auto-detects the repo by querying GitHub — if the PR number exists in multiple repos, it prefers the one where you're a requested reviewer, or asks you to choose. Use this when the daemon hasn't picked up a PR yet or you want to start immediately. If the worktree already exists, use `zen review resume` instead. If you run `zen review resume` and no worktree exists, it offers to create one.
 
 ### Reviews
 
@@ -244,6 +244,17 @@ zen setup                        # Interactive first-time setup
 --debug     Debug logging
 ```
 
+## Ghostty Tab Creation Requirements
+
+For Ghostty tab creation to work on macOS:
+
+1. **Ghostty must be running** - Open Ghostty manually before using Zen commands
+2. **Accessibility Permissions** - Grant Terminal access in System Preferences > Security & Privacy > Accessibility
+3. **Automation Permissions** - Grant Terminal access in System Preferences > Security & Privacy > Automation
+4. **Ghostty Focus** - Ghostty window should be focused for reliable tab creation
+
+If these requirements aren't met, Zen will automatically fall back to opening new windows.
+
 ## Configuration
 
 Config file: `~/.zen/config.yaml`
@@ -260,6 +271,9 @@ authors:
 
 poll_interval: "5m"
 claude_bin: claude
+terminal: iterm  # or "ghostty" for Ghostty support
+# Note: Ghostty on macOS attempts tab creation via UI scripting (requires Ghostty running + accessibility permissions)
+# Falls back to new windows if tab creation fails
 
 watch:
   dispatch_interval: "10s"      # How often to process queued work
@@ -417,10 +431,10 @@ This walks you through configuring your repositories, GitHub usernames for PR fi
 
 | Requirement | Why |
 |-------------|-----|
-| **macOS** | iTerm2 tab management and notifications use AppleScript |
+| **macOS** | iTerm2/Ghostty tab management and notifications use AppleScript |
 | **Git** | Worktree creation, fetching PR branches, cleanup |
 | **[GitHub CLI](https://cli.github.com/) (`gh`)** | Authentication and GitHub API access — must be logged in (`gh auth login`) |
-| **[iTerm2](https://iterm2.com/)** | Opens review/work sessions in new tabs (use `--no-iterm` to skip) |
+| **[iTerm2](https://iterm2.com/)** or **[Ghostty](https://ghostty.io/)** | Opens review/work sessions in new tabs (iTerm2) or tabs/windows (Ghostty). Ghostty uses UI scripting for tab creation when possible, with fallback to windows (use `--no-terminal` to skip) |
 | **[Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)** | AI-assisted PR reviews and coding sessions |
 | **Go 1.24+** | Building from source |
 
