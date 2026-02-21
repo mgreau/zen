@@ -37,7 +37,7 @@ func OpenTab(workDir, command string) error {
 		`printf '\e]6;1;bg;red;brightness;%d\a\e]6;1;bg;green;brightness;%d\a\e]6;1;bg;blue;brightness;%d\a'`,
 		c[0], c[1], c[2],
 	)
-	fullCmd := fmt.Sprintf("cd %s && %s && %s", workDir, colorCmd, command)
+	fullCmd := fmt.Sprintf("cd %q && %s && %s", workDir, colorCmd, command)
 
 	// Pass the shell command via env var to avoid AppleScript string escaping
 	// issues with quotes and backslashes in printf escape sequences.
