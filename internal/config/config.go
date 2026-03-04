@@ -17,6 +17,7 @@ type Config struct {
 	Authors      []string              `yaml:"authors"`
 	PollInterval string                `yaml:"poll_interval"`
 	ClaudeBin    string                `yaml:"claude_bin"`
+	Terminal     string                `yaml:"terminal"` // "iterm" or "ghostty"
 	Watch        WatchConfig           `yaml:"watch"`
 }
 
@@ -107,12 +108,23 @@ func Load() (*Config, error) {
 	if cfg.ClaudeBin == "" {
 		cfg.ClaudeBin = "claude"
 	}
+	if cfg.Terminal == "" {
+		cfg.Terminal = "iterm" // default to iTerm for backward compatibility
+	}
+	if cfg.Terminal != "iterm" && cfg.Terminal != "ghostty" {
+		return nil, fmt.Errorf("invalid terminal type %q: must be \"iterm\" or \"ghostty\"", cfg.Terminal)
+	}
 	if cfg.Repos == nil {
 		cfg.Repos = make(map[string]RepoConfig)
 	}
 
 	cfg.expandPaths()
 	return cfg, nil
+}
+
+// GetTerminal returns the configured terminal type.
+func (c *Config) GetTerminal() string {
+	return c.Terminal
 }
 
 // expandPaths replaces ~ with $HOME in base paths.

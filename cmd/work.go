@@ -6,8 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/mgreau/zen/internal/iterm"
 	"github.com/mgreau/zen/internal/session"
+	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
 	wt "github.com/mgreau/zen/internal/worktree"
 	"github.com/spf13/cobra"
@@ -50,7 +50,7 @@ var (
 )
 
 func init() {
-	workNewCmd.Flags().BoolVar(&workNewNoITerm, "no-iterm", false, "Create worktree only, don't open iTerm2 tab")
+	workNewCmd.Flags().BoolVar(&workNewNoITerm, "no-terminal", false, "Create worktree only, don't open terminal tab")
 	workDeleteCmd.Flags().BoolVarP(&workDeleteForce, "force", "f", false, "Skip confirmation")
 	addResumeFlags(workResumeCmd)
 	workCmd.AddCommand(workNewCmd)
@@ -189,15 +189,21 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Open iTerm tab
+	// Open terminal tab
+	term, err := terminal.NewTerminal(cfg.GetTerminal())
+	if err != nil {
+		return err
+	}
+
 	if context == "" {
 		context = "/review-pr"
 	}
-	if err := iterm.OpenTabWithClaude(worktreePath, context, cfg.ClaudeBin); err != nil {
-		return fmt.Errorf("opening iTerm tab: %w", err)
+
+	if err := term.OpenTabWithClaude(worktreePath, context, cfg.ClaudeBin); err != nil {
+		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
 	}
 
-	ui.LogSuccess("iTerm2 tab opened")
+	ui.LogSuccess(fmt.Sprintf("%s tab opened", term.Name()))
 	fmt.Println()
 	return nil
 }

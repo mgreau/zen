@@ -11,8 +11,8 @@ import (
 
 	ctxpkg "github.com/mgreau/zen/internal/context"
 	"github.com/mgreau/zen/internal/github"
-	"github.com/mgreau/zen/internal/iterm"
 	"github.com/mgreau/zen/internal/prcache"
+	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
 	wt "github.com/mgreau/zen/internal/worktree"
 	"github.com/spf13/cobra"
@@ -53,7 +53,7 @@ var (
 
 func init() {
 	reviewCmd.Flags().StringVar(&reviewRepo, "repo", "", "Repository short name from config (auto-detected if omitted)")
-	reviewCmd.Flags().BoolVar(&reviewNoITerm, "no-iterm", false, "Create worktree only, don't open iTerm2 tab")
+	reviewCmd.Flags().BoolVar(&reviewNoITerm, "no-terminal", false, "Create worktree only, don't open terminal tab")
 	addResumeFlags(reviewResumeCmd)
 	reviewDeleteCmd.Flags().BoolVarP(&reviewDeleteForce, "force", "f", false, "Skip confirmation")
 	reviewCmd.AddCommand(reviewResumeCmd)
@@ -181,12 +181,17 @@ func runReview(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Open iTerm tab
-	if err := iterm.OpenTabWithClaude(worktreePath, "/review-pr", cfg.ClaudeBin); err != nil {
-		return fmt.Errorf("opening iTerm tab: %w", err)
+	// Open terminal tab
+	term, err := terminal.NewTerminal(cfg.GetTerminal())
+	if err != nil {
+		return err
 	}
 
-	ui.LogSuccess("iTerm2 tab opened")
+	if err := term.OpenTabWithClaude(worktreePath, "/review-pr", cfg.ClaudeBin); err != nil {
+		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
+	}
+
+	ui.LogSuccess(fmt.Sprintf("%s tab opened", term.Name()))
 	fmt.Println()
 	return nil
 }
@@ -238,7 +243,11 @@ func openReviewTab(worktreePath, worktreeName string) error {
 		Name:   worktreeName,
 		Type:   wt.TypePRReview,
 	}
-	return resumeWorktree(w, fmt.Sprintf("zen review resume %s", worktreeName))
+	term, err := terminal.NewTerminal(cfg.GetTerminal())
+	if err != nil {
+		return err
+	}
+	return resumeWorktree(w, fmt.Sprintf("zen review resume %s", worktreeName), term)
 }
 
 // detectRepoForPR tries each configured repo to find which one contains the

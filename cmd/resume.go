@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mgreau/zen/internal/iterm"
 	"github.com/mgreau/zen/internal/session"
+	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
 	"github.com/mgreau/zen/internal/worktree"
 	"github.com/spf13/cobra"
@@ -22,7 +22,7 @@ var (
 )
 
 // resumeWorktree handles the core resume logic for a matched worktree.
-func resumeWorktree(wt worktree.Worktree, cmdName string) error {
+func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) error {
 	// Find Claude sessions
 	sessions, err := session.FindSessions(wt.Path)
 	noSessions := err != nil || len(sessions) == 0
@@ -70,7 +70,7 @@ func resumeWorktree(wt worktree.Worktree, cmdName string) error {
 
 	// No existing sessions — start a new Claude session
 	if noSessions {
-		return openNewSession(wt)
+		return openNewSession(wt, t)
 	}
 
 	// Pick session
@@ -97,26 +97,26 @@ func resumeWorktree(wt worktree.Worktree, cmdName string) error {
 		return nil
 	}
 
-	// Open in iTerm2
+	// Open in terminal
 	fmt.Println()
-	fmt.Println(ui.BoldText("Resuming Claude session in new iTerm2 tab"))
+	fmt.Println(ui.BoldText(fmt.Sprintf("Resuming Claude session in new %s tab", t.Name())))
 	fmt.Printf("  Worktree: %s\n", ui.CyanText(wt.Name))
 	fmt.Printf("  Path:     %s\n", ui.DimText(shortPath))
 	fmt.Printf("  Session:  %s\n", ui.DimText(s.ID))
 	fmt.Printf("  Modified: %s\n", ui.DimText(fmt.Sprintf("%s (%s)", s.ModHuman, s.SizeStr)))
 	fmt.Println()
 
-	if err := iterm.OpenTabWithResume(wt.Path, s.ID, cfg.ClaudeBin); err != nil {
-		return fmt.Errorf("opening iTerm tab: %w", err)
+	if err := t.OpenTabWithResume(wt.Path, s.ID, cfg.ClaudeBin); err != nil {
+		return fmt.Errorf("opening %s tab: %w", t.Name(), err)
 	}
 
-	ui.LogSuccess("iTerm2 tab opened")
+	ui.LogSuccess(fmt.Sprintf("%s tab opened", t.Name()))
 	return nil
 }
 
-// openNewSession starts a new Claude session in a new iTerm tab.
+// openNewSession starts a new Claude session in a new terminal tab.
 // For PR worktrees, it starts with /review-pr. For others, it starts plain claude.
-func openNewSession(wt worktree.Worktree) error {
+func openNewSession(wt worktree.Worktree, t terminal.Terminal) error {
 	home := os.Getenv("HOME")
 	shortPath := ui.ShortenHome(wt.Path, home)
 
@@ -141,22 +141,22 @@ func openNewSession(wt worktree.Worktree) error {
 	}
 
 	fmt.Println()
-	fmt.Println(ui.BoldText(fmt.Sprintf("%s in new iTerm2 tab", action)))
+	fmt.Println(ui.BoldText(fmt.Sprintf("%s in new %s tab", action, t.Name())))
 	fmt.Printf("  Worktree: %s\n", ui.CyanText(wt.Name))
 	fmt.Printf("  Path:     %s\n", ui.DimText(shortPath))
 	fmt.Println()
 
 	var err error
 	if initialPrompt != "" {
-		err = iterm.OpenTabWithClaude(wt.Path, initialPrompt, cfg.ClaudeBin)
+		err = t.OpenTabWithClaude(wt.Path, initialPrompt, cfg.ClaudeBin)
 	} else {
-		err = iterm.OpenTab(wt.Path, cfg.ClaudeBin)
+		err = t.OpenTab(wt.Path, cfg.ClaudeBin)
 	}
 	if err != nil {
-		return fmt.Errorf("opening iTerm tab: %w", err)
+		return fmt.Errorf("opening %s tab: %w", t.Name(), err)
 	}
 
-	ui.LogSuccess("iTerm2 tab opened")
+	ui.LogSuccess(fmt.Sprintf("%s tab opened", t.Name()))
 	return nil
 }
 
@@ -226,7 +226,7 @@ func findWorktreeByName(term string) (*worktree.Worktree, error) {
 func addResumeFlags(cmd *cobra.Command) {
 	cmd.Flags().IntVarP(&resumeSession, "session", "s", 0, "Resume Nth session instead of most recent (1-based)")
 	cmd.Flags().BoolVarP(&resumeList, "list", "l", false, "List available sessions without resuming")
-	cmd.Flags().BoolVar(&resumeNoITerm, "no-iterm", false, "Print the resume command instead of opening iTerm2")
+	cmd.Flags().BoolVar(&resumeNoITerm, "no-terminal", false, "Print the resume command instead of opening terminal")
 }
 
 // runReviewResume handles `zen review resume <pr-number>`.
@@ -252,7 +252,11 @@ func runReviewResume(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	return resumeWorktree(*wt, fmt.Sprintf("zen review resume %d", prNumber))
+	term, err := terminal.NewTerminal(cfg.GetTerminal())
+	if err != nil {
+		return err
+	}
+	return resumeWorktree(*wt, fmt.Sprintf("zen review resume %d", prNumber), term)
 }
 
 // runWorkResume handles `zen work resume <name>`.
@@ -262,5 +266,9 @@ func runWorkResume(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	return resumeWorktree(*wt, fmt.Sprintf("zen work resume %s", args[0]))
+	term, err := terminal.NewTerminal(cfg.GetTerminal())
+	if err != nil {
+		return err
+	}
+	return resumeWorktree(*wt, fmt.Sprintf("zen work resume %s", args[0]), term)
 }
