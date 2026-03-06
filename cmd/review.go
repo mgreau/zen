@@ -48,12 +48,14 @@ var reviewDeleteCmd = &cobra.Command{
 var (
 	reviewRepo        string
 	reviewNoITerm     bool
+	reviewModel       string
 	reviewDeleteForce bool
 )
 
 func init() {
 	reviewCmd.Flags().StringVar(&reviewRepo, "repo", "", "Repository short name from config (auto-detected if omitted)")
 	reviewCmd.Flags().BoolVar(&reviewNoITerm, "no-terminal", false, "Create worktree only, don't open terminal tab")
+	reviewCmd.Flags().StringVarP(&reviewModel, "model", "m", "", "Claude model to use (e.g., sonnet, opus, haiku)")
 	addResumeFlags(reviewResumeCmd)
 	reviewDeleteCmd.Flags().BoolVarP(&reviewDeleteForce, "force", "f", false, "Skip confirmation")
 	reviewCmd.AddCommand(reviewResumeCmd)
@@ -104,6 +106,10 @@ func runReview(cmd *cobra.Command, args []string) error {
 	// If worktree already exists, resume it
 	if _, err := os.Stat(worktreePath); err == nil {
 		ui.LogInfo(fmt.Sprintf("Worktree already exists, resuming PR #%d...", prNumber))
+		// Pass model through to resume path
+		if reviewModel != "" {
+			resumeModel = reviewModel
+		}
 		return openReviewTab(worktreePath, worktreeName)
 	}
 
@@ -174,10 +180,18 @@ func runReview(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  PR:     #%d — %s\n", prNumber, details.Title)
 	fmt.Printf("  Author: %s\n", details.Author)
 
+	if reviewModel != "" {
+		fmt.Printf("  Model:  %s\n", ui.CyanText(reviewModel))
+	}
+
 	if reviewNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Open manually:"))
-		fmt.Printf("  cd %s && %s \"/review-pr\"\n", worktreePath, cfg.ClaudeBin)
+		modelFlag := ""
+		if reviewModel != "" {
+			modelFlag = fmt.Sprintf(" --model %s", reviewModel)
+		}
+		fmt.Printf("  cd %s && %s%s \"/review-pr\"\n", worktreePath, cfg.ClaudeBin, modelFlag)
 		return nil
 	}
 
@@ -187,7 +201,7 @@ func runReview(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := term.OpenTabWithClaude(worktreePath, "/review-pr", cfg.ClaudeBin); err != nil {
+	if err := term.OpenTabWithClaude(worktreePath, "/review-pr", cfg.ClaudeBin, reviewModel); err != nil {
 		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
 	}
 

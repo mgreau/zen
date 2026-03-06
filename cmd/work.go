@@ -31,10 +31,14 @@ Optionally provide a context string to use as the initial Claude prompt.`,
 }
 
 var workDeleteCmd = &cobra.Command{
-	Use:   "delete <path>",
-	Short: "Delete a feature worktree by path or name",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runWorkDelete,
+	Use:   "delete <name>",
+	Short: "Delete a feature worktree by name or path",
+	Long: `Delete a feature worktree and its Claude session files.
+
+Accepts a worktree name (e.g., mono-factory-v2-agentic) or full path.
+Shows a summary of what will be removed before confirming.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runWorkDelete,
 }
 
 var workResumeCmd = &cobra.Command{
@@ -46,11 +50,13 @@ var workResumeCmd = &cobra.Command{
 
 var (
 	workNewNoITerm  bool
+	workNewModel    string
 	workDeleteForce bool
 )
 
 func init() {
 	workNewCmd.Flags().BoolVar(&workNewNoITerm, "no-terminal", false, "Create worktree only, don't open terminal tab")
+	workNewCmd.Flags().StringVarP(&workNewModel, "model", "m", "", "Claude model to use (e.g., sonnet, opus, haiku)")
 	workDeleteCmd.Flags().BoolVarP(&workDeleteForce, "force", "f", false, "Skip confirmation")
 	addResumeFlags(workResumeCmd)
 	workCmd.AddCommand(workNewCmd)
@@ -178,13 +184,21 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 	ui.LogSuccess(fmt.Sprintf("Created worktree: %s", shortPath))
 	fmt.Printf("  Branch: %s\n", ui.CyanText(gitBranch))
 
+	if workNewModel != "" {
+		fmt.Printf("  Model:  %s\n", ui.CyanText(workNewModel))
+	}
+
 	if workNewNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Open manually:"))
+		modelFlag := ""
+		if workNewModel != "" {
+			modelFlag = fmt.Sprintf(" --model %s", workNewModel)
+		}
 		if context != "" {
-			fmt.Printf("  cd %s && %s %q\n", worktreePath, cfg.ClaudeBin, context)
+			fmt.Printf("  cd %s && %s%s %q\n", worktreePath, cfg.ClaudeBin, modelFlag, context)
 		} else {
-			fmt.Printf("  cd %s && %s\n", worktreePath, cfg.ClaudeBin)
+			fmt.Printf("  cd %s && %s%s\n", worktreePath, cfg.ClaudeBin, modelFlag)
 		}
 		return nil
 	}
@@ -195,12 +209,18 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if context == "" {
-		context = "/review-pr"
-	}
-
-	if err := term.OpenTabWithClaude(worktreePath, context, cfg.ClaudeBin); err != nil {
-		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
+	if context != "" {
+		if err := term.OpenTabWithClaude(worktreePath, context, cfg.ClaudeBin, workNewModel); err != nil {
+			return fmt.Errorf("opening %s tab: %w", term.Name(), err)
+		}
+	} else {
+		cmd := cfg.ClaudeBin
+		if workNewModel != "" {
+			cmd += fmt.Sprintf(" --model %s", workNewModel)
+		}
+		if err := term.OpenTab(worktreePath, cmd); err != nil {
+			return fmt.Errorf("opening %s tab: %w", term.Name(), err)
+		}
 	}
 
 	ui.LogSuccess(fmt.Sprintf("%s tab opened", term.Name()))
@@ -211,15 +231,7 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 func runWorkDelete(cmd *cobra.Command, args []string) error {
 	target := args[0]
 
-	// Resolve to absolute path if relative
-	if !filepath.IsAbs(target) {
-		abs, err := filepath.Abs(target)
-		if err == nil {
-			target = abs
-		}
-	}
-
-	// Find matching worktree
+	// Find matching worktree by name first, then by path
 	wts, err := wt.ListAll(cfg)
 	if err != nil {
 		return fmt.Errorf("listing worktrees: %w", err)
@@ -227,10 +239,26 @@ func runWorkDelete(cmd *cobra.Command, args []string) error {
 
 	var match *wt.Worktree
 	for _, w := range wts {
-		if w.Path == target || w.Name == target {
+		if w.Name == target {
 			w := w
 			match = &w
 			break
+		}
+	}
+	if match == nil {
+		// Try absolute path match
+		absTarget := target
+		if !filepath.IsAbs(absTarget) {
+			if abs, err := filepath.Abs(absTarget); err == nil {
+				absTarget = abs
+			}
+		}
+		for _, w := range wts {
+			if w.Path == absTarget {
+				w := w
+				match = &w
+				break
+			}
 		}
 	}
 
@@ -241,19 +269,44 @@ func runWorkDelete(cmd *cobra.Command, args []string) error {
 	home := homeDir()
 	shortPath := ui.ShortenHome(match.Path, home)
 
-	if !workDeleteForce {
-		fmt.Printf("Delete worktree %s?\n", ui.CyanText(match.Name))
-		fmt.Printf("  Path: %s\n", shortPath)
-		fmt.Print("  Confirm [y/N]: ")
-
-		var resp string
-		fmt.Scanln(&resp)
-		if resp != "y" && resp != "Y" {
-			fmt.Println("Cancelled.")
-			return nil
+	// Gather info for summary
+	sessions, _ := session.FindSessions(match.Path)
+	age := ""
+	if days, err := wt.AgeDays(match.Path); err == nil {
+		if days == 0 {
+			if hours, herr := wt.AgeHours(match.Path); herr == nil {
+				age = fmt.Sprintf("%dh", hours)
+			}
+		} else {
+			age = fmt.Sprintf("%dd", days)
 		}
 	}
 
+	// Show summary
+	fmt.Println()
+	fmt.Printf("  Worktree:  %s\n", ui.CyanText(match.Name))
+	fmt.Printf("  Branch:    %s\n", match.Branch)
+	fmt.Printf("  Path:      %s\n", shortPath)
+	if age != "" {
+		fmt.Printf("  Age:       %s\n", age)
+	}
+	if len(sessions) > 0 {
+		fmt.Printf("  Sessions:  %d (%s)\n", len(sessions), sessions[0].SizeStr)
+	}
+	fmt.Println()
+
+	if !workDeleteForce {
+		fmt.Print("  Delete? [y/N]: ")
+		var resp string
+		fmt.Scanln(&resp)
+		if resp != "y" && resp != "Y" {
+			fmt.Println("  Cancelled.")
+			return nil
+		}
+		fmt.Println()
+	}
+
+	// Remove git worktree
 	basePath := cfg.RepoBasePath(match.Repo)
 	originPath := filepath.Join(basePath, match.Repo)
 
@@ -262,7 +315,20 @@ func runWorkDelete(cmd *cobra.Command, args []string) error {
 	if out, err := removeCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git worktree remove: %w: %s", err, string(out))
 	}
+	ui.LogSuccess("Removed worktree")
 
-	ui.LogSuccess(fmt.Sprintf("Deleted worktree: %s", shortPath))
+	// Clean up Claude session files
+	if len(sessions) > 0 {
+		sessionDir := session.ProjectDir(match.Path)
+		if sessionDir != "" {
+			if err := os.RemoveAll(sessionDir); err != nil {
+				fmt.Printf("  %s clean session files: %v\n", ui.YellowText("Warning:"), err)
+			} else {
+				ui.LogSuccess(fmt.Sprintf("Cleaned %d session file(s)", len(sessions)))
+			}
+		}
+	}
+
+	fmt.Println()
 	return nil
 }

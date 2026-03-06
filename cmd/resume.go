@@ -19,6 +19,7 @@ var (
 	resumeSession int
 	resumeList    bool
 	resumeNoITerm bool
+	resumeModel   string
 )
 
 // resumeWorktree handles the core resume logic for a matched worktree.
@@ -90,7 +91,11 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 	if resumeNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Resume command:"))
-		fmt.Printf("  cd %s && %s --resume %s\n", wt.Path, cfg.ClaudeBin, s.ID)
+		modelFlag := ""
+		if resumeModel != "" {
+			modelFlag = fmt.Sprintf(" --model %s", resumeModel)
+		}
+		fmt.Printf("  cd %s && %s%s --resume %s\n", wt.Path, cfg.ClaudeBin, modelFlag, s.ID)
 		fmt.Println()
 		fmt.Println(ui.DimText(fmt.Sprintf("Worktree: %s", shortPath)))
 		fmt.Println(ui.DimText(fmt.Sprintf("Session:  %s (%s)", s.ModHuman, s.SizeStr)))
@@ -104,9 +109,12 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 	fmt.Printf("  Path:     %s\n", ui.DimText(shortPath))
 	fmt.Printf("  Session:  %s\n", ui.DimText(s.ID))
 	fmt.Printf("  Modified: %s\n", ui.DimText(fmt.Sprintf("%s (%s)", s.ModHuman, s.SizeStr)))
+	if resumeModel != "" {
+		fmt.Printf("  Model:    %s\n", ui.CyanText(resumeModel))
+	}
 	fmt.Println()
 
-	if err := t.OpenTabWithResume(wt.Path, s.ID, cfg.ClaudeBin); err != nil {
+	if err := t.OpenTabWithResume(wt.Path, s.ID, cfg.ClaudeBin, resumeModel); err != nil {
 		return fmt.Errorf("opening %s tab: %w", t.Name(), err)
 	}
 
@@ -130,10 +138,14 @@ func openNewSession(wt worktree.Worktree, t terminal.Terminal) error {
 	if resumeNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Start command:"))
+		modelFlag := ""
+		if resumeModel != "" {
+			modelFlag = fmt.Sprintf(" --model %s", resumeModel)
+		}
 		if initialPrompt != "" {
-			fmt.Printf("  cd %s && %s %q\n", wt.Path, cfg.ClaudeBin, initialPrompt)
+			fmt.Printf("  cd %s && %s%s %q\n", wt.Path, cfg.ClaudeBin, modelFlag, initialPrompt)
 		} else {
-			fmt.Printf("  cd %s && %s\n", wt.Path, cfg.ClaudeBin)
+			fmt.Printf("  cd %s && %s%s\n", wt.Path, cfg.ClaudeBin, modelFlag)
 		}
 		fmt.Println()
 		fmt.Println(ui.DimText(fmt.Sprintf("Worktree: %s", shortPath)))
@@ -144,13 +156,20 @@ func openNewSession(wt worktree.Worktree, t terminal.Terminal) error {
 	fmt.Println(ui.BoldText(fmt.Sprintf("%s in new %s tab", action, t.Name())))
 	fmt.Printf("  Worktree: %s\n", ui.CyanText(wt.Name))
 	fmt.Printf("  Path:     %s\n", ui.DimText(shortPath))
+	if resumeModel != "" {
+		fmt.Printf("  Model:    %s\n", ui.CyanText(resumeModel))
+	}
 	fmt.Println()
 
 	var err error
 	if initialPrompt != "" {
-		err = t.OpenTabWithClaude(wt.Path, initialPrompt, cfg.ClaudeBin)
+		err = t.OpenTabWithClaude(wt.Path, initialPrompt, cfg.ClaudeBin, resumeModel)
 	} else {
-		err = t.OpenTab(wt.Path, cfg.ClaudeBin)
+		cmd := cfg.ClaudeBin
+		if resumeModel != "" {
+			cmd += fmt.Sprintf(" --model %s", resumeModel)
+		}
+		err = t.OpenTab(wt.Path, cmd)
 	}
 	if err != nil {
 		return fmt.Errorf("opening %s tab: %w", t.Name(), err)
@@ -222,11 +241,12 @@ func findWorktreeByName(term string) (*worktree.Worktree, error) {
 	return &matches[0], nil
 }
 
-// addResumeFlags adds the shared --session, --list, --no-iterm flags to a cobra command.
+// addResumeFlags adds the shared --session, --list, --no-iterm, --model flags to a cobra command.
 func addResumeFlags(cmd *cobra.Command) {
 	cmd.Flags().IntVarP(&resumeSession, "session", "s", 0, "Resume Nth session instead of most recent (1-based)")
 	cmd.Flags().BoolVarP(&resumeList, "list", "l", false, "List available sessions without resuming")
 	cmd.Flags().BoolVar(&resumeNoITerm, "no-terminal", false, "Print the resume command instead of opening terminal")
+	cmd.Flags().StringVarP(&resumeModel, "model", "m", "", "Claude model to use (e.g., sonnet, opus, haiku)")
 }
 
 // runReviewResume handles `zen review resume <pr-number>`.

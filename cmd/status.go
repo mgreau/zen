@@ -13,6 +13,7 @@ import (
 	"github.com/mgreau/zen/internal/config"
 	"github.com/mgreau/zen/internal/github"
 	"github.com/mgreau/zen/internal/prcache"
+	"github.com/mgreau/zen/internal/session"
 	"github.com/mgreau/zen/internal/ui"
 	"github.com/mgreau/zen/internal/worktree"
 	"github.com/spf13/cobra"
@@ -33,7 +34,7 @@ func init() {
 type StatusData struct {
 	Worktrees    *worktree.Stats  `json:"worktrees"`
 	PRReviews    []StatusPRReview `json:"pr_reviews"`
-	Features     []worktree.Worktree `json:"features"`
+	Features     []StatusFeature  `json:"features"`
 	DaemonStatus string           `json:"daemon_status"`
 	DaemonPID    string           `json:"daemon_pid,omitempty"`
 }
@@ -45,6 +46,15 @@ type StatusPRReview struct {
 	State      string `json:"state,omitempty"`
 	AgeDays    int    `json:"age_days"`
 	CleanupIn  int    `json:"cleanup_in_days,omitempty"`
+}
+
+// StatusFeature enriches a feature worktree with session and age info.
+type StatusFeature struct {
+	worktree.Worktree
+	AgeDays    int    `json:"age_days"`
+	AgeStr     string `json:"age_str"`
+	HasSession bool   `json:"has_session"`
+	Running    bool   `json:"running"`
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
@@ -72,6 +82,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	prCache := prcache.Load()
 	prReviews := enrichPRReviews(prWTs, prCache)
 
+	// Enrich features with session and age info
+	enrichedFeatures := enrichFeatures(features)
+
 	// Daemon status
 	daemonStatus, daemonPID := getDaemonStatus()
 
@@ -79,7 +92,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		printJSON(StatusData{
 			Worktrees:    wtStats,
 			PRReviews:    prReviews,
-			Features:     features,
+			Features:     enrichedFeatures,
 			DaemonStatus: daemonStatus,
 			DaemonPID:    daemonPID,
 		})
@@ -123,37 +136,38 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	// Features — sorted by age (newest first)
 	ui.SectionHeader("Feature Work")
-	if len(features) == 0 {
+	if len(enrichedFeatures) == 0 {
 		fmt.Println("  No feature worktrees")
 	} else {
-		sort.Slice(features, func(i, j int) bool {
-			di, _ := worktree.AgeDays(features[i].Path)
-			dj, _ := worktree.AgeDays(features[j].Path)
-			return di < dj
+		sort.Slice(enrichedFeatures, func(i, j int) bool {
+			return enrichedFeatures[i].AgeDays < enrichedFeatures[j].AgeDays
 		})
 
-		fmt.Printf("  %-42s  %-5s  %s\n", "Name", "Age", "Path")
-		fmt.Printf("  %-42s  %-5s  %s\n", "──────────────────────────────────────────", "─────", "──────────────────────────────")
+		fmt.Printf("  %-3s  %-34s  %-22s  %-5s  %s\n", "", "Name", "Branch", "Age", "Path")
+		fmt.Printf("  %-3s  %-34s  %-22s  %-5s  %s\n", "───", "──────────────────────────────────", "──────────────────────", "─────", "──────────────────────────────")
 
-		for i, f := range features {
+		for i, f := range enrichedFeatures {
 			if i >= 15 {
-				fmt.Printf("  ... and %d more\n", len(features)-15)
+				fmt.Printf("  ... and %d more\n", len(enrichedFeatures)-15)
 				break
 			}
-			age := ""
-			if days, err := worktree.AgeDays(f.Path); err == nil && days >= 0 {
-				if days == 0 {
-					if hours, err := worktree.AgeHours(f.Path); err == nil {
-						age = fmt.Sprintf("%dh", hours)
-					}
-				} else {
-					age = fmt.Sprintf("%dd", days)
-				}
+			sessionIcon := "   "
+			if f.Running {
+				sessionIcon = ui.GreenText(" ● ")
+			} else if f.HasSession {
+				sessionIcon = ui.DimText(" ○ ")
 			}
-			fmt.Printf("  %-42s  %-5s  %s\n", f.Name, ui.DimText(age), ui.DimText(ui.ShortenHome(f.Path, home)))
+			branch := ui.Truncate(f.Branch, 22)
+			name := ui.Truncate(f.Name, 34)
+			fmt.Printf("  %s  %-34s  %s  %-5s  %s\n",
+				sessionIcon,
+				name,
+				ui.CyanText(fmt.Sprintf("%-22s", branch)),
+				ui.DimText(f.AgeStr),
+				ui.DimText(ui.ShortenHome(f.Path, home)))
 		}
 	}
-	ui.Hint("'zen work resume <name>' to continue  |  'zen work new <repo> <branch>' to start")
+	ui.Hint("'zen work resume <name>' to continue  |  'zen work new <repo> <branch>' to start  |  ● = active session")
 	fmt.Println()
 
 	// Watch daemon
@@ -170,6 +184,36 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 
 	return nil
+}
+
+// enrichFeatures builds StatusFeature entries with age and session info.
+func enrichFeatures(wts []worktree.Worktree) []StatusFeature {
+	features := make([]StatusFeature, 0, len(wts))
+	for _, wt := range wts {
+		f := StatusFeature{Worktree: wt}
+
+		// Age
+		if days, err := worktree.AgeDays(wt.Path); err == nil && days >= 0 {
+			f.AgeDays = days
+			if days == 0 {
+				if hours, err := worktree.AgeHours(wt.Path); err == nil {
+					f.AgeStr = fmt.Sprintf("%dh", hours)
+				}
+			} else {
+				f.AgeStr = fmt.Sprintf("%dd", days)
+			}
+		}
+
+		// Session status
+		sessions, _ := session.FindSessions(wt.Path)
+		if len(sessions) > 0 {
+			f.HasSession = true
+			f.Running = session.IsProcessRunning(sessions[0].ID)
+		}
+
+		features = append(features, f)
+	}
+	return features
 }
 
 // enrichPRReviews builds StatusPRReview entries with remote state and cleanup ETA.

@@ -52,13 +52,21 @@ func OpenTab(workDir, command string) error {
 }
 
 // OpenTabWithResume opens a new Ghostty window to resume a Claude session.
-func OpenTabWithResume(workDir, sessionID, claudeBin string) error {
-	cmd := fmt.Sprintf("%s --resume %s", claudeBin, sessionID)
+func OpenTabWithResume(workDir, sessionID, claudeBin, model string) error {
+	cmd := claudeBin
+	if model != "" {
+		cmd += fmt.Sprintf(" --model %s", model)
+	}
+	cmd += fmt.Sprintf(" --resume %s", sessionID)
 	return OpenTab(workDir, cmd)
 }
 
 // OpenTabWithClaude opens a new Ghostty window with Claude and an initial prompt.
-func OpenTabWithClaude(workDir, initialPrompt, claudeBin string) error {
-	cmd := fmt.Sprintf("%s %q", claudeBin, initialPrompt)
+func OpenTabWithClaude(workDir, initialPrompt, claudeBin, model string) error {
+	cmd := claudeBin
+	if model != "" {
+		cmd += fmt.Sprintf(" --model %s", model)
+	}
+	cmd += fmt.Sprintf(" %q", initialPrompt)
 	return OpenTab(workDir, cmd)
 }

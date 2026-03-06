@@ -68,6 +68,16 @@ func HasActiveSession(worktreePath string) bool {
 	return len(sessions) > 0
 }
 
+// ProjectDir returns the Claude projects directory for a worktree path.
+// Returns empty string if the directory doesn't exist.
+func ProjectDir(worktreePath string) string {
+	dir := filepath.Join(os.Getenv("HOME"), ".claude", "projects", pathToClaudeProject(worktreePath))
+	if _, err := os.Stat(dir); err != nil {
+		return ""
+	}
+	return dir
+}
+
 // pathToClaudeProject converts a worktree path to the Claude projects directory name.
 // /Users/maxime.greau/git/cgr/repo-mono/mono-pr-123
 // -> -Users-maxime-greau-git-cgr-repo-mono-mono-pr-123
