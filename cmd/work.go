@@ -6,8 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/mgreau/zen/internal/iterm"
 	"github.com/mgreau/zen/internal/session"
+	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
 	wt "github.com/mgreau/zen/internal/worktree"
 	"github.com/spf13/cobra"
@@ -55,7 +55,7 @@ var (
 )
 
 func init() {
-	workNewCmd.Flags().BoolVar(&workNewNoITerm, "no-iterm", false, "Create worktree only, don't open iTerm2 tab")
+	workNewCmd.Flags().BoolVar(&workNewNoITerm, "no-terminal", false, "Create worktree only, don't open terminal tab")
 	workNewCmd.Flags().StringVarP(&workNewModel, "model", "m", "", "Claude model to use (e.g., sonnet, opus, haiku)")
 	workDeleteCmd.Flags().BoolVarP(&workDeleteForce, "force", "f", false, "Skip confirmation")
 	addResumeFlags(workResumeCmd)
@@ -203,18 +203,27 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Open iTerm tab
+	// Open terminal tab
+	term, err := terminal.NewTerminal(cfg.GetTerminal())
+	if err != nil {
+		return err
+	}
+
 	if context != "" {
-		if err := iterm.OpenTabWithClaude(worktreePath, context, cfg.ClaudeBin, workNewModel); err != nil {
-			return fmt.Errorf("opening iTerm tab: %w", err)
+		if err := term.OpenTabWithClaude(worktreePath, context, cfg.ClaudeBin, workNewModel); err != nil {
+			return fmt.Errorf("opening %s tab: %w", term.Name(), err)
 		}
 	} else {
-		if err := iterm.OpenTabWithClaudeModel(worktreePath, cfg.ClaudeBin, workNewModel); err != nil {
-			return fmt.Errorf("opening iTerm tab: %w", err)
+		cmd := cfg.ClaudeBin
+		if workNewModel != "" {
+			cmd += fmt.Sprintf(" --model %s", workNewModel)
+		}
+		if err := term.OpenTab(worktreePath, cmd); err != nil {
+			return fmt.Errorf("opening %s tab: %w", term.Name(), err)
 		}
 	}
 
-	ui.LogSuccess("iTerm2 tab opened")
+	ui.LogSuccess(fmt.Sprintf("%s tab opened", term.Name()))
 	fmt.Println()
 	return nil
 }
