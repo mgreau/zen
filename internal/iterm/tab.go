@@ -61,13 +61,30 @@ end tell`
 }
 
 // OpenTabWithResume opens a new iTerm2 tab to resume a Claude session.
-func OpenTabWithResume(workDir, sessionID, claudeBin string) error {
-	cmd := fmt.Sprintf("%s --resume %s", claudeBin, sessionID)
+func OpenTabWithResume(workDir, sessionID, claudeBin, model string) error {
+	cmd := claudeBin
+	if model != "" {
+		cmd += fmt.Sprintf(" --model %s", model)
+	}
+	cmd += fmt.Sprintf(" --resume %s", sessionID)
 	return OpenTab(workDir, cmd)
 }
 
 // OpenTabWithClaude opens a new iTerm2 tab with Claude and an initial prompt.
-func OpenTabWithClaude(workDir, initialPrompt, claudeBin string) error {
-	cmd := fmt.Sprintf("%s %q", claudeBin, initialPrompt)
+func OpenTabWithClaude(workDir, initialPrompt, claudeBin, model string) error {
+	cmd := claudeBin
+	if model != "" {
+		cmd += fmt.Sprintf(" --model %s", model)
+	}
+	cmd += fmt.Sprintf(" %q", initialPrompt)
+	return OpenTab(workDir, cmd)
+}
+
+// OpenTabWithClaudeModel opens a new iTerm2 tab with Claude using a specific model (no prompt).
+func OpenTabWithClaudeModel(workDir, claudeBin, model string) error {
+	cmd := claudeBin
+	if model != "" {
+		cmd += fmt.Sprintf(" --model %s", model)
+	}
 	return OpenTab(workDir, cmd)
 }
