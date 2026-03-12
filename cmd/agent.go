@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/mgreau/zen/internal/reconciler"
 	"github.com/mgreau/zen/internal/session"
 	"github.com/mgreau/zen/internal/ui"
 	"github.com/mgreau/zen/internal/worktree"
@@ -56,60 +57,92 @@ type agentStatusEntry struct {
 func runAgentStatus(cmd *cobra.Command, args []string) error {
 	home := homeDir()
 
-	wts, err := worktree.ListAll(cfg)
-	if err != nil {
-		return fmt.Errorf("listing worktrees: %w", err)
-	}
-
 	var entries []agentStatusEntry
-	var totalRunning, totalStopped int
+	var totalRunning, totalWaiting, totalStopped int
 
-	for _, wt := range wts {
-		sessions, _ := session.FindSessions(wt.Path)
-		if len(sessions) == 0 {
-			continue
+	// Try cached snapshot first (unless --full requests accurate totals)
+	snapshot, _ := reconciler.ReadSessionSnapshot()
+	usedCache := !agentFull && reconciler.IsSnapshotFresh(snapshot, 60*time.Second)
+
+	if usedCache {
+		for _, s := range snapshot.Sessions {
+			if agentRunning && s.Status == "stopped" {
+				continue
+			}
+
+			switch s.Status {
+			case "running":
+				totalRunning++
+			case "waiting":
+				totalWaiting++
+			default:
+				totalStopped++
+			}
+
+			entries = append(entries, agentStatusEntry{
+				Worktree:        ui.ShortenHome(s.WorktreePath, home),
+				SessionID:       s.SessionID,
+				Status:          s.Status,
+				Size:            s.Size,
+				Model:           s.Model,
+				InputTokens:     s.InputTokens,
+				OutputTokens:    s.OutputTokens,
+				LastActive:      session.FormatAge(time.Unix(s.LastModified, 0)),
+				lastActiveEpoch: s.LastModified,
+			})
+		}
+	} else {
+		// Fall back to real-time scanning
+		wts, err := worktree.ListAll(cfg)
+		if err != nil {
+			return fmt.Errorf("listing worktrees: %w", err)
 		}
 
-		// Only show the most recent session per worktree
-		s := sessions[0]
-		filePath := session.SessionFilePath(wt.Path, s.ID)
+		for _, wt := range wts {
+			sessions, _ := session.FindSessions(wt.Path)
+			if len(sessions) == 0 {
+				continue
+			}
 
-		var model string
-		var tokens session.TokenUsage
-		if agentFull {
-			model, tokens, _ = session.ParseSessionDetailFull(filePath)
-		} else {
-			model, tokens, _ = session.ParseSessionDetailTail(filePath)
+			s := sessions[0]
+			filePath := session.SessionFilePath(wt.Path, s.ID)
+
+			var model string
+			var tokens session.TokenUsage
+			if agentFull {
+				model, tokens, _ = session.ParseSessionDetailFull(filePath)
+			} else {
+				model, tokens, _ = session.ParseSessionDetailTail(filePath)
+			}
+
+			running := session.IsProcessRunning(s.ID)
+
+			if agentRunning && !running {
+				continue
+			}
+
+			status := "stopped"
+			if running {
+				status = "running"
+				totalRunning++
+			} else {
+				totalStopped++
+			}
+
+			lastActive := time.Unix(s.Modified, 0)
+
+			entries = append(entries, agentStatusEntry{
+				Worktree:        ui.ShortenHome(wt.Path, home),
+				SessionID:       s.ID,
+				Status:          status,
+				Size:            s.SizeStr,
+				Model:           session.ShortenModel(model),
+				InputTokens:     session.FormatTokenCount(tokens.InputTokens),
+				OutputTokens:    session.FormatTokenCount(tokens.OutputTokens),
+				LastActive:      session.FormatAge(lastActive),
+				lastActiveEpoch: s.Modified,
+			})
 		}
-
-		running := session.IsProcessRunning(s.ID)
-
-		if agentRunning && !running {
-			continue
-		}
-
-		status := "stopped"
-		if running {
-			status = "running"
-			totalRunning++
-		} else {
-			totalStopped++
-		}
-
-		lastActive := time.Unix(s.Modified, 0)
-
-		entry := agentStatusEntry{
-			Worktree:        ui.ShortenHome(wt.Path, home),
-			SessionID:       s.ID,
-			Status:          status,
-			Size:            s.SizeStr,
-			Model:           session.ShortenModel(model),
-			InputTokens:     session.FormatTokenCount(tokens.InputTokens),
-			OutputTokens:    session.FormatTokenCount(tokens.OutputTokens),
-			LastActive:      session.FormatAge(lastActive),
-			lastActiveEpoch: s.Modified,
-		}
-		entries = append(entries, entry)
 	}
 
 	// Sort by last active (most recent first)
@@ -151,9 +184,12 @@ func runAgentStatus(cmd *cobra.Command, args []string) error {
 
 	for _, e := range entries {
 		statusStr := fmt.Sprintf("%-7s", e.Status)
-		if e.Status == "running" {
+		switch e.Status {
+		case "running":
 			statusStr = ui.GreenText(statusStr)
-		} else {
+		case "waiting":
+			statusStr = ui.YellowText(statusStr)
+		default:
 			statusStr = ui.DimText(statusStr)
 		}
 
@@ -166,13 +202,23 @@ func runAgentStatus(cmd *cobra.Command, args []string) error {
 	w.Flush()
 
 	fmt.Println()
-	total := totalRunning + totalStopped
-	fmt.Printf("%s %d sessions (%s running, %s stopped)\n",
-		ui.DimText("Total:"),
-		total,
-		ui.GreenText(fmt.Sprintf("%d", totalRunning)),
-		ui.DimText(fmt.Sprintf("%d", totalStopped)),
-	)
+	total := totalRunning + totalWaiting + totalStopped
+	if totalWaiting > 0 {
+		fmt.Printf("%s %d sessions (%s running, %s waiting, %s stopped)\n",
+			ui.DimText("Total:"),
+			total,
+			ui.GreenText(fmt.Sprintf("%d", totalRunning)),
+			ui.YellowText(fmt.Sprintf("%d", totalWaiting)),
+			ui.DimText(fmt.Sprintf("%d", totalStopped)),
+		)
+	} else {
+		fmt.Printf("%s %d sessions (%s running, %s stopped)\n",
+			ui.DimText("Total:"),
+			total,
+			ui.GreenText(fmt.Sprintf("%d", totalRunning)),
+			ui.DimText(fmt.Sprintf("%d", totalStopped)),
+		)
+	}
 	fmt.Println()
 
 	return nil

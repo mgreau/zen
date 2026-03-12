@@ -3,6 +3,7 @@ package worktree
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -54,6 +55,33 @@ func CleanAllStaleLocks(cfg *config.Config) {
 		CleanStaleLocks(cfg, repo)
 	}
 }
+
+// CleanupFailedAdd cleans up after a failed "git worktree add" that may have
+// created the branch and/or a partial worktree directory but failed to complete
+// (e.g., "Could not write new index file"). It removes the partial worktree
+// directory, prunes git's worktree metadata, and deletes the orphaned branch.
+//
+// originPath is the main repo directory, worktreePath is the target worktree
+// directory, and branch is the git branch that was being created.
+func CleanupFailedAdd(originPath, worktreePath, branch string) {
+	// Remove partial worktree directory if it exists
+	if _, err := os.Stat(worktreePath); err == nil {
+		os.RemoveAll(worktreePath)
+	}
+
+	// Prune stale worktree metadata
+	pruneCmd := execCommand("git", "worktree", "prune")
+	pruneCmd.Dir = originPath
+	pruneCmd.CombinedOutput()
+
+	// Delete the orphaned branch
+	delCmd := execCommand("git", "branch", "-D", branch)
+	delCmd.Dir = originPath
+	delCmd.CombinedOutput()
+}
+
+// execCommand is a variable for testing.
+var execCommand = exec.Command
 
 func removeStaleLock(lockFile, name string) {
 	data, err := os.ReadFile(lockFile)

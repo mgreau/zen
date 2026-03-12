@@ -239,11 +239,12 @@ func watchDaemon() error {
 	watchCfg := cfg.Watch
 	dispatchInterval := watchCfg.DispatchIntervalDuration()
 	cleanupInterval := watchCfg.CleanupIntervalDuration()
+	sessionScanInterval := watchCfg.SessionScanIntervalDuration()
 	concurrency := watchCfg.GetConcurrency()
 	maxRetries := watchCfg.GetMaxRetries()
 
-	fmt.Printf("[%s] Watch daemon started (poll=%s, dispatch=%s, cleanup=%s, concurrency=%d, maxRetries=%d)\n",
-		time.Now().Format(time.RFC3339), pollInterval, dispatchInterval, cleanupInterval, concurrency, maxRetries)
+	fmt.Printf("[%s] Watch daemon started (poll=%s, dispatch=%s, cleanup=%s, session_scan=%s, concurrency=%d, maxRetries=%d)\n",
+		time.Now().Format(time.RFC3339), pollInterval, dispatchInterval, cleanupInterval, sessionScanInterval, concurrency, maxRetries)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -275,12 +276,17 @@ func watchDaemon() error {
 	cleanupTicker := time.NewTicker(cleanupInterval)
 	defer cleanupTicker.Stop()
 
+	// Session scan ticker
+	sessionTicker := time.NewTicker(sessionScanInterval)
+	defer sessionTicker.Stop()
+
 	// Log rotation ticker — check once per hour
 	rotateTicker := time.NewTicker(1 * time.Hour)
 	defer rotateTicker.Stop()
 
-	// Initial poll
+	// Initial poll and session scan
 	pollOnce(ctx, seenPRs, setupQueue, setupRec)
+	reconciler.ScanSessions(cfg, 10*time.Second)
 
 	for {
 		select {
@@ -303,6 +309,9 @@ func watchDaemon() error {
 			if err := dispatcher.HandleAsync(cleanupCtx, cleanupQueue, 1, 1, cleanupRec.Reconcile, 3)(); err != nil {
 				fmt.Printf("[%s] Cleanup dispatch error: %v\n", time.Now().Format(time.RFC3339), err)
 			}
+
+		case <-sessionTicker.C:
+			reconciler.ScanSessions(cfg, 10*time.Second)
 
 		case <-cleanupTicker.C:
 			reconciler.ScanMergedPRs(ctx, cfg, cleanupQueue, cfg.Watch.GetCleanupAfterDays())
