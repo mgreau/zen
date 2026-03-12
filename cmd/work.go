@@ -167,6 +167,8 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 	wtCmd := exec.Command("git", "worktree", "add", worktreePath, "-b", gitBranch, "origin/main")
 	wtCmd.Dir = originPath
 	if out, err := wtCmd.CombinedOutput(); err != nil {
+		// Clean up orphaned branch and partial worktree directory
+		wt.CleanupFailedAdd(originPath, worktreePath, gitBranch)
 		wt.GitMu.Unlock()
 		return fmt.Errorf("git worktree add: %w: %s", err, string(out))
 	}

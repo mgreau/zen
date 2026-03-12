@@ -126,9 +126,12 @@ func (r *SetupReconciler) ensureWorktree(originPath, worktreePath, worktreeName 
 		return fmt.Errorf("git fetch: %w: %s", err, string(out))
 	}
 
-	wtCmd := exec.Command("git", "worktree", "add", worktreePath, fmt.Sprintf("pr-%d", prNumber))
+	branch := fmt.Sprintf("pr-%d", prNumber)
+	wtCmd := exec.Command("git", "worktree", "add", worktreePath, branch)
 	wtCmd.Dir = originPath
 	if out, err := wtCmd.CombinedOutput(); err != nil {
+		// Clean up orphaned branch and partial worktree directory
+		wt.CleanupFailedAdd(originPath, worktreePath, branch)
 		return fmt.Errorf("git worktree add: %w: %s", err, string(out))
 	}
 

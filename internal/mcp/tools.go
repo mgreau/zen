@@ -8,6 +8,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	ghpkg "github.com/mgreau/zen/internal/github"
+	"github.com/mgreau/zen/internal/reconciler"
 	"github.com/mgreau/zen/internal/session"
 	"github.com/mgreau/zen/internal/worktree"
 )
@@ -123,47 +124,71 @@ type agentStatusEntry struct {
 }
 
 // handleAgentStatus lists Claude sessions across worktrees.
+// Uses cached session snapshot when available, falls back to real-time scanning.
 func (s *Server) handleAgentStatus(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	runningOnly := req.GetBool("running_only", false)
 
-	wts, err := worktree.ListAll(s.cfg)
-	if err != nil {
-		return mcpgo.NewToolResultError("failed to list worktrees: " + err.Error()), nil
-	}
-
 	var entries []agentStatusEntry
-	for _, wt := range wts {
-		sessions, _ := session.FindSessions(wt.Path)
-		if len(sessions) == 0 {
-			continue
+
+	// Try cached snapshot first — only use if it contains paths matching our config
+	snapshot, _ := reconciler.ReadSessionSnapshot()
+	basePaths := s.cfg.AllBasePaths()
+	if reconciler.IsSnapshotFresh(snapshot, 60*time.Second) && reconciler.SnapshotMatchesConfig(snapshot, basePaths) {
+		for _, ss := range snapshot.Sessions {
+			if runningOnly && ss.Status == "stopped" {
+				continue
+			}
+			entries = append(entries, agentStatusEntry{
+				Worktree:     ss.WorktreePath,
+				SessionID:    ss.SessionID,
+				Status:       ss.Status,
+				Size:         ss.Size,
+				Model:        ss.Model,
+				InputTokens:  ss.InputTokens,
+				OutputTokens: ss.OutputTokens,
+				LastActive:   session.FormatAge(time.Unix(ss.LastModified, 0)),
+			})
+		}
+	} else {
+		// Fall back to real-time scanning
+		wts, err := worktree.ListAll(s.cfg)
+		if err != nil {
+			return mcpgo.NewToolResultError("failed to list worktrees: " + err.Error()), nil
 		}
 
-		sess := sessions[0]
-		filePath := session.SessionFilePath(wt.Path, sess.ID)
-		model, tokens, _ := session.ParseSessionDetailTail(filePath)
-		running := session.IsProcessRunning(sess.ID)
+		for _, wt := range wts {
+			sessions, _ := session.FindSessions(wt.Path)
+			if len(sessions) == 0 {
+				continue
+			}
 
-		if runningOnly && !running {
-			continue
+			sess := sessions[0]
+			filePath := session.SessionFilePath(wt.Path, sess.ID)
+			model, tokens, _ := session.ParseSessionDetailTail(filePath)
+			running := session.IsProcessRunning(sess.ID)
+
+			if runningOnly && !running {
+				continue
+			}
+
+			status := "stopped"
+			if running {
+				status = "running"
+			}
+
+			lastActive := time.Unix(sess.Modified, 0)
+
+			entries = append(entries, agentStatusEntry{
+				Worktree:     wt.Path,
+				SessionID:    sess.ID,
+				Status:       status,
+				Size:         sess.SizeStr,
+				Model:        session.ShortenModel(model),
+				InputTokens:  session.FormatTokenCount(tokens.InputTokens),
+				OutputTokens: session.FormatTokenCount(tokens.OutputTokens),
+				LastActive:   session.FormatAge(lastActive),
+			})
 		}
-
-		status := "stopped"
-		if running {
-			status = "running"
-		}
-
-		lastActive := time.Unix(sess.Modified, 0)
-
-		entries = append(entries, agentStatusEntry{
-			Worktree:     wt.Path,
-			SessionID:    sess.ID,
-			Status:       status,
-			Size:         sess.SizeStr,
-			Model:        session.ShortenModel(model),
-			InputTokens:  session.FormatTokenCount(tokens.InputTokens),
-			OutputTokens: session.FormatTokenCount(tokens.OutputTokens),
-			LastActive:   session.FormatAge(lastActive),
-		})
 	}
 	if entries == nil {
 		entries = []agentStatusEntry{}
