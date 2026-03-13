@@ -17,6 +17,7 @@ Zen manages this silently: a background daemon watches GitHub, creates worktrees
   - [Review](#review)
   - [Reviews](#reviews)
 - [Feature Work](#feature-work)
+- [Who Am I](#who-am-i)
 - [Dashboard](#dashboard)
   - [Status](#status)
   - [Search](#search)
@@ -160,6 +161,27 @@ zen work resume <name>           # Resume a feature session in new iTerm tab
 zen work delete <name>           # Delete a feature worktree
 ```
 
+## Who Am I
+
+Summary of your work across worktrees — what you merged, what's in progress, and what you reviewed.
+
+```
+zen who-am-i                         # All repos, last 7 days
+zen who-am-i -r app -p 30d          # Specific repo, last 30 days
+zen who-am-i --merged                # Only merged & deployed PRs with descriptions
+zen who-am-i --merged -r app -p 7d  # Merged PRs in app, last 7 days
+```
+
+Shows three sections:
+
+- **Merged & Deployed** — PRs merged to `origin/main` by you, with PR numbers. Use `--merged` for full commit descriptions.
+- **In Progress** — feature branches with uncommitted work or active Claude sessions
+- **PR Reviews** — review worktrees with commit counts and session indicators
+
+Period formats: `1d`, `7d`, `30d` (days), `2w` (weeks), `1m` (months).
+
+Also available as an MCP tool (`zen_who_am_i`) so Claude can query and summarize your work directly.
+
 ## Dashboard
 
 ### Status
@@ -220,6 +242,7 @@ Starts a Model Context Protocol server on stdio, exposing zen tools for Claude s
 - `zen_worktree_list` — list worktrees
 - `zen_pr_details` / `zen_pr_files` — PR metadata
 - `zen_agent_status` — session info
+- `zen_who_am_i` — work summary (merged PRs, in-progress, reviews)
 - `zen_config_repos` — configured repositories
 
 To register with Claude Code:
@@ -278,6 +301,7 @@ terminal: iterm  # or "ghostty" for Ghostty support
 watch:
   dispatch_interval: "10s"      # How often to process queued work
   cleanup_interval: "1h"        # How often to scan for merged PRs
+  session_scan_interval: "10s"  # How often to scan Claude session states
   cleanup_after_days: 5          # Days after merge before removing worktree
   concurrency: 2                 # Parallel worktree setups
   max_retries: 5                 # Max retry attempts for git failures
@@ -309,6 +333,7 @@ All state lives in `~/.zen/state/`:
 | `watch.log` | Daemon logs |
 | `last_check.json` | Timestamp of last GitHub poll |
 | `pr_cache.json` | PR titles/authors for display |
+| `sessions.json` | Cached Claude session states (updated every 10s by daemon) |
 
 ## Design
 
