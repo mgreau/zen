@@ -164,13 +164,22 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 	}
 
 	ui.LogInfo(fmt.Sprintf("Creating worktree %s (branch %s)...", worktreeName, gitBranch))
-	wtCmd := exec.Command("git", "worktree", "add", worktreePath, "-b", gitBranch, "origin/main")
+	// Use --no-checkout + separate checkout to avoid "Could not write new index file"
+	// on large repos (13K+ files). The two-step approach handles the index write reliably.
+	wtCmd := exec.Command("git", "worktree", "add", "--no-checkout", worktreePath, "-b", gitBranch, "origin/main")
 	wtCmd.Dir = originPath
 	if out, err := wtCmd.CombinedOutput(); err != nil {
-		// Clean up orphaned branch and partial worktree directory
 		wt.CleanupFailedAdd(originPath, worktreePath, gitBranch)
 		wt.GitMu.Unlock()
 		return fmt.Errorf("git worktree add: %w: %s", err, string(out))
+	}
+
+	checkoutCmd := exec.Command("git", "checkout")
+	checkoutCmd.Dir = worktreePath
+	if out, err := checkoutCmd.CombinedOutput(); err != nil {
+		wt.CleanupFailedAdd(originPath, worktreePath, gitBranch)
+		wt.GitMu.Unlock()
+		return fmt.Errorf("git checkout in worktree: %w: %s", err, string(out))
 	}
 
 	// Clean stale index.lock

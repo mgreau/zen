@@ -3,7 +3,12 @@ package coordmcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os/exec"
+	"path/filepath"
+	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -220,4 +225,247 @@ func (s *Server) handleConfigRepos(ctx context.Context, req mcpgo.CallToolReques
 		repos = []repoEntry{}
 	}
 	return jsonResult(repos)
+}
+
+// whoAmIMergedEntry represents a commit merged to origin/main.
+type whoAmIMergedEntry struct {
+	Repo     string `json:"repo"`
+	Hash     string `json:"hash"`
+	Subject  string `json:"subject"`
+	Body     string `json:"body,omitempty"`
+	PRNumber string `json:"pr_number,omitempty"`
+	Date     string `json:"date"`
+}
+
+// whoAmIWorktreeEntry holds per-worktree activity data.
+type whoAmIWorktreeEntry struct {
+	Name       string `json:"name"`
+	Repo       string `json:"repo"`
+	Type       string `json:"type"`
+	Branch     string `json:"branch"`
+	Commits    int    `json:"commits"`
+	LastCommit string `json:"last_commit,omitempty"`
+	HasSession bool   `json:"has_session"`
+	PRNumber   int    `json:"pr_number,omitempty"`
+}
+
+// whoAmISummary holds the complete who-am-i response.
+type whoAmISummary struct {
+	Period      string                `json:"period"`
+	Since       string                `json:"since"`
+	Repos       []string              `json:"repos"`
+	Merged      []whoAmIMergedEntry   `json:"merged"`
+	InProgress  []whoAmIWorktreeEntry `json:"in_progress"`
+	PRReviews   []whoAmIWorktreeEntry `json:"pr_reviews"`
+}
+
+// handleWhoAmI returns a summary of work done across repos.
+func (s *Server) handleWhoAmI(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	repoFilter := req.GetString("repo", "")
+	period := req.GetString("period", "7d")
+	mergedOnly := req.GetBool("merged_only", false)
+
+	since, err := whoamiParsePeriod(period)
+	if err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+
+	// Determine repos
+	repos := s.cfg.RepoNames()
+	if repoFilter != "" {
+		if s.cfg.RepoBasePath(repoFilter) == "" {
+			return mcpgo.NewToolResultError(fmt.Sprintf("unknown repo %q", repoFilter)), nil
+		}
+		repos = []string{repoFilter}
+	}
+
+	// Merged commits
+	var merged []whoAmIMergedEntry
+	for _, repo := range repos {
+		basePath := s.cfg.RepoBasePath(repo)
+		originPath := filepath.Join(basePath, repo)
+		entries := whoamiMergedCommits(originPath, since, mergedOnly)
+		for i := range entries {
+			entries[i].Repo = repo
+		}
+		merged = append(merged, entries...)
+	}
+
+	if mergedOnly {
+		if merged == nil {
+			merged = []whoAmIMergedEntry{}
+		}
+		return jsonResult(whoAmISummary{
+			Period:     period,
+			Since:      since.Format("2006-01-02"),
+			Repos:      repos,
+			Merged:     merged,
+			InProgress: []whoAmIWorktreeEntry{},
+			PRReviews:  []whoAmIWorktreeEntry{},
+		})
+	}
+
+	// In-progress worktrees
+	wts, err := worktree.ListAll(s.cfg)
+	if err != nil {
+		return mcpgo.NewToolResultError("failed to list worktrees: " + err.Error()), nil
+	}
+
+	var inProgress, prReviews []whoAmIWorktreeEntry
+	for _, wt := range wts {
+		if repoFilter != "" && wt.Repo != repoFilter {
+			continue
+		}
+
+		commits := whoamiCountCommits(wt.Path, since)
+		hasSession := session.HasActiveSession(wt.Path)
+		if commits == 0 && !whoamiHasRecentSession(wt.Path, since) {
+			continue
+		}
+
+		entry := whoAmIWorktreeEntry{
+			Name:       wt.Name,
+			Repo:       wt.Repo,
+			Type:       string(wt.Type),
+			Branch:     wt.Branch,
+			Commits:    commits,
+			HasSession: hasSession,
+			PRNumber:   wt.PRNumber,
+		}
+		if commits > 0 {
+			entry.LastCommit = whoamiLastCommit(wt.Path)
+		}
+
+		if wt.Type == worktree.TypePRReview {
+			prReviews = append(prReviews, entry)
+		} else {
+			inProgress = append(inProgress, entry)
+		}
+	}
+
+	if merged == nil {
+		merged = []whoAmIMergedEntry{}
+	}
+	if inProgress == nil {
+		inProgress = []whoAmIWorktreeEntry{}
+	}
+	if prReviews == nil {
+		prReviews = []whoAmIWorktreeEntry{}
+	}
+
+	return jsonResult(whoAmISummary{
+		Period:     period,
+		Since:      since.Format("2006-01-02"),
+		Repos:      repos,
+		Merged:     merged,
+		InProgress: inProgress,
+		PRReviews:  prReviews,
+	})
+}
+
+// --- who-am-i git helpers (MCP-local, no dependency on cmd package) ---
+
+var whoamiPRNumberRe = regexp.MustCompile(`\(#(\d+)\)\s*$`)
+
+func whoamiParsePeriod(period string) (time.Time, error) {
+	now := time.Now()
+	if len(period) < 2 {
+		return time.Time{}, fmt.Errorf("invalid period %q", period)
+	}
+	unit := period[len(period)-1]
+	var val int
+	if _, err := fmt.Sscanf(period[:len(period)-1], "%d", &val); err != nil || val <= 0 {
+		return time.Time{}, fmt.Errorf("invalid period %q", period)
+	}
+	switch unit {
+	case 'd':
+		return now.AddDate(0, 0, -val), nil
+	case 'w':
+		return now.AddDate(0, 0, -val*7), nil
+	case 'm':
+		return now.AddDate(0, -val, 0), nil
+	default:
+		return time.Time{}, fmt.Errorf("invalid period unit %q", string(unit))
+	}
+}
+
+func whoamiMergedCommits(originPath string, since time.Time, withBody bool) []whoAmIMergedEntry {
+	authorCmd := exec.Command("git", "config", "user.name")
+	authorCmd.Dir = originPath
+	authorOut, err := authorCmd.Output()
+	if err != nil {
+		return nil
+	}
+	author := strings.TrimSpace(string(authorOut))
+
+	cmd := exec.Command("git", "log",
+		"--format=%h\t%s\t%ad",
+		"--date=short",
+		"--since="+since.Format("2006-01-02"),
+		"--author="+author,
+		"origin/main",
+	)
+	cmd.Dir = originPath
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+
+	var entries []whoAmIMergedEntry
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		e := whoAmIMergedEntry{Hash: parts[0], Subject: parts[1]}
+		if len(parts) == 3 {
+			e.Date = parts[2]
+		}
+		if m := whoamiPRNumberRe.FindStringSubmatch(e.Subject); len(m) == 2 {
+			e.PRNumber = m[1]
+			e.Subject = strings.TrimSpace(whoamiPRNumberRe.ReplaceAllString(e.Subject, ""))
+		}
+		if withBody {
+			bodyCmd := exec.Command("git", "log", "-1", "--format=%b", e.Hash)
+			bodyCmd.Dir = originPath
+			if bodyOut, err := bodyCmd.Output(); err == nil {
+				e.Body = strings.TrimSpace(string(bodyOut))
+			}
+		}
+		entries = append(entries, e)
+	}
+	return entries
+}
+
+func whoamiCountCommits(wtPath string, since time.Time) int {
+	cmd := exec.Command("git", "rev-list", "--count", "--since="+since.Format("2006-01-02"), "origin/main..HEAD")
+	cmd.Dir = wtPath
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	var count int
+	fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &count)
+	return count
+}
+
+func whoamiLastCommit(wtPath string) string {
+	cmd := exec.Command("git", "log", "-1", "--format=%s", "origin/main..HEAD")
+	cmd.Dir = wtPath
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func whoamiHasRecentSession(wtPath string, since time.Time) bool {
+	sessions, _ := session.FindSessions(wtPath)
+	if len(sessions) == 0 {
+		return false
+	}
+	return time.Unix(sessions[0].Modified, 0).After(since)
 }
