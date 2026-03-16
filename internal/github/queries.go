@@ -8,6 +8,15 @@ import (
 	"strings"
 )
 
+// withTimeout returns a context with apiTimeout applied, unless the caller
+// already set a deadline.
+func withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, apiTimeout)
+}
+
 // ghError extracts stderr from an exec.ExitError for better error messages.
 func ghError(err error) string {
 	if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
@@ -50,9 +59,14 @@ type ApprovedPR struct {
 
 // GetCurrentUser returns the authenticated GitHub user's login.
 func GetCurrentUser(ctx context.Context) (string, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "gh", "api", "user", "--jq", ".login")
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("fetching current user timed out after %s", apiTimeout)
+		}
 		return "", fmt.Errorf("fetching current user: %s", ghError(err))
 	}
 	return strings.TrimSpace(string(out)), nil
@@ -61,6 +75,8 @@ func GetCurrentUser(ctx context.Context) (string, error) {
 // GetReviewRequests fetches PRs where the user is a requested reviewer,
 // including re-reviews. Uses GraphQL via `gh api graphql`.
 func GetReviewRequests(ctx context.Context, repoFilter string) ([]ReviewRequest, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
 	query := `query($q1: String!, $q2: String!) {
   requested: search(query: $q1, type: ISSUE, first: 50) {
     nodes {
@@ -103,6 +119,9 @@ func GetReviewRequests(ctx context.Context, repoFilter string) ([]ReviewRequest,
 	)
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("review requests query timed out after %s", apiTimeout)
+		}
 		return nil, fmt.Errorf("GraphQL query failed: %s", ghError(err))
 	}
 
@@ -139,6 +158,8 @@ func GetReviewRequests(ctx context.Context, repoFilter string) ([]ReviewRequest,
 
 // GetApprovedUnmerged fetches the user's own PRs that are approved but not yet merged.
 func GetApprovedUnmerged(ctx context.Context, repoFilter string) ([]ApprovedPR, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
 	query := `query($q: String!) {
   search(query: $q, type: ISSUE, first: 50) {
     nodes {
@@ -168,6 +189,9 @@ func GetApprovedUnmerged(ctx context.Context, repoFilter string) ([]ApprovedPR, 
 	)
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("approved PRs query timed out after %s", apiTimeout)
+		}
 		return nil, fmt.Errorf("GraphQL query failed: %s", ghError(err))
 	}
 
@@ -193,6 +217,8 @@ func GetApprovedUnmerged(ctx context.Context, repoFilter string) ([]ApprovedPR, 
 
 // ListOpenPRs lists open PRs for a repository using `gh pr list`.
 func ListOpenPRs(ctx context.Context, fullRepo string, limit int) ([]ReviewRequest, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
 		"-R", fullRepo,
 		"--state", "open",
@@ -201,6 +227,9 @@ func ListOpenPRs(ctx context.Context, fullRepo string, limit int) ([]ReviewReque
 	)
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("listing open PRs timed out after %s", apiTimeout)
+		}
 		return nil, err
 	}
 
