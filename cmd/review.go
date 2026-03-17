@@ -9,9 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	ctxpkg "github.com/mgreau/zen/internal/context"
 	"github.com/mgreau/zen/internal/github"
-	"github.com/mgreau/zen/internal/prcache"
+	"github.com/mgreau/zen/internal/review"
 	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
 	wt "github.com/mgreau/zen/internal/worktree"
@@ -63,14 +62,6 @@ func init() {
 	rootCmd.AddCommand(reviewCmd)
 }
 
-// ReviewResult holds the output for --json mode.
-type ReviewResult struct {
-	WorktreePath string `json:"worktree_path"`
-	PRNumber     int    `json:"pr_number"`
-	Title        string `json:"title"`
-	Author       string `json:"author"`
-}
-
 func runReview(cmd *cobra.Command, args []string) error {
 	if len(args) != 1 {
 		return cmd.Help()
@@ -91,94 +82,38 @@ func runReview(cmd *cobra.Command, args []string) error {
 		reviewRepo = detected
 	}
 
-	// Validate repo exists in config
+	// Check if worktree already exists and resume
 	basePath := cfg.RepoBasePath(reviewRepo)
-	if basePath == "" {
-		return fmt.Errorf("unknown repo %q — check ~/.zen/config.yaml", reviewRepo)
-	}
-	fullRepo := cfg.RepoFullName(reviewRepo)
-
-	// Construct paths
-	originPath := filepath.Join(basePath, reviewRepo)
-	worktreeName := fmt.Sprintf("%s-pr-%d", reviewRepo, prNumber)
-	worktreePath := filepath.Join(basePath, worktreeName)
-
-	// If worktree already exists, resume it
-	if _, err := os.Stat(worktreePath); err == nil {
-		ui.LogInfo(fmt.Sprintf("Worktree already exists, resuming PR #%d...", prNumber))
-		// Pass model through to resume path
-		if reviewModel != "" {
-			resumeModel = reviewModel
+	if basePath != "" {
+		worktreeName := fmt.Sprintf("%s-pr-%d", reviewRepo, prNumber)
+		worktreePath := filepath.Join(basePath, worktreeName)
+		if _, err := os.Stat(worktreePath); err == nil {
+			ui.LogInfo(fmt.Sprintf("Worktree already exists, resuming PR #%d...", prNumber))
+			if reviewModel != "" {
+				resumeModel = reviewModel
+			}
+			return openReviewTab(worktreePath, worktreeName)
 		}
-		return openReviewTab(worktreePath, worktreeName)
 	}
 
-	// Fetch PR details from GitHub
-	ui.LogInfo(fmt.Sprintf("Fetching PR #%d from %s...", prNumber, fullRepo))
-	client, err := github.NewClient(ctx)
+	// Create worktree using shared logic
+	result, err := review.CreateWorktree(ctx, cfg, reviewRepo, prNumber)
 	if err != nil {
-		return fmt.Errorf("creating GitHub client: %w", err)
+		return err
 	}
-	details, err := client.GetPRDetails(ctx, fullRepo, prNumber)
-	if err != nil {
-		return fmt.Errorf("fetching PR details: %w", err)
-	}
-
-	ui.LogInfo(fmt.Sprintf("PR #%d: %s (by %s)", prNumber, details.Title, details.Author))
-
-	// Create worktree under lock
-	branchName := fmt.Sprintf("pr-%d", prNumber)
-
-	wt.GitMu.Lock()
-
-	ui.LogInfo(fmt.Sprintf("Fetching pull/%d/head...", prNumber))
-	fetchCmd := exec.Command("git", "fetch", "origin", fmt.Sprintf("+pull/%d/head:%s", prNumber, branchName))
-	fetchCmd.Dir = originPath
-	if out, err := fetchCmd.CombinedOutput(); err != nil {
-		wt.GitMu.Unlock()
-		return fmt.Errorf("git fetch: %w: %s", err, string(out))
-	}
-
-	ui.LogInfo(fmt.Sprintf("Creating worktree %s...", worktreeName))
-	wtCmd := exec.Command("git", "worktree", "add", worktreePath, branchName)
-	wtCmd.Dir = originPath
-	if out, err := wtCmd.CombinedOutput(); err != nil {
-		wt.GitMu.Unlock()
-		return fmt.Errorf("git worktree add: %w: %s", err, string(out))
-	}
-
-	// Clean stale index.lock
-	lockFile := filepath.Join(originPath, ".git", "worktrees", worktreeName, "index.lock")
-	os.Remove(lockFile)
-
-	wt.GitMu.Unlock()
-
-	// Inject PR context into CLAUDE.local.md
-	ui.LogInfo("Injecting PR context into CLAUDE.local.md...")
-	if err := ctxpkg.InjectPRContext(ctx, worktreePath, fullRepo, prNumber); err != nil {
-		ui.LogInfo(fmt.Sprintf("Warning: failed to inject context: %v", err))
-	}
-
-	// Cache PR metadata
-	prcache.Set(reviewRepo, prNumber, details.Title, details.Author)
 
 	home := homeDir()
-	shortPath := ui.ShortenHome(worktreePath, home)
+	shortPath := ui.ShortenHome(result.WorktreePath, home)
 
 	if jsonFlag {
-		printJSON(ReviewResult{
-			WorktreePath: worktreePath,
-			PRNumber:     prNumber,
-			Title:        details.Title,
-			Author:       details.Author,
-		})
+		printJSON(result)
 		return nil
 	}
 
 	fmt.Println()
 	ui.LogSuccess(fmt.Sprintf("Created worktree: %s", shortPath))
-	fmt.Printf("  PR:     #%d — %s\n", prNumber, details.Title)
-	fmt.Printf("  Author: %s\n", details.Author)
+	fmt.Printf("  PR:     #%d — %s\n", result.PRNumber, result.Title)
+	fmt.Printf("  Author: %s\n", result.Author)
 
 	if reviewModel != "" {
 		fmt.Printf("  Model:  %s\n", ui.CyanText(reviewModel))
@@ -196,7 +131,7 @@ func runReview(cmd *cobra.Command, args []string) error {
 		if reviewModel != "" {
 			modelFlag = fmt.Sprintf(" --model %s", reviewModel)
 		}
-		fmt.Printf("  cd %s && %s%s \"/review-pr\"\n", worktreePath, cfg.ClaudeBin, modelFlag)
+		fmt.Printf("  cd %s && %s%s \"/review-pr\"\n", result.WorktreePath, cfg.ClaudeBin, modelFlag)
 		return nil
 	}
 
@@ -206,7 +141,7 @@ func runReview(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := term.OpenTabWithClaude(worktreePath, "/review-pr", cfg.ClaudeBin, reviewModel); err != nil {
+	if err := term.OpenTabWithClaude(result.WorktreePath, "/review-pr", cfg.ClaudeBin, reviewModel); err != nil {
 		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
 	}
 

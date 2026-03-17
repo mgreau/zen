@@ -106,4 +106,27 @@ func (s *Server) registerTools() {
 		),
 		s.handleConfigRepos,
 	)
+
+	s.server.AddTool(
+		mcpgo.NewTool("zen_review",
+			mcpgo.WithDescription("Create a worktree for a PR number (fetches branch, creates worktree, injects context)"),
+			mcpgo.WithNumber("pr_number", mcpgo.Description("Pull request number"), mcpgo.Required()),
+			mcpgo.WithString("repo", mcpgo.Description("Short repo name (auto-detected if omitted)")),
+			mcpgo.WithReadOnlyHintAnnotation(false),
+			mcpgo.WithDestructiveHintAnnotation(false),
+			mcpgo.WithOpenWorldHintAnnotation(true),
+		),
+		s.handleReview,
+	)
+
+	s.server.AddTool(
+		mcpgo.NewTool("zen_review_resume",
+			mcpgo.WithDescription("Get resume info (worktree path and sessions) for an existing PR review worktree"),
+			mcpgo.WithNumber("pr_number", mcpgo.Description("Pull request number"), mcpgo.Required()),
+			mcpgo.WithReadOnlyHintAnnotation(true),
+			mcpgo.WithDestructiveHintAnnotation(false),
+			mcpgo.WithOpenWorldHintAnnotation(false),
+		),
+		s.handleReviewResume,
+	)
 }
