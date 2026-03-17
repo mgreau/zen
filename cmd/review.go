@@ -184,6 +184,11 @@ func runReview(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Model:  %s\n", ui.CyanText(reviewModel))
 	}
 
+	// Ensure /review-pr command is installed
+	if err := ensureClaudeCommand("review-pr"); err != nil {
+		ui.LogInfo(fmt.Sprintf("Warning: could not install /review-pr command: %v", err))
+	}
+
 	if reviewNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Open manually:"))
