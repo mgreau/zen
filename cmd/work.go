@@ -145,7 +145,13 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 	originPath := filepath.Join(basePath, repo)
 	worktreeName := fmt.Sprintf("%s-%s", repo, branch)
 	worktreePath := filepath.Join(basePath, worktreeName)
-	gitBranch := fmt.Sprintf("mgreau/%s", branch)
+	prefix := cfg.GetBranchPrefix()
+	var gitBranch string
+	if prefix != "" {
+		gitBranch = fmt.Sprintf("%s/%s", prefix, branch)
+	} else {
+		gitBranch = branch
+	}
 
 	// Check if worktree already exists
 	if _, err := os.Stat(worktreePath); err == nil {

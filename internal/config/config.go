@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ type Config struct {
 	PollInterval string                `yaml:"poll_interval"`
 	ClaudeBin    string                `yaml:"claude_bin"`
 	Terminal     string                `yaml:"terminal"` // "iterm" or "ghostty"
+	BranchPrefix string                `yaml:"branch_prefix"`
 	Watch        WatchConfig           `yaml:"watch"`
 }
 
@@ -125,6 +127,23 @@ func Load() (*Config, error) {
 // GetTerminal returns the configured terminal type.
 func (c *Config) GetTerminal() string {
 	return c.Terminal
+}
+
+// GetBranchPrefix returns the prefix for feature branch names.
+// Falls back to git config user name, then empty string.
+func (c *Config) GetBranchPrefix() string {
+	if c.BranchPrefix != "" {
+		return c.BranchPrefix
+	}
+	// Try git config
+	out, err := exec.Command("git", "config", "user.name").Output()
+	if err == nil {
+		name := strings.TrimSpace(string(out))
+		if name != "" {
+			return name
+		}
+	}
+	return ""
 }
 
 // expandPaths replaces ~ with $HOME in base paths.
