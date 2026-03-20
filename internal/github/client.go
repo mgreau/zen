@@ -27,7 +27,6 @@ func NewClient(ctx context.Context) (*Client, error) {
 
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
 	tc := oauth2.NewClient(ctx, ts)
-	tc.Timeout = apiTimeout
 	client := gh.NewClient(tc)
 
 	return &Client{gh: client}, nil
