@@ -186,7 +186,11 @@ func promptRequired(scanner *bufio.Scanner, label string) string {
 // installs it silently from the embedded FS if missing. Returns true if the
 // command was installed (or already existed).
 func ensureClaudeCommand(name string) error {
-	targetDir := filepath.Join(os.Getenv("HOME"), ".claude", "commands")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolving home directory: %w", err)
+	}
+	targetDir := filepath.Join(home, ".claude", "commands")
 	dst := filepath.Join(targetDir, name+".md")
 
 	if _, err := os.Stat(dst); err == nil {

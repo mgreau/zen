@@ -131,14 +131,11 @@ func DetectRepo(ctx context.Context, cfg *config.Config, prNumber int) (string, 
 		return "", fmt.Errorf("creating GitHub client: %w", err)
 	}
 
-	type match struct {
-		repo string
-	}
-	var matches []match
+	var matches []string
 	for _, repo := range repos {
 		fullRepo := cfg.RepoFullName(repo)
 		if _, err := client.GetPRDetails(ctx, fullRepo, prNumber); err == nil {
-			matches = append(matches, match{repo: repo})
+			matches = append(matches, repo)
 		}
 	}
 
@@ -146,27 +143,23 @@ func DetectRepo(ctx context.Context, cfg *config.Config, prNumber int) (string, 
 	case 0:
 		return "", fmt.Errorf("PR #%d not found in any configured repo", prNumber)
 	case 1:
-		return matches[0].repo, nil
+		return matches[0], nil
 	default:
 		// Try reviewer heuristic
 		currentUser, _ := github.GetCurrentUser(ctx)
 		if currentUser != "" {
-			var reviewMatches []match
-			for _, m := range matches {
-				fullRepo := cfg.RepoFullName(m.repo)
+			var reviewMatches []string
+			for _, repo := range matches {
+				fullRepo := cfg.RepoFullName(repo)
 				if ok, _ := client.IsRequestedReviewer(ctx, fullRepo, prNumber, currentUser); ok {
-					reviewMatches = append(reviewMatches, m)
+					reviewMatches = append(reviewMatches, repo)
 				}
 			}
 			if len(reviewMatches) == 1 {
-				return reviewMatches[0].repo, nil
+				return reviewMatches[0], nil
 			}
 		}
-		var names []string
-		for _, m := range matches {
-			names = append(names, m.repo)
-		}
 		return "", fmt.Errorf("PR #%d exists in multiple repos (%s) — specify with repo parameter",
-			prNumber, fmt.Sprintf("%v", names))
+			prNumber, fmt.Sprintf("%v", matches))
 	}
 }
