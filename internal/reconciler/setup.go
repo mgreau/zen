@@ -132,9 +132,9 @@ func (r *SetupReconciler) ensureWorktree(originPath, worktreePath, worktreeName 
 		return fmt.Errorf("git worktree add: %w: %s", err, string(out))
 	}
 
-	// Clean stale lock immediately
+	// Clean stale index.lock (only if holding process is dead)
 	lockFile := filepath.Join(originPath, ".git", "worktrees", worktreeName, "index.lock")
-	os.Remove(lockFile)
+	wt.RemoveStaleLock(lockFile, worktreeName)
 
 	return nil
 }

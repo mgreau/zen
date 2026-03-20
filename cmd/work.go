@@ -171,9 +171,9 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("git worktree add: %w: %s", err, string(out))
 	}
 
-	// Clean stale index.lock
+	// Clean stale index.lock (only if holding process is dead)
 	lockFile := filepath.Join(originPath, ".git", "worktrees", worktreeName, "index.lock")
-	os.Remove(lockFile)
+	wt.RemoveStaleLock(lockFile, worktreeName)
 
 	wt.GitMu.Unlock()
 
