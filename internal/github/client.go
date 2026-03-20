@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	gh "github.com/google/go-github/v75/github"
 	"golang.org/x/oauth2"
 )
+
+const apiTimeout = 30 * time.Second
 
 // Client wraps go-github with auth from `gh auth token`.
 type Client struct {
@@ -17,7 +20,7 @@ type Client struct {
 
 // NewClient creates a GitHub client using the token from `gh auth token`.
 func NewClient(ctx context.Context) (*Client, error) {
-	token, err := ghAuthToken()
+	token, err := ghAuthToken(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("getting GitHub token: %w", err)
 	}
@@ -30,10 +33,15 @@ func NewClient(ctx context.Context) (*Client, error) {
 }
 
 // ghAuthToken runs `gh auth token` and returns the token string.
-func ghAuthToken() (string, error) {
-	cmd := exec.Command("gh", "auth", "token")
+func ghAuthToken(ctx context.Context) (string, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "gh", "auth", "token")
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("gh auth token timed out after %s", apiTimeout)
+		}
 		return "", fmt.Errorf("gh auth token failed: %s (is gh CLI installed and authenticated?)", ghError(err))
 	}
 	return strings.TrimSpace(string(out)), nil
