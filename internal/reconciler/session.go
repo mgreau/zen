@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -72,7 +73,8 @@ func ScanSessions(cfg *config.Config, idleThreshold time.Duration) {
 					lastTime = last.(time.Time)
 				}
 				if time.Since(lastTime) >= sessionNotifyDebounce {
-					if err := notify.SessionWaiting(wt.Name, shortenedModel); err != nil {
+					resumeCmd := sessionResumeCmd(wt)
+					if err := notify.SessionWaiting(wt.Name, shortenedModel, resumeCmd); err != nil {
 						fmt.Printf("[%s] Session notify error for %s: %v\n",
 							time.Now().Format(time.RFC3339), wt.Name, err)
 					}
@@ -100,4 +102,16 @@ func ScanSessions(cfg *config.Config, idleThreshold time.Duration) {
 		fmt.Printf("[%s] Session scan: error writing snapshot: %v\n",
 			time.Now().Format(time.RFC3339), err)
 	}
+}
+
+// sessionResumeCmd returns the zen command to resume a session in a new terminal tab.
+func sessionResumeCmd(wt worktree.Worktree) string {
+	zenBin, err := os.Executable()
+	if err != nil {
+		zenBin = "zen"
+	}
+	if wt.Type == worktree.TypePRReview && wt.PRNumber > 0 {
+		return fmt.Sprintf("%s review resume %d", zenBin, wt.PRNumber)
+	}
+	return fmt.Sprintf("%s work resume %s", zenBin, wt.Name)
 }

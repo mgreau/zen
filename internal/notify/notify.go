@@ -14,6 +14,36 @@ func Send(title, message, subtitle string) error {
 	return exec.Command("osascript", "-e", script).Run()
 }
 
+// terminalNotifierPath returns the path to terminal-notifier if installed.
+func terminalNotifierPath() string {
+	path, _ := exec.LookPath("terminal-notifier")
+	return path
+}
+
+// SendWithAction sends a notification with an optional click action.
+// If terminal-notifier is installed, clicking the notification runs executeOnClick.
+// Otherwise falls back to osascript with the command appended to the subtitle.
+func SendWithAction(title, message, subtitle, executeOnClick string) error {
+	tn := terminalNotifierPath()
+	if tn != "" && executeOnClick != "" {
+		args := []string{"-title", title, "-message", message}
+		if subtitle != "" {
+			args = append(args, "-subtitle", subtitle)
+		}
+		args = append(args, "-execute", executeOnClick)
+		return exec.Command(tn, args...).Run()
+	}
+	// Fallback: append resume hint to subtitle so command is visible
+	if executeOnClick != "" {
+		if subtitle != "" {
+			subtitle = subtitle + " | " + executeOnClick
+		} else {
+			subtitle = executeOnClick
+		}
+	}
+	return Send(title, message, subtitle)
+}
+
 
 // PRReview notifies about a new PR review request.
 func PRReview(prNumber int, prTitle, author, repo string) error {
@@ -52,10 +82,12 @@ func StaleWorktrees(count int) error {
 }
 
 // SessionWaiting notifies that a Claude session is waiting for user input.
-func SessionWaiting(worktreeName, model string) error {
-	return Send(
+// resumeCmd is executed on notification click when terminal-notifier is available.
+func SessionWaiting(worktreeName, model, resumeCmd string) error {
+	return SendWithAction(
 		"Claude is waiting",
 		fmt.Sprintf("%s needs your input", worktreeName),
 		model,
+		resumeCmd,
 	)
 }
