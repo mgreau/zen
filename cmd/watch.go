@@ -240,11 +240,16 @@ func watchDaemon() error {
 	dispatchInterval := watchCfg.DispatchIntervalDuration()
 	cleanupInterval := watchCfg.CleanupIntervalDuration()
 	sessionScanInterval := watchCfg.SessionScanIntervalDuration()
+	digestInterval, digestEnabled := watchCfg.DigestIntervalDuration()
 	concurrency := watchCfg.GetConcurrency()
 	maxRetries := watchCfg.GetMaxRetries()
 
-	fmt.Printf("[%s] Watch daemon started (poll=%s, dispatch=%s, cleanup=%s, session_scan=%s, concurrency=%d, maxRetries=%d)\n",
-		time.Now().Format(time.RFC3339), pollInterval, dispatchInterval, cleanupInterval, sessionScanInterval, concurrency, maxRetries)
+	digestStr := "disabled"
+	if digestEnabled {
+		digestStr = digestInterval.String()
+	}
+	fmt.Printf("[%s] Watch daemon started (poll=%s, dispatch=%s, cleanup=%s, session_scan=%s, digest=%s, concurrency=%d, maxRetries=%d)\n",
+		time.Now().Format(time.RFC3339), pollInterval, dispatchInterval, cleanupInterval, sessionScanInterval, digestStr, concurrency, maxRetries)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -284,6 +289,14 @@ func watchDaemon() error {
 	rotateTicker := time.NewTicker(1 * time.Hour)
 	defer rotateTicker.Stop()
 
+	// Digest ticker — only active when digest_interval is configured
+	var digestC <-chan time.Time
+	if digestEnabled {
+		digestTicker := time.NewTicker(digestInterval)
+		defer digestTicker.Stop()
+		digestC = digestTicker.C
+	}
+
 	// Initial poll and session scan
 	pollOnce(ctx, seenPRs, setupQueue, setupRec)
 	reconciler.ScanSessions(cfg, 10*time.Second)
@@ -315,6 +328,9 @@ func watchDaemon() error {
 
 		case <-cleanupTicker.C:
 			reconciler.ScanMergedPRs(ctx, cfg, cleanupQueue, cfg.Watch.GetCleanupAfterDays())
+
+		case <-digestC:
+			reconciler.SendDigest(cfg)
 		}
 	}
 }

@@ -3,6 +3,7 @@ package notify
 import (
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // Send sends a macOS notification using osascript.
@@ -90,4 +91,23 @@ func SessionWaiting(worktreeName, model, resumeCmd string) error {
 		model,
 		resumeCmd,
 	)
+}
+
+// Digest sends a periodic summary notification. Only sends if there is something actionable.
+func Digest(waitingSessions, pendingReviews, featureWork int) error {
+	if waitingSessions == 0 && pendingReviews == 0 {
+		return nil
+	}
+	var parts []string
+	if waitingSessions > 0 {
+		parts = append(parts, fmt.Sprintf("%d waiting", waitingSessions))
+	}
+	if pendingReviews > 0 {
+		parts = append(parts, fmt.Sprintf("%d PRs to review", pendingReviews))
+	}
+	subtitle := ""
+	if featureWork > 0 {
+		subtitle = fmt.Sprintf("%d feature branch(es) active", featureWork)
+	}
+	return Send("zen digest", strings.Join(parts, " • "), subtitle)
 }

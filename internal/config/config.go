@@ -29,6 +29,7 @@ type WatchConfig struct {
 	CleanupAfterDays    int    `yaml:"cleanup_after_days"`    // default 5
 	Concurrency         int    `yaml:"concurrency"`           // default 2
 	MaxRetries          int    `yaml:"max_retries"`           // default 5
+	DigestInterval      string `yaml:"digest_interval"`       // "" = disabled, e.g. "2h"
 }
 
 // DispatchIntervalDuration returns the dispatch interval as a time.Duration,
@@ -75,6 +76,19 @@ func (w WatchConfig) GetMaxRetries() int {
 		return w.MaxRetries
 	}
 	return 5
+}
+
+// DigestIntervalDuration returns the digest interval duration and whether it is enabled.
+// An empty DigestInterval string disables the digest (returns 0, false).
+func (w WatchConfig) DigestIntervalDuration() (time.Duration, bool) {
+	if w.DigestInterval == "" {
+		return 0, false
+	}
+	d, err := time.ParseDuration(w.DigestInterval)
+	if err != nil || d <= 0 {
+		return 0, false
+	}
+	return d, true
 }
 
 // SessionScanIntervalDuration returns the session scan interval as a time.Duration,
