@@ -50,3 +50,12 @@ func StaleWorktrees(count int) error {
 		"Run: zen cleanup",
 	)
 }
+
+// SessionWaiting notifies that a Claude session is waiting for user input.
+func SessionWaiting(worktreeName, model string) error {
+	return Send(
+		"Claude is waiting",
+		fmt.Sprintf("%s needs your input", worktreeName),
+		model,
+	)
+}

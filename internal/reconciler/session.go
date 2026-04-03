@@ -2,12 +2,23 @@ package reconciler
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/mgreau/zen/internal/config"
+	"github.com/mgreau/zen/internal/notify"
 	"github.com/mgreau/zen/internal/session"
 	"github.com/mgreau/zen/internal/worktree"
 )
+
+// prevSessionStatus and lastNotifiedAt track session state across scans
+// to detect running → waiting transitions and debounce notifications.
+var (
+	prevSessionStatus sync.Map // SessionID → string status
+	lastNotifiedAt    sync.Map // SessionID → time.Time
+)
+
+const sessionNotifyDebounce = 5 * time.Minute
 
 // ScanSessions scans all worktrees for Claude sessions and writes
 // a cached snapshot to ~/.zen/state/sessions.json.
@@ -51,13 +62,32 @@ func ScanSessions(cfg *config.Config, idleThreshold time.Duration) {
 
 		// Parse model and tokens from the tail of the session file
 		model, tokens, _ := session.ParseSessionDetailTail(filePath)
+		shortenedModel := session.ShortenModel(model)
+
+		// Notify on running → waiting transition (debounced)
+		if status == "waiting" {
+			if prev, ok := prevSessionStatus.Load(s.ID); ok && prev.(string) == "running" {
+				var lastTime time.Time
+				if last, ok := lastNotifiedAt.Load(s.ID); ok {
+					lastTime = last.(time.Time)
+				}
+				if time.Since(lastTime) >= sessionNotifyDebounce {
+					if err := notify.SessionWaiting(wt.Name, shortenedModel); err != nil {
+						fmt.Printf("[%s] Session notify error for %s: %v\n",
+							time.Now().Format(time.RFC3339), wt.Name, err)
+					}
+					lastNotifiedAt.Store(s.ID, now)
+				}
+			}
+		}
+		prevSessionStatus.Store(s.ID, status)
 
 		states = append(states, SessionState{
 			WorktreePath: wt.Path,
 			WorktreeName: wt.Name,
 			SessionID:    s.ID,
 			Status:       status,
-			Model:        session.ShortenModel(model),
+			Model:        shortenedModel,
 			Size:         s.SizeStr,
 			InputTokens:  session.FormatTokenCount(tokens.InputTokens),
 			OutputTokens: session.FormatTokenCount(tokens.OutputTokens),
