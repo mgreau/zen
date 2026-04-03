@@ -2,9 +2,18 @@ package notify
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
+
+// zenBin returns the path to the running zen binary.
+func zenBin() string {
+	if bin, err := os.Executable(); err == nil {
+		return bin
+	}
+	return "zen"
+}
 
 // Send sends a macOS notification using osascript.
 func Send(title, message, subtitle string) error {
@@ -47,38 +56,46 @@ func SendWithAction(title, message, subtitle, executeOnClick string) error {
 
 
 // PRReview notifies about a new PR review request.
+// Clicking opens a terminal tab ready to start the review.
 func PRReview(prNumber int, prTitle, author, repo string) error {
-	return Send(
+	return SendWithAction(
 		"New PR Review Request",
 		fmt.Sprintf("PR #%d: %s", prNumber, prTitle),
 		fmt.Sprintf("by %s in %s", author, repo),
+		fmt.Sprintf("%s review resume %d", zenBin(), prNumber),
 	)
 }
 
 // WorktreeReady notifies that a worktree is ready.
+// Clicking opens a terminal tab in the worktree.
 func WorktreeReady(prNumber int, worktreePath string) error {
-	return Send(
+	return SendWithAction(
 		"Worktree Ready",
 		fmt.Sprintf("PR #%d worktree created", prNumber),
 		worktreePath,
+		fmt.Sprintf("%s review resume %d", zenBin(), prNumber),
 	)
 }
 
 // PRMerged notifies about a PR merge.
+// Clicking runs zen cleanup to remove the stale worktree.
 func PRMerged(prNumber int, prTitle string) error {
-	return Send(
+	return SendWithAction(
 		"PR Merged",
 		fmt.Sprintf("PR #%d: %s", prNumber, prTitle),
 		"Worktree can be cleaned up",
+		fmt.Sprintf("%s cleanup", zenBin()),
 	)
 }
 
 // StaleWorktrees notifies about stale worktrees found.
+// Clicking runs zen cleanup.
 func StaleWorktrees(count int) error {
-	return Send(
+	return SendWithAction(
 		"Stale Worktrees Found",
 		fmt.Sprintf("%d worktrees can be cleaned up", count),
-		"Run: zen cleanup",
+		"",
+		fmt.Sprintf("%s cleanup", zenBin()),
 	)
 }
 
