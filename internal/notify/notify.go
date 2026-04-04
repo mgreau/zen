@@ -56,57 +56,49 @@ func SendWithAction(title, message, subtitle, executeOnClick string) error {
 
 
 // PRReview notifies about a new PR review request.
-// Clicking opens a terminal tab ready to start the review.
 func PRReview(prNumber int, prTitle, author, repo string) error {
-	return SendWithAction(
+	return Send(
 		"New PR Review Request",
 		fmt.Sprintf("PR #%d: %s", prNumber, prTitle),
 		fmt.Sprintf("by %s in %s", author, repo),
-		fmt.Sprintf("%s review resume %d", zenBin(), prNumber),
 	)
 }
 
-// WorktreeReady notifies that a worktree is ready.
-// Clicking opens a terminal tab in the worktree.
+// WorktreeReady notifies that a worktree is ready for review.
+// Clicking opens a terminal tab in the worktree (requires terminal-notifier).
 func WorktreeReady(prNumber int, worktreePath string) error {
 	return SendWithAction(
-		"Worktree Ready",
-		fmt.Sprintf("PR #%d worktree created", prNumber),
-		worktreePath,
+		"Worktree Ready — click to review",
+		fmt.Sprintf("PR #%d", prNumber),
+		"",
 		fmt.Sprintf("%s review resume %d", zenBin(), prNumber),
 	)
 }
 
 // PRMerged notifies about a PR merge.
-// Clicking runs zen cleanup to remove the stale worktree.
 func PRMerged(prNumber int, prTitle string) error {
-	return SendWithAction(
+	return Send(
 		"PR Merged",
 		fmt.Sprintf("PR #%d: %s", prNumber, prTitle),
 		"Worktree can be cleaned up",
-		fmt.Sprintf("%s cleanup", zenBin()),
 	)
 }
 
 // StaleWorktrees notifies about stale worktrees found.
-// Clicking runs zen cleanup.
 func StaleWorktrees(count int) error {
-	return SendWithAction(
+	return Send(
 		"Stale Worktrees Found",
 		fmt.Sprintf("%d worktrees can be cleaned up", count),
-		"",
-		fmt.Sprintf("%s cleanup", zenBin()),
+		"Run: zen cleanup",
 	)
 }
 
 // SessionWaiting notifies that a Claude session is waiting for user input.
-// resumeCmd is executed on notification click when terminal-notifier is available.
 func SessionWaiting(worktreeName, model, resumeCmd string) error {
-	return SendWithAction(
+	return Send(
 		"Claude is waiting",
 		fmt.Sprintf("%s needs your input", worktreeName),
 		model,
-		resumeCmd,
 	)
 }
 
