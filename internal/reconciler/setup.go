@@ -126,10 +126,21 @@ func (r *SetupReconciler) ensureWorktree(originPath, worktreePath, worktreeName 
 		return fmt.Errorf("git fetch: %w: %s", err, string(out))
 	}
 
-	wtCmd := exec.Command("git", "worktree", "add", worktreePath, fmt.Sprintf("pr-%d", prNumber))
+	branch := fmt.Sprintf("pr-%d", prNumber)
+	// Use --no-checkout + separate checkout to avoid "Could not write new index file"
+	// on large repos (13K+ files).
+	wtCmd := exec.Command("git", "worktree", "add", "--no-checkout", worktreePath, branch)
 	wtCmd.Dir = originPath
 	if out, err := wtCmd.CombinedOutput(); err != nil {
+		wt.CleanupFailedAdd(originPath, worktreePath, branch)
 		return fmt.Errorf("git worktree add: %w: %s", err, string(out))
+	}
+
+	checkoutCmd := exec.Command("git", "checkout")
+	checkoutCmd.Dir = worktreePath
+	if out, err := checkoutCmd.CombinedOutput(); err != nil {
+		wt.CleanupFailedAdd(originPath, worktreePath, branch)
+		return fmt.Errorf("git checkout in worktree: %w: %s", err, string(out))
 	}
 
 	// Clean stale lock immediately

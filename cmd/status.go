@@ -9,10 +9,12 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/mgreau/zen/internal/config"
 	"github.com/mgreau/zen/internal/github"
 	"github.com/mgreau/zen/internal/prcache"
+	"github.com/mgreau/zen/internal/reconciler"
 	"github.com/mgreau/zen/internal/session"
 	"github.com/mgreau/zen/internal/ui"
 	"github.com/mgreau/zen/internal/worktree"
@@ -51,10 +53,11 @@ type StatusPRReview struct {
 // StatusFeature enriches a feature worktree with session and age info.
 type StatusFeature struct {
 	worktree.Worktree
-	AgeDays    int    `json:"age_days"`
-	AgeStr     string `json:"age_str"`
-	HasSession bool   `json:"has_session"`
-	Running    bool   `json:"running"`
+	AgeDays       int    `json:"age_days"`
+	AgeStr        string `json:"age_str"`
+	HasSession    bool   `json:"has_session"`
+	Running       bool   `json:"running"`
+	SessionStatus string `json:"session_status,omitempty"` // "running", "waiting", "stopped", or ""
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
@@ -152,10 +155,15 @@ func runStatus(cmd *cobra.Command, args []string) error {
 				break
 			}
 			sessionIcon := "   "
-			if f.Running {
+			switch f.SessionStatus {
+			case "running":
 				sessionIcon = ui.GreenText(" ● ")
-			} else if f.HasSession {
-				sessionIcon = ui.DimText(" ○ ")
+			case "waiting":
+				sessionIcon = ui.YellowText(" ● ")
+			default:
+				if f.HasSession {
+					sessionIcon = ui.DimText(" ○ ")
+				}
 			}
 			branch := ui.Truncate(f.Branch, 22)
 			name := ui.Truncate(f.Name, 34)
@@ -167,7 +175,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 				ui.DimText(ui.ShortenHome(f.Path, home)))
 		}
 	}
-	ui.Hint("'zen work resume <name>' to continue  |  'zen work new <repo> <branch>' to start  |  ● = active session")
+	ui.Hint("'zen work resume <name>' to continue  |  'zen work new <repo> <branch>' to start  |  " + ui.GreenText("●") + " running  " + ui.YellowText("●") + " waiting")
 	fmt.Println()
 
 	// Watch daemon
@@ -187,7 +195,18 @@ func runStatus(cmd *cobra.Command, args []string) error {
 }
 
 // enrichFeatures builds StatusFeature entries with age and session info.
+// Uses cached session snapshot when available and fresh (< 60s), falls back
+// to real-time scanning otherwise.
 func enrichFeatures(wts []worktree.Worktree) []StatusFeature {
+	// Try to use cached session data
+	sessionMap := make(map[string]reconciler.SessionState)
+	snapshot, _ := reconciler.ReadSessionSnapshot()
+	if reconciler.IsSnapshotFresh(snapshot, 60*time.Second) {
+		for _, s := range snapshot.Sessions {
+			sessionMap[s.WorktreePath] = s
+		}
+	}
+
 	features := make([]StatusFeature, 0, len(wts))
 	for _, wt := range wts {
 		f := StatusFeature{Worktree: wt}
@@ -204,11 +223,23 @@ func enrichFeatures(wts []worktree.Worktree) []StatusFeature {
 			}
 		}
 
-		// Session status
-		sessions, _ := session.FindSessions(wt.Path)
-		if len(sessions) > 0 {
+		// Session status — prefer cache, fall back to real-time
+		if cached, ok := sessionMap[wt.Path]; ok {
 			f.HasSession = true
-			f.Running = session.IsProcessRunning(sessions[0].ID)
+			f.Running = cached.Status == "running" || cached.Status == "waiting"
+			f.SessionStatus = cached.Status
+		} else if len(sessionMap) == 0 {
+			// No cache available — fall back to real-time scanning
+			sessions, _ := session.FindSessions(wt.Path)
+			if len(sessions) > 0 {
+				f.HasSession = true
+				f.Running = session.IsProcessRunning(sessions[0].ID)
+				if f.Running {
+					f.SessionStatus = "running"
+				} else {
+					f.SessionStatus = "stopped"
+				}
+			}
 		}
 
 		features = append(features, f)

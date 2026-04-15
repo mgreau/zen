@@ -98,6 +98,19 @@ func (s *Server) registerTools() {
 	)
 
 	s.server.AddTool(
+		mcpgo.NewTool("zen_who_am_i",
+			mcpgo.WithDescription("Summary of work done: merged PRs deployed to main, in-progress branches, and PR reviews for a given time period"),
+			mcpgo.WithString("repo", mcpgo.Description("Short repo name filter (e.g. 'mono')")),
+			mcpgo.WithString("period", mcpgo.Description("Time period (e.g. '1d', '7d', '30d'). Default: '7d'")),
+			mcpgo.WithBoolean("merged_only", mcpgo.Description("Only show merged & deployed PRs with full descriptions")),
+			mcpgo.WithReadOnlyHintAnnotation(true),
+			mcpgo.WithDestructiveHintAnnotation(false),
+			mcpgo.WithOpenWorldHintAnnotation(false),
+		),
+		s.handleWhoAmI,
+	)
+
+	s.server.AddTool(
 		mcpgo.NewTool("zen_config_repos",
 			mcpgo.WithDescription("List configured repositories with short names, full GitHub names, and base paths"),
 			mcpgo.WithReadOnlyHintAnnotation(true),

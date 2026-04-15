@@ -239,11 +239,17 @@ func watchDaemon() error {
 	watchCfg := cfg.Watch
 	dispatchInterval := watchCfg.DispatchIntervalDuration()
 	cleanupInterval := watchCfg.CleanupIntervalDuration()
+	sessionScanInterval := watchCfg.SessionScanIntervalDuration()
+	digestInterval, digestEnabled := watchCfg.DigestIntervalDuration()
 	concurrency := watchCfg.GetConcurrency()
 	maxRetries := watchCfg.GetMaxRetries()
 
-	fmt.Printf("[%s] Watch daemon started (poll=%s, dispatch=%s, cleanup=%s, concurrency=%d, maxRetries=%d)\n",
-		time.Now().Format(time.RFC3339), pollInterval, dispatchInterval, cleanupInterval, concurrency, maxRetries)
+	digestStr := "disabled"
+	if digestEnabled {
+		digestStr = digestInterval.String()
+	}
+	fmt.Printf("[%s] Watch daemon started (poll=%s, dispatch=%s, cleanup=%s, session_scan=%s, digest=%s, concurrency=%d, maxRetries=%d)\n",
+		time.Now().Format(time.RFC3339), pollInterval, dispatchInterval, cleanupInterval, sessionScanInterval, digestStr, concurrency, maxRetries)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -275,12 +281,25 @@ func watchDaemon() error {
 	cleanupTicker := time.NewTicker(cleanupInterval)
 	defer cleanupTicker.Stop()
 
+	// Session scan ticker
+	sessionTicker := time.NewTicker(sessionScanInterval)
+	defer sessionTicker.Stop()
+
 	// Log rotation ticker — check once per hour
 	rotateTicker := time.NewTicker(1 * time.Hour)
 	defer rotateTicker.Stop()
 
-	// Initial poll
+	// Digest ticker — only active when digest_interval is configured
+	var digestC <-chan time.Time
+	if digestEnabled {
+		digestTicker := time.NewTicker(digestInterval)
+		defer digestTicker.Stop()
+		digestC = digestTicker.C
+	}
+
+	// Initial poll and session scan
 	pollOnce(ctx, seenPRs, setupQueue, setupRec)
+	reconciler.ScanSessions(cfg, 10*time.Second)
 
 	for {
 		select {
@@ -304,8 +323,14 @@ func watchDaemon() error {
 				fmt.Printf("[%s] Cleanup dispatch error: %v\n", time.Now().Format(time.RFC3339), err)
 			}
 
+		case <-sessionTicker.C:
+			reconciler.ScanSessions(cfg, 10*time.Second)
+
 		case <-cleanupTicker.C:
 			reconciler.ScanMergedPRs(ctx, cfg, cleanupQueue, cfg.Watch.GetCleanupAfterDays())
+
+		case <-digestC:
+			reconciler.SendDigest(cfg)
 		}
 	}
 }

@@ -23,11 +23,13 @@ type Config struct {
 
 // WatchConfig holds configuration for the watch daemon's workqueue behavior.
 type WatchConfig struct {
-	DispatchInterval string `yaml:"dispatch_interval"` // default "10s"
-	CleanupInterval  string `yaml:"cleanup_interval"`  // default "1h"
-	CleanupAfterDays int    `yaml:"cleanup_after_days"` // default 5
-	Concurrency      int    `yaml:"concurrency"`        // default 2
-	MaxRetries       int    `yaml:"max_retries"`        // default 5
+	DispatchInterval    string `yaml:"dispatch_interval"`     // default "10s"
+	CleanupInterval     string `yaml:"cleanup_interval"`      // default "1h"
+	SessionScanInterval string `yaml:"session_scan_interval"` // default "10s"
+	CleanupAfterDays    int    `yaml:"cleanup_after_days"`    // default 5
+	Concurrency         int    `yaml:"concurrency"`           // default 2
+	MaxRetries          int    `yaml:"max_retries"`           // default 5
+	DigestInterval      string `yaml:"digest_interval"`       // "" = disabled, e.g. "2h"
 }
 
 // DispatchIntervalDuration returns the dispatch interval as a time.Duration,
@@ -74,6 +76,30 @@ func (w WatchConfig) GetMaxRetries() int {
 		return w.MaxRetries
 	}
 	return 5
+}
+
+// DigestIntervalDuration returns the digest interval duration and whether it is enabled.
+// An empty DigestInterval string disables the digest (returns 0, false).
+func (w WatchConfig) DigestIntervalDuration() (time.Duration, bool) {
+	if w.DigestInterval == "" {
+		return 0, false
+	}
+	d, err := time.ParseDuration(w.DigestInterval)
+	if err != nil || d <= 0 {
+		return 0, false
+	}
+	return d, true
+}
+
+// SessionScanIntervalDuration returns the session scan interval as a time.Duration,
+// falling back to the default of 10 seconds.
+func (w WatchConfig) SessionScanIntervalDuration() time.Duration {
+	if w.SessionScanInterval != "" {
+		if d, err := time.ParseDuration(w.SessionScanInterval); err == nil {
+			return d
+		}
+	}
+	return 10 * time.Second
 }
 
 // RepoConfig holds per-repository configuration.
@@ -174,6 +200,15 @@ func (c *Config) RepoBasePath(short string) string {
 		return repo.BasePath
 	}
 	return ""
+}
+
+// AllBasePaths returns all configured repo base paths.
+func (c *Config) AllBasePaths() []string {
+	paths := make([]string, 0, len(c.Repos))
+	for _, repo := range c.Repos {
+		paths = append(paths, repo.BasePath)
+	}
+	return paths
 }
 
 // IsAuthor returns true if the given login is in the authors list.
