@@ -133,6 +133,11 @@ func openNewSession(wt worktree.Worktree, t terminal.Terminal) error {
 	if wt.Type != worktree.TypePRReview {
 		initialPrompt = ""
 		action = "Starting new session"
+	} else {
+		// Ensure /review-pr command is installed
+		if err := ensureClaudeCommand("review-pr"); err != nil {
+			ui.LogInfo(fmt.Sprintf("Warning: could not install /review-pr command: %v", err))
+		}
 	}
 
 	if resumeNoITerm {

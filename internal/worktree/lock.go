@@ -41,12 +41,12 @@ func CleanStaleLocks(cfg *config.Config, repo string) {
 			continue
 		}
 		lockFile := filepath.Join(worktreesDir, entry.Name(), "index.lock")
-		removeStaleLock(lockFile, entry.Name())
+		RemoveStaleLock(lockFile, entry.Name())
 	}
 
 	// Also check the main repo's own index.lock
 	mainLock := filepath.Join(gitDir, "index.lock")
-	removeStaleLock(mainLock, repo)
+	RemoveStaleLock(mainLock, repo)
 }
 
 // CleanAllStaleLocks cleans stale locks across all known repos.
@@ -83,7 +83,9 @@ func CleanupFailedAdd(originPath, worktreePath, branch string) {
 // execCommand is a variable for testing.
 var execCommand = exec.Command
 
-func removeStaleLock(lockFile, name string) {
+// RemoveStaleLock removes an index.lock file only if the holding process
+// is no longer running. Safe to call if the file does not exist.
+func RemoveStaleLock(lockFile, name string) {
 	data, err := os.ReadFile(lockFile)
 	if err != nil {
 		return // file doesn't exist or can't be read

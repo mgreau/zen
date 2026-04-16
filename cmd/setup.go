@@ -182,6 +182,37 @@ func promptRequired(scanner *bufio.Scanner, label string) string {
 	}
 }
 
+// ensureClaudeCommand checks if a specific Claude command file exists and
+// installs it silently from the embedded FS if missing.
+func ensureClaudeCommand(name string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolving home directory: %w", err)
+	}
+	targetDir := filepath.Join(home, ".claude", "commands")
+	dst := filepath.Join(targetDir, name+".md")
+
+	if _, err := os.Stat(dst); err == nil {
+		return nil // already exists
+	}
+
+	srcData, err := fs.ReadFile(EmbeddedCommands, filepath.Join("commands", name+".md"))
+	if err != nil {
+		return fmt.Errorf("reading embedded %s.md: %w", name, err)
+	}
+
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return fmt.Errorf("creating %s: %w", targetDir, err)
+	}
+
+	if err := os.WriteFile(dst, srcData, 0o644); err != nil {
+		return fmt.Errorf("writing %s: %w", dst, err)
+	}
+
+	ui.LogInfo(fmt.Sprintf("Installed Claude command /%s", name))
+	return nil
+}
+
 // installClaudeCommands prompts the user and installs embedded Claude Code
 // command files to ~/.claude/commands/.
 func installClaudeCommands(scanner *bufio.Scanner) (int, error) {

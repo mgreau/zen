@@ -14,6 +14,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	ghpkg "github.com/mgreau/zen/internal/github"
 	"github.com/mgreau/zen/internal/reconciler"
+	"github.com/mgreau/zen/internal/review"
 	"github.com/mgreau/zen/internal/session"
 	"github.com/mgreau/zen/internal/worktree"
 )
@@ -206,6 +207,67 @@ type repoEntry struct {
 	ShortName string `json:"short_name"`
 	FullName  string `json:"full_name"`
 	BasePath  string `json:"base_path"`
+}
+
+// handleReview creates a worktree for a PR number.
+func (s *Server) handleReview(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	prNumber, err := req.RequireInt("pr_number")
+	if err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+
+	repoShort := req.GetString("repo", "")
+	if repoShort == "" {
+		detected, err := review.DetectRepo(ctx, s.cfg, prNumber)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		repoShort = detected
+	}
+
+	// Pass nil logger -- MCP must not write to stdout
+	result, err := review.CreateWorktree(ctx, s.cfg, repoShort, prNumber, nil)
+	if err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+
+	return jsonResult(result)
+}
+
+// reviewResumeEntry holds the response for zen_review_resume.
+type reviewResumeEntry struct {
+	WorktreePath string            `json:"worktree_path"`
+	Name         string            `json:"name"`
+	Sessions     []session.Session `json:"sessions"`
+}
+
+// handleReviewResume gets resume info for an existing PR worktree.
+func (s *Server) handleReviewResume(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	prNumber, err := req.RequireInt("pr_number")
+	if err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+
+	wts, err := worktree.ListAll(s.cfg)
+	if err != nil {
+		return mcpgo.NewToolResultError("failed to list worktrees: " + err.Error()), nil
+	}
+
+	for _, wt := range wts {
+		if wt.Type == worktree.TypePRReview && wt.PRNumber == prNumber {
+			sessions, _ := session.FindSessions(wt.Path)
+			if sessions == nil {
+				sessions = []session.Session{}
+			}
+			return jsonResult(reviewResumeEntry{
+				WorktreePath: wt.Path,
+				Name:         wt.Name,
+				Sessions:     sessions,
+			})
+		}
+	}
+
+	return mcpgo.NewToolResultError(fmt.Sprintf("no PR review worktree for #%d", prNumber)), nil
 }
 
 // handleConfigRepos lists configured repositories.
