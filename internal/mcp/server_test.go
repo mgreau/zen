@@ -152,6 +152,53 @@ func TestHandleAgentStatusNoSessions(t *testing.T) {
 	}
 }
 
+func TestHandleReviewMissingParams(t *testing.T) {
+	srv := New(testConfig())
+	ctx := context.Background()
+
+	// Missing required pr_number
+	result, err := srv.handleReview(ctx, makeRequest(nil))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected tool error for missing pr_number")
+	}
+}
+
+func TestHandleReviewResumeMissingParams(t *testing.T) {
+	srv := New(testConfig())
+	ctx := context.Background()
+
+	// Missing required pr_number
+	result, err := srv.handleReviewResume(ctx, makeRequest(nil))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected tool error for missing pr_number")
+	}
+}
+
+func TestHandleReviewResumeNoWorktree(t *testing.T) {
+	// Use paths that definitely don't have worktrees
+	cfg := &config.Config{
+		Repos: map[string]config.RepoConfig{
+			"fake": {FullName: "test/fake", BasePath: "/tmp/nonexistent-zen-test"},
+		},
+	}
+	srv := New(cfg)
+	ctx := context.Background()
+
+	result, err := srv.handleReviewResume(ctx, makeRequest(map[string]any{"pr_number": 99999}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected tool error for non-existent worktree")
+	}
+}
+
 func TestJsonResult(t *testing.T) {
 	type testData struct {
 		Name  string `json:"name"`
