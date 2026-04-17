@@ -133,12 +133,15 @@ Authors: alice bob charlie dave
 zen review 42                    # Create worktree + open terminal tab (auto-detects repo)
 zen review 42 --repo other       # Specify repo explicitly
 zen review 42 --no-terminal      # Create worktree only, print command
+zen review 42 --model opus       # Pick Claude model (sonnet, opus, haiku)
 zen review resume 42             # Open existing worktree in new terminal tab
 zen review resume 42 --list      # List available sessions
 zen review resume 42 --session 2 # Resume specific session
+zen review resume 42 --model opus # Resume with a specific Claude model
+zen review delete 42             # Remove a PR review worktree (with confirmation)
 ```
 
-Manually create a PR review worktree: fetches the PR branch, creates the worktree, injects CLAUDE.md context, and opens a terminal tab with Claude. When `--repo` is omitted, zen auto-detects the repo by querying GitHub — if the PR number exists in multiple repos, it prefers the one where you're a requested reviewer, or asks you to choose. Use this when the daemon hasn't picked up a PR yet or you want to start immediately. If the worktree already exists, use `zen review resume` instead. If you run `zen review resume` and no worktree exists, it offers to create one.
+Manually create a PR review worktree: fetches the PR branch, creates the worktree, injects CLAUDE.md context, auto-installs the `/review-pr` Claude command, and opens a terminal tab with Claude. When `--repo` is omitted, zen auto-detects the repo by querying GitHub — if the PR number exists in multiple repos, it prefers the one where you're a requested reviewer, or asks you to choose. Use this when the daemon hasn't picked up a PR yet or you want to start immediately. If the worktree already exists, `zen review` resumes it automatically; otherwise `zen review resume` offers to create one if none exists.
 
 ### Reviews
 
@@ -156,10 +159,14 @@ Not everything is a PR review. Create and manage feature branch worktrees for yo
 ```
 zen work                         # List feature worktrees
 zen work new <repo> <branch>     # Create new feature worktree
-zen work new app my-feature "initial prompt"   # With Claude prompt
+zen work new app my-feature "initial prompt"    # With Claude prompt
+zen work new app my-feature --model opus        # Pick Claude model
 zen work resume <name>           # Resume a feature session in new iTerm tab
-zen work delete <name>           # Delete a feature worktree
+zen work resume <name> --model opus             # Resume with a specific model
+zen work delete <name>           # Delete a feature worktree (cleans Claude sessions too)
 ```
+
+Feature branch names are prefixed based on the `branch_prefix` config field (see [Configuration](#configuration)). If unset, zen falls back to `git config user.name` (with spaces replaced by hyphens), or no prefix at all.
 
 ## Who Am I
 
@@ -244,6 +251,8 @@ Starts a Model Context Protocol server on stdio, exposing zen tools for Claude s
 - `zen_agent_status` — session info
 - `zen_who_am_i` — work summary (merged PRs, in-progress, reviews)
 - `zen_config_repos` — configured repositories
+- `zen_review` — create a worktree for a PR (auto-detects repo, injects context)
+- `zen_review_resume` — get worktree path and sessions for an existing PR review
 
 To register with Claude Code:
 
@@ -297,6 +306,10 @@ claude_bin: claude
 terminal: iterm  # or "ghostty" for Ghostty support
 # Note: Ghostty on macOS attempts tab creation via UI scripting (requires Ghostty running + accessibility permissions)
 # Falls back to new windows if tab creation fails
+
+# Prefix for feature branches created by `zen work new`.
+# If unset, falls back to `git config user.name` (spaces → hyphens), then no prefix.
+branch_prefix: mgreau
 
 watch:
   dispatch_interval: "10s"      # How often to process queued work
@@ -415,10 +428,12 @@ PR metadata (titles, authors) is cached in a lightweight JSON file (`~/.zen/stat
 
 ### Worktree Naming
 
-| Type | Pattern | Example |
-|------|---------|---------|
-| PR review | `<repo>-pr-<number>` | `app-pr-42` |
-| Feature | `<repo>-<branch>` | `app-add-oidc-claims` |
+| Type | Worktree pattern | Branch pattern | Example |
+|------|------------------|----------------|---------|
+| PR review | `<repo>-pr-<number>` | (fetched from remote) | `app-pr-42` |
+| Feature | `<repo>-<branch>` | `<branch_prefix>/<branch>` | `app-add-oidc-claims` → `mgreau/add-oidc-claims` |
+
+The git branch for feature worktrees uses `branch_prefix` from config (falling back to `git config user.name`, then no prefix). The worktree directory name itself is always `<repo>-<branch>` regardless of prefix.
 
 ### Source Tree
 
@@ -429,13 +444,16 @@ zen
 ├── internal/
 │   ├── config/                   # YAML config (~/.zen/config.yaml)
 │   ├── context/                  # CLAUDE.md generation for PR reviews
-│   ├── github/                   # GitHub API (GraphQL + REST)
+│   ├── ghostty/                  # Ghostty tab/window management via AppleScript
+│   ├── github/                   # GitHub API (GraphQL + REST, 30s call timeouts)
 │   ├── iterm/                    # iTerm2 tab management via AppleScript
 │   ├── mcp/                      # MCP server exposing zen tools
 │   ├── notify/                   # macOS notifications
 │   ├── prcache/                  # Lightweight PR metadata cache (JSON)
-│   ├── reconciler/               # Workqueue-based PR setup + cleanup
+│   ├── reconciler/               # Workqueue-based PR setup + cleanup + session scan
+│   ├── review/                   # Shared worktree creation logic (CLI + MCP)
 │   ├── session/                  # Claude session detection
+│   ├── terminal/                 # Terminal backend abstraction (iterm/ghostty)
 │   ├── ui/                       # Terminal formatting
 │   └── worktree/                 # Git worktree discovery + management
 ├── main.go
