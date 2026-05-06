@@ -1,63 +1,62 @@
 # zen
 
-A worktree orchestrator for AI-assisted PR reviews and feature work with [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+> Review PRs and ship features in parallel — each one in its own Claude-ready worktree.
 
-AI-assisted development is changing how engineers work — more PRs to review, more context to juggle across parallel tasks. The old workflow — one IDE, one branch, one PR at a time — doesn't scale. You need many reviews and feature branches open in parallel, each with its own worktree, each with Claude Code ready to assist.
+You're reviewing more PRs and starting more features than ever, because [Claude Code](https://docs.anthropic.com/en/docs/claude-code) makes each one faster. But your IDE and your shell still want one branch at a time. Zen fixes that mismatch.
 
-Zen manages this silently: a background daemon watches GitHub, creates worktrees, injects PR context into `CLAUDE.local.md` files (never touching the repo's own `CLAUDE.md`), retries git failures, and cleans up worktrees for merged PRs. For feature work, the same isolation — dedicated worktrees with persistent context. You just open a tab and start working with Claude.
+For every PR in your review queue and every feature you're working on, zen creates a dedicated git worktree with Claude pre-armed: PR context injected as `CLAUDE.local.md` (never touching the repo's own `CLAUDE.md`), the right slash command installed, terminal tab opened on demand. A background daemon watches GitHub, prepares review worktrees silently as PRs come in, and removes them a few days after merge. Open a tab when you're ready — everything is already set up.
 
 ![zen dashboard](docs/zen-dashboard.png)
 
-## Table of Contents
+## Table of contents
 
-- [How It Works](#how-it-works)
-- [The Automated Loop](#the-automated-loop)
-- [Your Workflow](#your-workflow)
-  - [Inbox](#inbox)
-  - [Review](#review)
-  - [Reviews](#reviews)
-- [Feature Work](#feature-work)
-- [Who Am I](#who-am-i)
-- [Dashboard](#dashboard)
-  - [Status](#status)
-  - [Search](#search)
-  - [Agent Sessions](#agent-sessions)
-  - [Cleanup](#cleanup)
-- [Context Injection](#context-injection)
-- [MCP Server](#mcp-server)
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+- [Reviewing PRs](#reviewing-prs)
+- [Feature work](#feature-work)
+- [Knowing where you are](#knowing-where-you-are)
 - [Configuration](#configuration)
-- [Design](#design)
-  - [Daemon Architecture](#daemon-architecture)
-  - [Source of Truth](#source-of-truth)
-  - [Worktree Naming](#worktree-naming)
-  - [Source Tree](#source-tree)
+- [MCP server](#mcp-server)
+- [Context injection](#context-injection)
 - [Prerequisites](#prerequisites)
 - [Building](#building)
 
-## How It Works
+## Quick start
+
+```bash
+git clone https://github.com/mgreau/zen.git && cd zen
+make build && mv zen ~/bin/       # or anywhere on your PATH
+
+gh auth login
+zen setup                          # interactive: repos, authors, daemon settings
+zen watch start                    # background daemon polls GitHub for PRs
+zen inbox                          # what needs your review
+```
+
+When a PR shows up in your inbox, `zen review <number>` opens a worktree with Claude pre-armed and the PR context loaded. See [Prerequisites](#prerequisites) for what to install first.
+
+## How it works
 
 ```
   GitHub ──── zen watch ──── Worktrees Ready ──── You Review ──────── Cleanup
    PRs         (daemon)       (silent prep)       (zen review resume)  (automatic)
 ```
 
-There are two loops. The **automated loop** runs in the background: a daemon polls GitHub, creates worktrees for new PRs, injects context, and removes worktrees for merged PRs. The **manual loop** is yours: check what needs review, open a worktree in a new iTerm tab with Claude, and do the review.
+Two loops keep zen useful.
 
-## The Automated Loop
+The **automated loop** is the daemon. It polls GitHub for PRs from configured authors, creates a worktree per PR with context pre-loaded, sends a macOS notification when ready, and removes worktrees a few days after merge. Each step is idempotent and retries on failure. The daemon does **not** open terminal tabs — worktrees are prepared silently.
 
-The background daemon handles worktree lifecycle so you don't have to. It polls GitHub for PRs from configured authors, creates worktrees with context pre-loaded, sends a macOS notification when ready, and cleans up merged PRs after a configurable number of days.
+The **manual loop** is yours: check what needs review, open a worktree in a new tab with Claude, do the review.
 
 ```
-  Poll GitHub          Setup                           Cleanup
-  ┌──────────┐    ┌────────────────────┐    ┌─────────────────────────┐
-  │ New PR   │───→│ git worktree add   │───→│ Merged 5+ days ago?     │
-  │ detected │    │ inject CLAUDE.local│    │ git worktree remove     │
-  └──────────┘    │ cache PR meta      │    └─────────────────────────┘
-                  │ notify (macOS)     │
-                  └────────────────────┘
+  zen inbox               →  zen review resume 42  →  review in Claude     →  done
+  (what needs review)        (open terminal tab)      (CLAUDE.md ready)
+
+  zen review 42           →  review in Claude     →  done
+  (create + open)            (CLAUDE.md ready)
 ```
 
-Each step is idempotent and retries on failure. The daemon does **not** open iTerm tabs — worktrees are prepared silently, you open reviews when ready with `zen review resume`.
+Daemon control:
 
 ```
 zen watch start                  # Start background daemon
@@ -67,32 +66,20 @@ zen watch logs                   # Tail daemon log output
 zen watch logs search 42         # Search logs for a PR, worktree, or keyword
 ```
 
-Logs: `~/.zen/state/watch.log` — automatically rotated at 10MB (previous log kept as `watch.log.1`). Search covers both files.
+For the internal design (workqueues, reconcilers, retry behaviour) see [docs/architecture.md](docs/architecture.md).
 
-## Your Workflow
-
-Once the daemon has prepared worktrees, your review flow looks like this:
-
-```
-  zen inbox               →  zen review resume 42  →  review in Claude     →  done
-  (what needs review)        (open iTerm tab)         (CLAUDE.md ready)
-
-  zen review 42           →  review in Claude     →  done
-  (create + open)            (CLAUDE.md ready)
-```
+## Reviewing PRs
 
 ### Inbox
 
 ```
 zen inbox                        # PRs needing review (filtered by configured authors)
 zen inbox --all                  # From all authors
-zen inbox --path pkg/sts          # PRs touching specific paths
+zen inbox --path pkg/sts         # PRs touching specific paths
 zen inbox --repo other-repo      # Different repo
 ```
 
-Shows pending PR reviews that don't yet have a local worktree. Also shows your own approved-but-unmerged PRs and PRs touching watched paths.
-
-Example output:
+Shows pending PR reviews that don't yet have a local worktree, your own approved-but-unmerged PRs, and PRs touching watched paths.
 
 ```
 ───────────────────────────────────────────────────────────────
@@ -108,23 +95,6 @@ Authors: alice bob charlie dave
   ──────  ────────────────────  ──────────────────────────────────────────  ────────────────────────
   #1042   alice                 api: Add pagination to ListUsers endpoi...  https://github.com/acme/app/pull/1042
   #1038   bob                   fix(auth): Handle expired refresh tokens    https://github.com/acme/app/pull/1038
-
-3 Open PRs touching platform/ and agents/ — app
-═══════════════════════════════════════════════════════════════
-
-  W   PR      Author                Title                                       Link
-  ──  ──────  ────────────────────  ──────────────────────────────────────────  ────────────────────────
-      #1045   eve                   fix(agents/result): handle reasoning ...    https://github.com/acme/app/pull/1045
-      #1041   app/dependabot        build(deps): bump the all-others grou...    https://github.com/acme/app/pull/1041
-  *   #1035   alice                 Surface a Tool for `format_config`          https://github.com/acme/app/pull/1035
-
-2 Other PRs Requesting Your Review — app
-═══════════════════════════════════════════════════════════════
-
-  W   PR      Author                Title                                       Link
-  ──  ──────  ────────────────────  ──────────────────────────────────────────  ────────────────────────
-      #1039   app/dependabot        build(deps): bump the anchore group a...    https://github.com/acme/app/pull/1039
-  *   #1036   alice                 Create a module for the metareconciler.     https://github.com/acme/app/pull/1036
 ```
 
 ### Review
@@ -137,11 +107,12 @@ zen review 42 --model opus       # Pick Claude model (sonnet, opus, haiku)
 zen review resume 42             # Open existing worktree in new terminal tab
 zen review resume 42 --list      # List available sessions
 zen review resume 42 --session 2 # Resume specific session
-zen review resume 42 --model opus # Resume with a specific Claude model
 zen review delete 42             # Remove a PR review worktree (with confirmation)
 ```
 
-Manually create a PR review worktree: fetches the PR branch, creates the worktree, injects CLAUDE.md context, auto-installs the `/review-pr` Claude command, and opens a terminal tab with Claude. When `--repo` is omitted, zen auto-detects the repo by querying GitHub — if the PR number exists in multiple repos, it prefers the one where you're a requested reviewer, or asks you to choose. Use this when the daemon hasn't picked up a PR yet or you want to start immediately. If the worktree already exists, `zen review` resumes it automatically; otherwise `zen review resume` offers to create one if none exists.
+`zen review` fetches the PR branch, creates a worktree, injects `CLAUDE.local.md`, installs the `/review-pr` slash command, and opens a terminal tab with Claude. When `--repo` is omitted, zen auto-detects by querying GitHub — if the PR number exists in multiple configured repos, it prefers the one where you're a requested reviewer or asks you to choose.
+
+If the worktree already exists, `zen review` resumes it; otherwise `zen review resume` offers to create one.
 
 ### Reviews
 
@@ -150,55 +121,47 @@ zen reviews                      # PR reviews from past 7 days
 zen reviews --days 30            # Past 30 days
 ```
 
-Lists PR review worktrees with titles from the PR cache and session status.
+Lists PR review worktrees with titles and session status.
 
-## Feature Work
+## Feature work
 
-Not everything is a PR review. Create and manage feature branch worktrees for your own work:
+Not everything is a PR review. Same isolation model, your own branches:
 
 ```
-zen work                         # List feature worktrees
-zen work new <repo> <branch>     # Create new feature worktree
-zen work new app my-feature "initial prompt"    # With Claude prompt
-zen work new app my-feature --model opus        # Pick Claude model
-zen work resume <name>           # Resume a feature session in new iTerm tab
-zen work resume <name> --model opus             # Resume with a specific model
-zen work delete <name>           # Delete a feature worktree (cleans Claude sessions too)
+zen work                                       # List feature worktrees
+zen work new <repo> <branch>                   # Create new feature worktree
+zen work new app my-feature "initial prompt"   # With Claude prompt
+zen work new app my-feature --model opus       # Pick Claude model
+zen work resume <name>                         # Resume a feature session in new tab
+zen work resume <name> --model opus            # Resume with a specific model
+zen work delete <name>                         # Delete worktree (cleans Claude sessions too)
 ```
 
-Feature branch names are prefixed based on the `branch_prefix` config field (see [Configuration](#configuration)). If unset, zen falls back to `git config user.name` (with spaces replaced by hyphens), or no prefix at all.
+Feature branches are prefixed by `branch_prefix` from config — see [docs/configuration.md](docs/configuration.md).
 
-## Who Am I
+## Knowing where you are
 
-Summary of your work across worktrees — what you merged, what's in progress, and what you reviewed.
+### Who am I
+
+Summary of your work across worktrees: what you merged, what's in progress, what you reviewed.
 
 ```
 zen who-am-i                         # All repos, last 7 days
-zen who-am-i -r app -p 30d          # Specific repo, last 30 days
+zen who-am-i -r app -p 30d           # Specific repo, last 30 days
 zen who-am-i --merged                # Only merged & deployed PRs with descriptions
-zen who-am-i --merged -r app -p 7d  # Merged PRs in app, last 7 days
+zen who-am-i --merged -r app -p 7d   # Merged PRs in app, last 7 days
 ```
 
-Shows three sections:
-
-- **Merged & Deployed** — PRs merged to `origin/main` by you, with PR numbers. Use `--merged` for full commit descriptions.
-- **In Progress** — feature branches with uncommitted work or active Claude sessions
-- **PR Reviews** — review worktrees with commit counts and session indicators
-
-Period formats: `1d`, `7d`, `30d` (days), `2w` (weeks), `1m` (months).
-
-Also available as an MCP tool (`zen_who_am_i`) so Claude can query and summarize your work directly.
-
-## Dashboard
+Three sections: **Merged & Deployed**, **In Progress**, **PR Reviews**. Period formats: `1d`, `7d`, `30d`, `2w`, `1m`. Also exposed via MCP as `zen_who_am_i`.
 
 ### Status
 
 ```
-zen status
+zen status                       # Overview of all active work
 zen dashboard                    # Alias for zen status
 ```
 
-Overview of all active work: worktree counts, PR reviews (with remote state and cleanup ETA), feature work, and daemon state.
+Worktree counts, PR reviews (with remote state and cleanup ETA), feature work, and daemon state.
 
 ### Search
 
@@ -208,17 +171,13 @@ zen search oidc                  # By branch/name
 zen search --type pr <term>      # Filter: pr, feature
 ```
 
-Searches across worktrees. Shows active Claude session indicator.
-
-### Agent Sessions
+### Agent sessions
 
 ```
 zen agent status                 # Claude sessions across all worktrees
 zen agent status --running       # Only running sessions
 zen agent status --full          # Full token usage scan (slower)
 ```
-
-Shows session ID, model, token usage, and last activity for each worktree.
 
 ### Cleanup
 
@@ -228,68 +187,11 @@ zen cleanup --days 14            # Custom age threshold
 zen cleanup --delete             # Interactive deletion
 ```
 
-Finds worktrees for merged/closed PRs or inactive branches. The watch daemon handles merged PR cleanup automatically (5+ days after merge), but this command is useful for manual cleanup and inactive feature branches.
-
-## Context Injection
-
-The daemon writes a `CLAUDE.local.md` file into each PR worktree with the PR title, author, changed files, and review instructions. This keeps the repo's own `CLAUDE.md` untouched so there's no risk of accidental commits. To refresh it manually:
-
-```
-zen context inject <path> --pr 42 --repo app
-```
-
-## MCP Server
-
-```
-zen mcp serve
-```
-
-Starts a Model Context Protocol server on stdio, exposing zen tools for Claude sessions to call directly:
-- `zen_inbox` — fetch pending PR reviews
-- `zen_worktree_list` — list worktrees
-- `zen_pr_details` / `zen_pr_files` — PR metadata
-- `zen_agent_status` — session info
-- `zen_who_am_i` — work summary (merged PRs, in-progress, reviews)
-- `zen_config_repos` — configured repositories
-- `zen_review` — create a worktree for a PR (auto-detects repo, injects context)
-- `zen_review_resume` — get worktree path and sessions for an existing PR review
-
-To register with Claude Code:
-
-```
-claude mcp add --scope user zen -- zen mcp serve
-```
-
-This lets Claude call zen tools directly during sessions (e.g. list worktrees, check inbox, fetch PR details).
-
-### Other Commands
-
-```
-zen version                      # Show version and commit SHA
-zen setup                        # Interactive first-time setup
-```
-
-### Global Flags
-
-```
---json      JSON output (all commands)
---debug     Debug logging
-```
-
-## Ghostty Tab Creation Requirements
-
-For Ghostty tab creation to work on macOS:
-
-1. **Ghostty must be running** - Open Ghostty manually before using Zen commands
-2. **Accessibility Permissions** - Grant Terminal access in System Preferences > Security & Privacy > Accessibility
-3. **Automation Permissions** - Grant Terminal access in System Preferences > Security & Privacy > Automation
-4. **Ghostty Focus** - Ghostty window should be focused for reliable tab creation
-
-If these requirements aren't met, Zen will automatically fall back to opening new windows.
+The watch daemon handles merged-PR cleanup automatically (5+ days after merge); this is for manual cleanup and inactive feature branches.
 
 ## Configuration
 
-Config file: `~/.zen/config.yaml`
+Minimal `~/.zen/config.yaml`:
 
 ```yaml
 repos:
@@ -300,175 +202,42 @@ repos:
 authors:
   - mattmoor
   - wlynch
-
-poll_interval: "5m"
-claude_bin: claude
-terminal: iterm  # or "ghostty" for Ghostty support
-# Note: Ghostty on macOS attempts tab creation via UI scripting (requires Ghostty running + accessibility permissions)
-# Falls back to new windows if tab creation fails
-
-# Prefix for feature branches created by `zen work new`.
-# If unset, falls back to `git config user.name` (spaces → hyphens), then no prefix.
-branch_prefix: mgreau
-
-watch:
-  dispatch_interval: "10s"      # How often to process queued work
-  cleanup_interval: "1h"        # How often to scan for merged PRs
-  session_scan_interval: "10s"  # How often to scan Claude session states
-  cleanup_after_days: 5          # Days after merge before removing worktree
-  concurrency: 2                 # Parallel worktree setups
-  max_retries: 5                 # Max retry attempts for git failures
 ```
 
-Each repo key (e.g. `app`) is a short name you choose — it doesn't have to match the GitHub repo name. It's used for worktree naming (`app-pr-42`), queue keys (`app:42`), and display. The `full_name` is the actual `owner/repo` used for GitHub API calls. If two orgs have a repo with the same name, just pick different keys:
+`zen setup` walks you through this interactively. The daemon hot-reloads config on every poll tick — no restart needed.
 
-```yaml
-repos:
-  octo-app:
-    full_name: octo-sts/app
-    base_path: ~/git/repo-octo-sts-app
-  other-app:
-    full_name: other-org/app
-    base_path: ~/git/other/repo-app
-```
+Full reference (poll intervals, terminal selection, branch prefix, multi-repo disambiguation, state file paths) in [docs/configuration.md](docs/configuration.md).
 
-All repos and authors must be configured — there are no hardcoded defaults.
-
-The daemon re-reads `config.yaml` on every poll tick. Changes to `poll_interval`, `authors`, `repos`, and other settings take effect without restarting.
-
-### State Files
-
-All state lives in `~/.zen/state/`:
-
-| File | Purpose |
-|------|---------|
-| `watch.pid` | Daemon PID |
-| `watch.log` | Daemon logs |
-| `last_check.json` | Timestamp of last GitHub poll |
-| `pr_cache.json` | PR titles/authors for display |
-| `sessions.json` | Cached Claude session states (updated every 10s by daemon) |
-
-## Design
-
-### Daemon Architecture
-
-Under the hood, the daemon uses [driftlessaf](https://github.com/driftlessaf) workqueues with two reconcilers — one for setup, one for cleanup:
+## MCP server
 
 ```
-                          ┌─────────────────────────────────────────────────────────┐
-                          │                   watchDaemon()                         │
-                          └────┬──────────────────┬──────────────────┬──────────────┘
-                               │                  │                  │
-                       poll_interval    dispatch_interval    cleanup_interval
-                               │                  │                  │
-                               v                  v                  v
-                        ┌─────────────┐   ┌──────────────┐   ┌──────────────┐
-                        │reloadConfig │   │  dispatcher  │   │ scanMerged   │
-                        │+ pollOnce() │   │   .Handle()  │   │   PRs()      │
-                        └──────┬──────┘   │              │   │              │
-                               │          └──────┬───────┘   └──────┬───────┘
-                               │                 │                  │
-              ┌────────────────┼─────────┐       │                  │
-              v                v         v       v                  v
-     ┌────────────────┐ ┌──────────┐ ┌───────────────┐     ┌───────────────┐
-     │ GitHub GraphQL │ │  macOS   │ │  setupQueue   │     │ cleanupQueue  │
-     │ GetReview      │ │  notify  │ │               │     │               │
-     │ Requests()     │ │          │ │  "app:42" │     │  "app:42" │
-     └────────┬───────┘ └──────────┘ │  "app:87" │     │  "app:35" │
-              │                      └───────┬───────┘     └───────┬───────┘
-              │  new PRs from                │                     │
-              │  configured authors          │                     │
-              └──────────────────────────────┘                     │
-                    StorePRData() +                                │
-                    Queue(key)                                     │
-                                                                   │
-    ┌──────────────────────────────────────┐    ┌──────────────────┴───────────────┐
-    │       SetupReconciler.Reconcile()    │    │    CleanupReconciler.Reconcile()  │
-    │                                      │    │                                   │
-    │  key ──→ ParsePRKey("app:42")    │    │  key ──→ ParsePRKey("app:35") │
-    │          repo=app, pr=42         │    │          repo=app, pr=35      │
-    │                                      │    │                                   │
-    │  Step 1: ensureWorktree             │    │  Step 1: removeWorktree           │
-    │  ┌─────────────────────────────┐    │    │  ┌─────────────────────────────┐  │
-    │  │ if exists? skip             │    │    │  │ if missing? skip            │  │
-    │  │ git fetch origin pull/N/head│    │    │  │ git worktree remove --force │  │
-    │  │ git worktree add            │    │    │  └─────────────────────────────┘  │
-    │  │ rm index.lock               │    │    │         │                         │
-    │  └─────────────────────────────┘    │    │         v on error: RETRY         │
-    │         │                           │    │                                   │
-    │         v on error: RETRY           │    └───────────────────────────────────┘
-    │                                      │
-    │  Step 2: ensureContextInjected      │
-    │  ┌─────────────────────────────┐    │     ┌──────────────────────────────────┐
-    │  │ if CLAUDE.local.md? skip   │    │     │         Error Handling           │
-    │  │ fetch PR details + files   │    │     │                                  │
-    │  │ render CLAUDE.local.md     │    │     │  Invalid key    ──→ SKIP (permanent)
-    │  └─────────────────────────────┘    │     │  Unknown repo   ──→ SKIP (permanent)
-    │         │                           │     │  Git failure    ──→ RETRY         │
-    │         v on error: LOG, CONTINUE   │     │                     30s → 60s →   │
-    │                                      │     │                     ... → 10m cap │
-    │  Step 3: cachePRMeta                │     │                     max 5 attempts│
-    │  ┌─────────────────────────────┐    │     │  Context/cache  ──→ LOG, CONTINUE │
-    │  │ prcache.Set(repo, pr,       │    │     │                                  │
-    │  │   title, author)            │    │     └──────────────────────────────────┘
-    │  └─────────────────────────────┘    │
-    │                                      │
-    │  ✓ notify.WorktreeReady()           │
-    │                                      │
-    └──────────────────────────────────────┘
+zen mcp serve
 ```
 
-Each step is **idempotent** — safe to re-run if interrupted. Git failures retry with exponential backoff (30s..10m, max 5 attempts). Context injection and PR cache writes are non-blocking — failures are logged but don't prevent the worktree from being created.
-
-### Source of Truth
-
-**Git worktrees are the single source of truth.** All inventory — which PRs have local worktrees, which feature branches exist, worktree paths and types — is derived from `git worktree list` via `worktree.ListAll()`. There is no external database or registry to drift out of sync.
-
-PR metadata (titles, authors) is cached in a lightweight JSON file (`~/.zen/state/pr_cache.json`) written by the daemon during setup. This cache is purely for display — if it's missing or stale, commands still work (they just show PR numbers instead of titles).
-
-### Worktree Naming
-
-| Type | Worktree pattern | Branch pattern | Example |
-|------|------------------|----------------|---------|
-| PR review | `<repo>-pr-<number>` | (fetched from remote) | `app-pr-42` |
-| Feature | `<repo>-<branch>` | `<branch_prefix>/<branch>` | `app-add-oidc-claims` → `mgreau/add-oidc-claims` |
-
-The git branch for feature worktrees uses `branch_prefix` from config (falling back to `git config user.name`, then no prefix). The worktree directory name itself is always `<repo>-<branch>` regardless of prefix.
-
-### Source Tree
+Speaks Model Context Protocol over stdio so a running Claude session can call zen tools directly: list worktrees, check inbox, fetch PR details, open reviews. Register once:
 
 ```
-zen
-├── cmd/                          # CLI commands (cobra)
-├── commands/                     # Claude Code commands (embedded in binary)
-├── internal/
-│   ├── config/                   # YAML config (~/.zen/config.yaml)
-│   ├── context/                  # CLAUDE.md generation for PR reviews
-│   ├── ghostty/                  # Ghostty tab/window management via AppleScript
-│   ├── github/                   # GitHub API (GraphQL + REST, 30s call timeouts)
-│   ├── iterm/                    # iTerm2 tab management via AppleScript
-│   ├── mcp/                      # MCP server exposing zen tools
-│   ├── notify/                   # macOS notifications
-│   ├── prcache/                  # Lightweight PR metadata cache (JSON)
-│   ├── reconciler/               # Workqueue-based PR setup + cleanup + session scan
-│   ├── review/                   # Shared worktree creation logic (CLI + MCP)
-│   ├── session/                  # Claude session detection
-│   ├── terminal/                 # Terminal backend abstraction (iterm/ghostty)
-│   ├── ui/                       # Terminal formatting
-│   └── worktree/                 # Git worktree discovery + management
-├── main.go
-└── go.mod
+claude mcp add --scope user zen -- zen mcp serve
 ```
 
-## Getting Started
+Tool inventory and usage in [docs/mcp.md](docs/mcp.md).
 
-After building, run the interactive setup to create your config:
+## Context injection
+
+The daemon writes a `CLAUDE.local.md` file into each PR worktree with the PR title, author, changed files, and review instructions. The repo's own `CLAUDE.md` is never touched — there's no risk of accidental commits. To refresh manually:
 
 ```
-zen setup
+zen context inject <path> --pr 42 --repo app
 ```
 
-This walks you through configuring your repositories, GitHub usernames for PR filtering, and watch daemon settings. The config is written to `~/.zen/config.yaml`.
+## Other commands
+
+```
+zen version                      # Show version and commit SHA
+zen setup                        # Interactive first-time setup
+```
+
+Global flags: `--json` (JSON output, all commands), `--debug` (debug logging).
 
 ## Prerequisites
 
@@ -477,33 +246,17 @@ This walks you through configuring your repositories, GitHub usernames for PR fi
 | **macOS** | iTerm2/Ghostty tab management and notifications use AppleScript |
 | **Git** | Worktree creation, fetching PR branches, cleanup |
 | **[GitHub CLI](https://cli.github.com/) (`gh`)** | Authentication and GitHub API access — must be logged in (`gh auth login`) |
-| **[iTerm2](https://iterm2.com/)** or **[Ghostty](https://ghostty.io/)** | Opens review/work sessions in new tabs (iTerm2) or tabs/windows (Ghostty). Ghostty uses UI scripting for tab creation when possible, with fallback to windows (use `--no-terminal` to skip) |
+| **[iTerm2](https://iterm2.com/)** or **[Ghostty](https://ghostty.io/)** | Opens review/work sessions in new tabs. Ghostty needs accessibility permissions for tab creation; falls back to new windows otherwise (see [docs/configuration.md](docs/configuration.md#terminal)) |
 | **[Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)** | AI-assisted PR reviews and coding sessions |
 | **Go 1.24+** | Building from source |
 
 ## Building
 
 ```
-make build                       # Includes version + commit SHA via ldflags
+make build
 ```
 
-Or manually:
-
-```
-go build -o zen .
-```
-
-Check your build:
-
-```
-zen version                      # Shows version and commit SHA
-```
-
-## Testing
-
-```
-make test
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for testing and architecture pointers.
 
 ## Why "zen"?
 
