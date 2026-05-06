@@ -34,7 +34,7 @@ zen watch start                    # background daemon polls GitHub for PRs
 zen inbox                          # see what needs your attention
 ```
 
-When a PR shows up in your inbox, `zen review <number>` opens a worktree with Claude pre-armed and the PR context loaded. See [Prerequisites](#prerequisites) for what to install first.
+When a PR shows up in your inbox, `zen review <number>` opens that PR in a new terminal tab with Claude pre-armed and the PR context loaded. See [Prerequisites](#prerequisites) for what to install first.
 
 ## What needs your attention?
 
@@ -88,7 +88,7 @@ If the worktree already exists, `zen review` resumes it; otherwise `zen review r
 
 ## Work on a feature
 
-Same isolation model, your own branches:
+Same isolation model, your own branches. `zen work new` and `zen work resume` open the worktree in a new terminal tab by default; pass `--no-terminal` to skip.
 
 ```bash
 zen work                                       # list feature worktrees
