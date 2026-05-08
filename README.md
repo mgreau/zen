@@ -45,11 +45,14 @@ When a PR shows up in your inbox, `zen review <number>` opens that PR in a new t
 - **Open PRs touching paths you watch** — for staying aware of areas you care about.
 
 ```bash
-zen inbox                        # everything, filtered by configured authors
-zen inbox --all                  # from all authors
-zen inbox --path pkg/sts         # PRs touching specific paths
-zen inbox --repo other-repo      # different repo
+zen inbox                       # everything, filtered by configured authors
+zen inbox --all                 # from all authors
+zen inbox --path pkg/sts        # PRs touching specific paths
+zen inbox --repo other-repo     # different repo
+zen inbox --ignore-drafts       # skip drafts on this run (or set ignore_drafts: true in config)
 ```
+
+Drafts are shown by default. To skip drafts permanently, set `ignore_drafts: true` in your config — see [docs/configuration.md](docs/configuration.md). The `--ignore-drafts` flag overrides the config for a single run.
 
 Example output:
 

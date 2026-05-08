@@ -36,7 +36,7 @@ func (s *Server) handleInbox(ctx context.Context, req mcpgo.CallToolRequest) (*m
 		repoFilter = s.cfg.RepoFullName(repoShort)
 	}
 
-	reviews, err := ghpkg.GetReviewRequests(ctx, repoFilter)
+	reviews, err := ghpkg.GetReviewRequests(ctx, repoFilter, s.cfg.IgnoreDrafts)
 	if err != nil {
 		return mcpgo.NewToolResultError("failed to fetch review requests: " + err.Error()), nil
 	}

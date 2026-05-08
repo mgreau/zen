@@ -406,7 +406,7 @@ func saveState(seenPRs map[string]bool, prCount int) {
 }
 
 func pollOnce(ctx context.Context, seenPRs map[string]bool, queue workqueue.Interface, rec *reconciler.SetupReconciler) {
-	reviews, err := ghpkg.GetReviewRequests(ctx, "chainguard-dev/mono")
+	reviews, err := ghpkg.GetReviewRequests(ctx, "chainguard-dev/mono", cfg.IgnoreDrafts)
 	if err != nil {
 		fmt.Printf("[%s] Error fetching reviews: %v\n", time.Now().Format(time.RFC3339), err)
 		return

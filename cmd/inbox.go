@@ -20,11 +20,12 @@ var inboxCmd = &cobra.Command{
 }
 
 var (
-	inboxRepo       string
-	inboxAuthors    string
-	inboxAll        bool
-	inboxPathFilter string
-	inboxLimit      int
+	inboxRepo         string
+	inboxAuthors      string
+	inboxAll          bool
+	inboxPathFilter   string
+	inboxLimit        int
+	inboxIgnoreDrafts bool
 )
 
 func init() {
@@ -33,6 +34,7 @@ func init() {
 	inboxCmd.Flags().BoolVar(&inboxAll, "all", false, "Show from all authors")
 	inboxCmd.Flags().StringVarP(&inboxPathFilter, "path", "p", "", "List PRs touching files under DIR")
 	inboxCmd.Flags().IntVar(&inboxLimit, "limit", 100, "Max PRs to scan when using --path")
+	inboxCmd.Flags().BoolVar(&inboxIgnoreDrafts, "ignore-drafts", false, "Skip draft PRs (overrides config when set)")
 	rootCmd.AddCommand(inboxCmd)
 }
 
@@ -46,7 +48,7 @@ type InboxPR struct {
 	MatchedCount int    `json:"matched_count,omitempty"`
 }
 
-func runInbox(_ *cobra.Command, _ []string) error {
+func runInbox(cmd *cobra.Command, _ []string) error {
 	repos := []string{inboxRepo}
 	if inboxRepo == "" {
 		repos = cfg.RepoNames()
@@ -60,6 +62,11 @@ func runInbox(_ *cobra.Command, _ []string) error {
 		authors = nil
 	}
 
+	ignoreDrafts := cfg.IgnoreDrafts
+	if cmd.Flags().Changed("ignore-drafts") {
+		ignoreDrafts = inboxIgnoreDrafts
+	}
+
 	// Cache current user once for all repos.
 	ctx := context.Background()
 	currentUser, _ := ghpkg.GetCurrentUser(ctx)
@@ -70,7 +77,7 @@ func runInbox(_ *cobra.Command, _ []string) error {
 
 	hasResults := false
 	for _, repo := range repos {
-		found, err := runInboxForRepo(repo, authors, currentUser)
+		found, err := runInboxForRepo(repo, authors, currentUser, ignoreDrafts)
 		if err != nil {
 			return err
 		}
@@ -100,14 +107,14 @@ func runInbox(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
-func runInboxForRepo(repo string, authors []string, currentUser string) (bool, error) {
+func runInboxForRepo(repo string, authors []string, currentUser string, ignoreDrafts bool) (bool, error) {
 	ctx := context.Background()
 	fullRepo := cfg.RepoFullName(repo)
 	localPRs := getLocalPRNumbers(repo)
 	hasResults := false
 
 	if inboxPathFilter != "" {
-		prs, err := fetchPRsByPath(ctx, fullRepo, inboxPathFilter, authors)
+		prs, err := fetchPRsByPath(ctx, fullRepo, inboxPathFilter, authors, ignoreDrafts)
 		if err != nil {
 			return false, err
 		}
@@ -124,11 +131,11 @@ func runInboxForRepo(repo string, authors []string, currentUser string) (bool, e
 
 		g, gctx := errgroup.WithContext(ctx)
 		g.Go(func() error {
-			reviews, reviewsErr = ghpkg.GetReviewRequests(gctx, fullRepo)
+			reviews, reviewsErr = ghpkg.GetReviewRequests(gctx, fullRepo, ignoreDrafts)
 			return nil
 		})
 		g.Go(func() error {
-			approved, approvedErr = ghpkg.GetApprovedUnmerged(gctx, fullRepo)
+			approved, approvedErr = ghpkg.GetApprovedUnmerged(gctx, fullRepo, ignoreDrafts)
 			return nil
 		})
 		_ = g.Wait()
@@ -150,7 +157,7 @@ func runInboxForRepo(repo string, authors []string, currentUser string) (bool, e
 		}
 
 		if len(cfg.WatchPaths) > 0 {
-			watched, others, err := fetchOpenPRs(ctx, fullRepo, currentUser)
+			watched, others, err := fetchOpenPRs(ctx, fullRepo, currentUser, ignoreDrafts)
 			if err == nil {
 				if len(watched) > 0 {
 					hasResults = true
@@ -216,10 +223,10 @@ func filterLocalPRs(prs []InboxPR, local map[int]bool) []InboxPR {
 	return pending
 }
 
-func fetchPRsByPath(ctx context.Context, fullRepo, pathPrefix string, authors []string) ([]InboxPR, error) {
+func fetchPRsByPath(ctx context.Context, fullRepo, pathPrefix string, authors []string, ignoreDrafts bool) ([]InboxPR, error) {
 	pathPrefix = strings.TrimSuffix(pathPrefix, "/")
 
-	prs, err := ghpkg.ListOpenPRs(ctx, fullRepo, inboxLimit)
+	prs, err := ghpkg.ListOpenPRs(ctx, fullRepo, inboxLimit, ignoreDrafts)
 	if err != nil {
 		return nil, err
 	}
@@ -289,8 +296,8 @@ func fetchPRsByPath(ctx context.Context, fullRepo, pathPrefix string, authors []
 
 // fetchOpenPRs splits recent open PRs into two groups: those touching watched
 // paths and all others. The current user's PRs are excluded from both.
-func fetchOpenPRs(ctx context.Context, fullRepo string, currentUser string) ([]InboxPR, []InboxPR, error) {
-	prs, err := ghpkg.ListOpenPRs(ctx, fullRepo, 30)
+func fetchOpenPRs(ctx context.Context, fullRepo string, currentUser string, ignoreDrafts bool) ([]InboxPR, []InboxPR, error) {
+	prs, err := ghpkg.ListOpenPRs(ctx, fullRepo, 30, ignoreDrafts)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -72,9 +72,40 @@ func GetCurrentUser(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// buildReviewRequestQueries returns the two GitHub search query strings used
+// by GetReviewRequests: requested-reviews and re-review queries.
+func buildReviewRequestQueries(repoFilter string, ignoreDrafts bool) (string, string) {
+	repoClause := ""
+	if repoFilter != "" {
+		repoClause = " repo:" + repoFilter
+	}
+	draftClause := ""
+	if ignoreDrafts {
+		draftClause = " draft:false"
+	}
+	q1 := fmt.Sprintf("is:pr is:open review-requested:@me%s%s", repoClause, draftClause)
+	q2 := fmt.Sprintf("is:pr is:open reviewed-by:@me review:required%s%s", repoClause, draftClause)
+	return q1, q2
+}
+
+// buildApprovedUnmergedQuery returns the GitHub search query string for
+// GetApprovedUnmerged.
+func buildApprovedUnmergedQuery(repoFilter string, ignoreDrafts bool) string {
+	repoClause := ""
+	if repoFilter != "" {
+		repoClause = " repo:" + repoFilter
+	}
+	draftClause := ""
+	if ignoreDrafts {
+		draftClause = " draft:false"
+	}
+	return fmt.Sprintf("is:pr is:open author:@me review:approved%s%s", repoClause, draftClause)
+}
+
 // GetReviewRequests fetches PRs where the user is a requested reviewer,
-// including re-reviews. Uses GraphQL via `gh api graphql`.
-func GetReviewRequests(ctx context.Context, repoFilter string) ([]ReviewRequest, error) {
+// including re-reviews. Uses GraphQL via `gh api graphql`. When ignoreDrafts
+// is true, draft PRs are filtered out at the GitHub search layer.
+func GetReviewRequests(ctx context.Context, repoFilter string, ignoreDrafts bool) ([]ReviewRequest, error) {
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
 	query := `query($q1: String!, $q2: String!) {
@@ -104,13 +135,7 @@ func GetReviewRequests(ctx context.Context, repoFilter string) ([]ReviewRequest,
   }
 }`
 
-	repoClause := ""
-	if repoFilter != "" {
-		repoClause = " repo:" + repoFilter
-	}
-
-	q1 := fmt.Sprintf("is:pr is:open review-requested:@me%s", repoClause)
-	q2 := fmt.Sprintf("is:pr is:open reviewed-by:@me review:required%s", repoClause)
+	q1, q2 := buildReviewRequestQueries(repoFilter, ignoreDrafts)
 
 	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
 		"-f", "query="+query,
@@ -157,7 +182,8 @@ func GetReviewRequests(ctx context.Context, repoFilter string) ([]ReviewRequest,
 }
 
 // GetApprovedUnmerged fetches the user's own PRs that are approved but not yet merged.
-func GetApprovedUnmerged(ctx context.Context, repoFilter string) ([]ApprovedPR, error) {
+// When ignoreDrafts is true, draft PRs are excluded at the GitHub search layer.
+func GetApprovedUnmerged(ctx context.Context, repoFilter string, ignoreDrafts bool) ([]ApprovedPR, error) {
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
 	query := `query($q: String!) {
@@ -176,12 +202,7 @@ func GetApprovedUnmerged(ctx context.Context, repoFilter string) ([]ApprovedPR, 
   }
 }`
 
-	repoClause := ""
-	if repoFilter != "" {
-		repoClause = " repo:" + repoFilter
-	}
-
-	q := fmt.Sprintf("is:pr is:open author:@me review:approved%s", repoClause)
+	q := buildApprovedUnmergedQuery(repoFilter, ignoreDrafts)
 
 	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
 		"-f", "query="+query,
@@ -215,16 +236,22 @@ func GetApprovedUnmerged(ctx context.Context, repoFilter string) ([]ApprovedPR, 
 	return filtered, nil
 }
 
-// ListOpenPRs lists open PRs for a repository using `gh pr list`.
-func ListOpenPRs(ctx context.Context, fullRepo string, limit int) ([]ReviewRequest, error) {
+// ListOpenPRs lists open PRs for a repository using `gh pr list`. When
+// ignoreDrafts is true, drafts are excluded via `--draft=false`.
+func ListOpenPRs(ctx context.Context, fullRepo string, limit int, ignoreDrafts bool) ([]ReviewRequest, error) {
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
+	args := []string{
+		"pr", "list",
 		"-R", fullRepo,
 		"--state", "open",
 		"--limit", fmt.Sprintf("%d", limit),
 		"--json", "number,title,author,createdAt,url",
-	)
+	}
+	if ignoreDrafts {
+		args = append(args, "--draft=false")
+	}
+	cmd := exec.CommandContext(ctx, "gh", args...)
 	out, err := cmd.Output()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {

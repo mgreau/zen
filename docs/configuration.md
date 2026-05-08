@@ -37,6 +37,12 @@ terminal: iterm  # or "ghostty"
 # If unset, falls back to `git config user.name` (spaces → hyphens), then no prefix.
 branch_prefix: mgreau
 
+# Skip draft PRs in `zen inbox`, watch notifications, and the MCP inbox tool.
+# Defaults to false (drafts are shown). Set to true to skip drafts so you don't
+# review something that isn't ready. Override on a single run with
+# `--ignore-drafts=false`.
+ignore_drafts: true
+
 watch:
   dispatch_interval: "10s"      # How often to process queued work
   cleanup_interval: "1h"        # How often to scan for merged PRs

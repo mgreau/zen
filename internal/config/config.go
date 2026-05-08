@@ -14,14 +14,15 @@ import (
 
 // Config holds the complete zen configuration.
 type Config struct {
-	Repos        map[string]RepoConfig `yaml:"repos"`
-	WatchPaths   []string              `yaml:"watch_paths"`
-	Authors      []string              `yaml:"authors"`
-	PollInterval string                `yaml:"poll_interval"`
-	ClaudeBin    string                `yaml:"claude_bin"`
-	Terminal     string                `yaml:"terminal"` // "iterm" or "ghostty"
-	BranchPrefix string                `yaml:"branch_prefix"`
-	Watch        WatchConfig           `yaml:"watch"`
+	Repos         map[string]RepoConfig `yaml:"repos"`
+	WatchPaths    []string              `yaml:"watch_paths"`
+	Authors       []string              `yaml:"authors"`
+	PollInterval  string                `yaml:"poll_interval"`
+	ClaudeBin     string                `yaml:"claude_bin"`
+	Terminal      string                `yaml:"terminal"` // "iterm" or "ghostty"
+	BranchPrefix  string                `yaml:"branch_prefix"`
+	IgnoreDrafts  bool                  `yaml:"ignore_drafts"`
+	Watch         WatchConfig           `yaml:"watch"`
 }
 
 // WatchConfig holds configuration for the watch daemon's workqueue behavior.
