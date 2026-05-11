@@ -27,3 +27,5 @@ claude mcp add --scope user zen -- zen mcp serve
 | `zen_config_repos` | Configured repositories |
 | `zen_review` | Create a worktree for a PR (auto-detects repo, injects context) |
 | `zen_review_resume` | Get worktree path and sessions for an existing PR review |
+
+> **Note:** `zen_inbox` uses the `ignore_drafts` setting from your config. Unlike the `zen inbox` CLI, there is no per-call override. Change the config (see [docs/configuration.md](configuration.md)) to toggle draft filtering for MCP callers.
