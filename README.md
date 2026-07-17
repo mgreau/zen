@@ -232,7 +232,7 @@ zen context inject <path> --pr 42 --repo app
 | **macOS or Linux** | On macOS, iTerm2/Ghostty tab management and notifications use AppleScript; on Linux, use kitty for tabs and `notify-send` (libnotify) for notifications |
 | **Git** | Worktree creation, fetching PR branches, cleanup |
 | **[GitHub CLI](https://cli.github.com/) (`gh`)** | Authentication and GitHub API access — must be logged in (`gh auth login`) |
-| **[iTerm2](https://iterm2.com/)**, **[Ghostty](https://ghostty.io/)**, or **[kitty](https://sw.kovidgoyal.net/kitty/)** | Opens review/work sessions in new tabs. Ghostty needs accessibility permissions for tab creation; kitty needs `allow_remote_control` — both fall back to new windows otherwise (see [docs/configuration.md](docs/configuration.md#terminal)) |
+| **[iTerm2](https://iterm2.com/)**, **[Ghostty](https://ghostty.io/)**, or **[kitty](https://sw.kovidgoyal.net/kitty/)** | Opens review/work sessions in new tabs (iTerm2/Ghostty) or OS windows (kitty). Ghostty needs accessibility permissions for tab creation and falls back to new windows otherwise (see [docs/configuration.md](docs/configuration.md#terminal)) |
 | **[Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)** | AI-assisted PR reviews and coding sessions |
 | **Go 1.24+** | Building from source |
 

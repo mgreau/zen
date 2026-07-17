@@ -85,12 +85,10 @@ For Ghostty tab creation on macOS:
 
 If any of these aren't met, zen falls back to opening new windows.
 
-For kitty tab creation (Linux and macOS):
-
-1. **Run zen from inside kitty** — tabs are created in the kitty instance zen runs in.
-2. **Remote control enabled** — set `allow_remote_control yes` in `kitty.conf` (or configure `listen_on`).
-
-If either of these isn't met, zen falls back to opening new kitty OS windows.
+kitty (Linux and macOS) opens each session in a new OS window. When zen runs
+from inside kitty with `allow_remote_control yes` set in `kitty.conf` (or a
+socket configured via `listen_on`), the window is opened from the running
+kitty instance; otherwise zen starts a separate kitty instance per session.
 
 ## State files
 

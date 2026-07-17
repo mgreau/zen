@@ -99,7 +99,7 @@ zen
 │   ├── ghostty/                  # Ghostty tab/window management via AppleScript
 │   ├── github/                   # GitHub API (GraphQL + REST, 30s call timeouts)
 │   ├── iterm/                    # iTerm2 tab management via AppleScript
-│   ├── kitty/                    # kitty tab/window management via kitty CLI (Linux + macOS)
+│   ├── kitty/                    # kitty window management via kitty CLI (Linux + macOS)
 │   ├── mcp/                      # MCP server exposing zen tools
 │   ├── notify/                   # Desktop notifications (osascript on macOS, notify-send on Linux)
 │   ├── prcache/                  # Lightweight PR metadata cache (JSON)
