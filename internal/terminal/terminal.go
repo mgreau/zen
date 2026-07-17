@@ -5,6 +5,7 @@ import (
 
 	"github.com/mgreau/zen/internal/ghostty"
 	"github.com/mgreau/zen/internal/iterm"
+	"github.com/mgreau/zen/internal/kitty"
 )
 
 // Terminal represents a terminal emulator that can open tabs/windows.
@@ -22,6 +23,8 @@ func NewTerminal(terminalType string) (Terminal, error) {
 		return &ITermTerminal{}, nil
 	case "ghostty":
 		return &GhosttyTerminal{}, nil
+	case "kitty":
+		return &KittyTerminal{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported terminal type: %s", terminalType)
 	}
@@ -63,4 +66,23 @@ func (t *GhosttyTerminal) OpenTabWithResume(workDir, sessionID, claudeBin, model
 
 func (t *GhosttyTerminal) OpenTabWithClaude(workDir, initialPrompt, claudeBin, model string) error {
 	return ghostty.OpenTabWithClaude(workDir, initialPrompt, claudeBin, model)
+}
+
+// KittyTerminal wraps the kitty functions.
+type KittyTerminal struct{}
+
+func (t *KittyTerminal) Name() string {
+	return "kitty"
+}
+
+func (t *KittyTerminal) OpenTab(workDir, command string) error {
+	return kitty.OpenTab(workDir, command)
+}
+
+func (t *KittyTerminal) OpenTabWithResume(workDir, sessionID, claudeBin, model string) error {
+	return kitty.OpenTabWithResume(workDir, sessionID, claudeBin, model)
+}
+
+func (t *KittyTerminal) OpenTabWithClaude(workDir, initialPrompt, claudeBin, model string) error {
+	return kitty.OpenTabWithClaude(workDir, initialPrompt, claudeBin, model)
 }

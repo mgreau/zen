@@ -14,15 +14,15 @@ import (
 
 // Config holds the complete zen configuration.
 type Config struct {
-	Repos         map[string]RepoConfig `yaml:"repos"`
-	WatchPaths    []string              `yaml:"watch_paths"`
-	Authors       []string              `yaml:"authors"`
-	PollInterval  string                `yaml:"poll_interval"`
-	ClaudeBin     string                `yaml:"claude_bin"`
-	Terminal      string                `yaml:"terminal"` // "iterm" or "ghostty"
-	BranchPrefix  string                `yaml:"branch_prefix"`
-	IgnoreDrafts  bool                  `yaml:"ignore_drafts"`
-	Watch         WatchConfig           `yaml:"watch"`
+	Repos        map[string]RepoConfig `yaml:"repos"`
+	WatchPaths   []string              `yaml:"watch_paths"`
+	Authors      []string              `yaml:"authors"`
+	PollInterval string                `yaml:"poll_interval"`
+	ClaudeBin    string                `yaml:"claude_bin"`
+	Terminal     string                `yaml:"terminal"` // "iterm", "ghostty", or "kitty"
+	BranchPrefix string                `yaml:"branch_prefix"`
+	IgnoreDrafts bool                  `yaml:"ignore_drafts"`
+	Watch        WatchConfig           `yaml:"watch"`
 }
 
 // WatchConfig holds configuration for the watch daemon's workqueue behavior.
@@ -141,8 +141,8 @@ func Load() (*Config, error) {
 	if cfg.Terminal == "" {
 		cfg.Terminal = "iterm" // default to iTerm for backward compatibility
 	}
-	if cfg.Terminal != "iterm" && cfg.Terminal != "ghostty" {
-		return nil, fmt.Errorf("invalid terminal type %q: must be \"iterm\" or \"ghostty\"", cfg.Terminal)
+	if cfg.Terminal != "iterm" && cfg.Terminal != "ghostty" && cfg.Terminal != "kitty" {
+		return nil, fmt.Errorf("invalid terminal type %q: must be \"iterm\", \"ghostty\", or \"kitty\"", cfg.Terminal)
 	}
 	if cfg.Repos == nil {
 		cfg.Repos = make(map[string]RepoConfig)

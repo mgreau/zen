@@ -6,13 +6,14 @@ import (
 
 func TestNewTerminal(t *testing.T) {
 	tests := []struct {
-		name        string
-		input       string
-		wantName    string
-		wantErr     bool
+		name     string
+		input    string
+		wantName string
+		wantErr  bool
 	}{
 		{"iterm explicit", "iterm", "iTerm2", false},
 		{"ghostty", "ghostty", "Ghostty", false},
+		{"kitty", "kitty", "kitty", false},
 		{"empty is invalid", "", "", true},
 		{"invalid terminal", "invalid", "", true},
 	}
@@ -45,5 +46,12 @@ func TestGhosttyTerminalName(t *testing.T) {
 	term := &GhosttyTerminal{}
 	if got := term.Name(); got != "Ghostty" {
 		t.Errorf("GhosttyTerminal.Name() = %q, want %q", got, "Ghostty")
+	}
+}
+
+func TestKittyTerminalName(t *testing.T) {
+	term := &KittyTerminal{}
+	if got := term.Name(); got != "kitty" {
+		t.Errorf("KittyTerminal.Name() = %q, want %q", got, "kitty")
 	}
 }
