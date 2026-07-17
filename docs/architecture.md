@@ -101,7 +101,7 @@ zen
 │   ├── iterm/                    # iTerm2 tab management via AppleScript
 │   ├── kitty/                    # kitty tab/window management via kitty CLI (Linux + macOS)
 │   ├── mcp/                      # MCP server exposing zen tools
-│   ├── notify/                   # macOS notifications
+│   ├── notify/                   # Desktop notifications (osascript on macOS, notify-send on Linux)
 │   ├── prcache/                  # Lightweight PR metadata cache (JSON)
 │   ├── reconciler/               # Workqueue-based PR setup + cleanup + session scan
 │   ├── review/                   # Shared worktree creation logic (CLI + MCP)

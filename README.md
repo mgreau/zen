@@ -162,7 +162,7 @@ Session ID, model, token usage, and last activity per worktree.
 
 Two loops keep zen useful.
 
-The **automated loop** is the daemon. It polls GitHub for PRs from configured authors, creates a worktree per PR with context pre-loaded, sends a macOS notification when ready, and removes worktrees a few days after merge. Each step is idempotent and retries on failure. The daemon does **not** open terminal tabs — worktrees are prepared silently.
+The **automated loop** is the daemon. It polls GitHub for PRs from configured authors, creates a worktree per PR with context pre-loaded, sends a desktop notification when ready, and removes worktrees a few days after merge. Each step is idempotent and retries on failure. The daemon does **not** open terminal tabs — worktrees are prepared silently.
 
 The **manual loop** is yours: check what needs your attention, open a worktree in a new tab with Claude, do the work.
 
@@ -229,7 +229,7 @@ zen context inject <path> --pr 42 --repo app
 
 | Requirement | Why |
 |-------------|-----|
-| **macOS or Linux** | On macOS, iTerm2/Ghostty tab management and notifications use AppleScript; on Linux, use kitty |
+| **macOS or Linux** | On macOS, iTerm2/Ghostty tab management and notifications use AppleScript; on Linux, use kitty for tabs and `notify-send` (libnotify) for notifications |
 | **Git** | Worktree creation, fetching PR branches, cleanup |
 | **[GitHub CLI](https://cli.github.com/) (`gh`)** | Authentication and GitHub API access — must be logged in (`gh auth login`) |
 | **[iTerm2](https://iterm2.com/)**, **[Ghostty](https://ghostty.io/)**, or **[kitty](https://sw.kovidgoyal.net/kitty/)** | Opens review/work sessions in new tabs. Ghostty needs accessibility permissions for tab creation; kitty needs `allow_remote_control` — both fall back to new windows otherwise (see [docs/configuration.md](docs/configuration.md#terminal)) |
