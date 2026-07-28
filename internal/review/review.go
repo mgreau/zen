@@ -90,9 +90,10 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, repoShort string, p
 
 	wt.GitMu.Lock()
 
-	log(fmt.Sprintf("Fetching pull/%d/head...", prNumber))
+	remote := wt.RemoteForRepo(originPath, fullRepo)
+	log(fmt.Sprintf("Fetching pull/%d/head from %s...", prNumber, remote))
 	gitCtx, cancel := context.WithTimeout(ctx, gitTimeout)
-	fetchCmd := exec.CommandContext(gitCtx, "git", "fetch", "origin", fmt.Sprintf("+pull/%d/head:%s", prNumber, branchName))
+	fetchCmd := exec.CommandContext(gitCtx, "git", "fetch", remote, fmt.Sprintf("+pull/%d/head:%s", prNumber, branchName))
 	fetchCmd.Dir = originPath
 	if out, err := fetchCmd.CombinedOutput(); err != nil {
 		cancel()

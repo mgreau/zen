@@ -83,6 +83,53 @@ func CleanupFailedAdd(originPath, worktreePath, branch string) {
 // execCommand is a variable for testing.
 var execCommand = exec.Command
 
+// RemoteForRepo returns the name of the git remote in originPath whose URL
+// points at fullRepo ("owner/name"). This lets zen operate in clones that
+// follow the fork workflow, where the canonical repo is a non-"origin" remote
+// (commonly "upstream") and "origin" is a personal fork that has no
+// pull/N/head refs. Falls back to "origin" when no remote matches or the
+// lookup fails.
+func RemoteForRepo(originPath, fullRepo string) string {
+	const fallback = "origin"
+	if fullRepo == "" {
+		return fallback
+	}
+	cmd := execCommand("git", "remote", "-v")
+	cmd.Dir = originPath
+	out, err := cmd.Output()
+	if err != nil {
+		return fallback
+	}
+	want := strings.ToLower(fullRepo)
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		if repoFromRemoteURL(fields[1]) == want {
+			return fields[0]
+		}
+	}
+	return fallback
+}
+
+// repoFromRemoteURL extracts a lowercased "owner/name" from a git remote URL,
+// handling scp-style (git@github.com:owner/name.git), https, and ssh forms.
+func repoFromRemoteURL(url string) string {
+	u := strings.TrimSuffix(url, ".git")
+	if i := strings.Index(u, "://"); i != -1 {
+		// scheme://[user@]host/owner/name
+		u = u[i+3:]
+		if j := strings.Index(u, "/"); j != -1 {
+			u = u[j+1:]
+		}
+	} else if i := strings.LastIndex(u, ":"); i != -1 {
+		// scp-style git@host:owner/name
+		u = u[i+1:]
+	}
+	return strings.ToLower(u)
+}
+
 // RemoveStaleLock removes an index.lock file only if the holding process
 // is no longer running. Safe to call if the file does not exist.
 func RemoveStaleLock(lockFile, name string) {
