@@ -67,9 +67,9 @@ The daemon uses [driftlessaf](https://github.com/driftlessaf) workqueues with tw
     │                                      │
     │  Step 2: ensureContextInjected      │
     │  ┌─────────────────────────────┐    │     ┌──────────────────────────────────┐
-    │  │ if CLAUDE.local.md? skip   │    │     │         Error Handling           │
+    │  │ if context present? skip   │    │     │         Error Handling           │
     │  │ fetch PR details + files   │    │     │                                  │
-    │  │ render CLAUDE.local.md     │    │     │  Invalid key    ──→ SKIP (permanent)
+    │  │ render + inject context    │    │     │  Invalid key    ──→ SKIP (permanent)
     │  └─────────────────────────────┘    │     │  Unknown repo   ──→ SKIP (permanent)
     │         │                           │     │  Git failure    ──→ RETRY         │
     │         v on error: LOG, CONTINUE   │     │                     30s → 60s →   │
@@ -92,10 +92,11 @@ Each step is **idempotent** — safe to re-run if interrupted. Git failures retr
 ```
 zen
 ├── cmd/                          # CLI commands (cobra)
-├── commands/                     # Claude Code commands (embedded in binary)
+├── commands/                     # Slash-command prompts (embedded in binary)
 ├── internal/
+│   ├── agent/                    # Agent abstraction (Claude Code / Codex)
 │   ├── config/                   # YAML config (~/.zen/config.yaml)
-│   ├── context/                  # CLAUDE.md generation for PR reviews
+│   ├── context/                  # PR-review context rendering
 │   ├── ghostty/                  # Ghostty tab/window management via AppleScript
 │   ├── github/                   # GitHub API (GraphQL + REST, 30s call timeouts)
 │   ├── iterm/                    # iTerm2 tab management via AppleScript
@@ -104,10 +105,18 @@ zen
 │   ├── prcache/                  # Lightweight PR metadata cache (JSON)
 │   ├── reconciler/               # Workqueue-based PR setup + cleanup + session scan
 │   ├── review/                   # Shared worktree creation logic (CLI + MCP)
-│   ├── session/                  # Claude session detection
+│   ├── session/                  # Shared session types + Claude session detection
 │   ├── terminal/                 # Terminal backend abstraction (iterm/ghostty)
 │   ├── ui/                       # Terminal formatting
 │   └── worktree/                 # Git worktree discovery + management
 ├── main.go
 └── go.mod
 ```
+
+## Agent abstraction
+
+zen launches a coding agent in each worktree. Originally hardwired to Claude Code, the agent-specific behaviour now lives behind the `agent.Agent` interface (`internal/agent`), with `claude` and `codex` implementations selected by `agent:` in config or a `--agent` flag.
+
+The interface owns the six places the two agents differ: the launch and resume shell commands (binary, `--model` vs `-m`, `--resume <id>` vs `resume <uuid>`), the per-worktree context file, the slash-command prompts directory, and session discovery plus token parsing. The `context` package renders the PR-review markdown; the agent decides where to write it. The `terminal` layer is agent-agnostic — it just runs a command string the agent builds.
+
+Session discovery differs most: Claude keys session files by an encoded worktree path (`~/.claude/projects/<encoded>/*.jsonl`), while Codex stores rollout files by date (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`) and records the worktree as a `cwd` field inside each file. The Codex implementation walks the sessions tree, matches `cwd`, and caches file→cwd results for the daemon's repeated scans. Codex token totals are cumulative in `total_token_usage`, so the latest event wins rather than summing.

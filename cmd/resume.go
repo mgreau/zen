@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/session"
 	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
@@ -24,8 +25,10 @@ var (
 
 // resumeWorktree handles the core resume logic for a matched worktree.
 func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) error {
-	// Find Claude sessions
-	sessions, err := session.FindSessions(wt.Path)
+	ag := resolveAgent()
+
+	// Find agent sessions
+	sessions, err := ag.FindSessions(wt.Path)
 	noSessions := err != nil || len(sessions) == 0
 
 	// JSON output
@@ -46,7 +49,7 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 	if resumeList {
 		home := os.Getenv("HOME")
 		fmt.Println()
-		fmt.Printf("%s\n", ui.BoldText(fmt.Sprintf("Claude Sessions for %s", ui.CyanText(wt.Name))))
+		fmt.Printf("%s\n", ui.BoldText(fmt.Sprintf("%s Sessions for %s", ag.Kind(), ui.CyanText(wt.Name))))
 		fmt.Println(ui.DimText(ui.ShortenHome(wt.Path, home)))
 		fmt.Println("═══════════════════════════════════════════════════════════════")
 		fmt.Println()
@@ -69,9 +72,9 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 		return nil
 	}
 
-	// No existing sessions — start a new Claude session
+	// No existing sessions — start a new agent session
 	if noSessions {
-		return openNewSession(wt, t)
+		return openNewSession(wt, t, ag)
 	}
 
 	// Pick session
@@ -87,15 +90,13 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 	home := os.Getenv("HOME")
 	shortPath := ui.ShortenHome(wt.Path, home)
 
+	resumeCmd := ag.ResumeCommand(s.ID, resumeModel)
+
 	// No-iTerm mode
 	if resumeNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Resume command:"))
-		modelFlag := ""
-		if resumeModel != "" {
-			modelFlag = fmt.Sprintf(" --model %s", resumeModel)
-		}
-		fmt.Printf("  cd %s && %s%s --resume %s\n", wt.Path, cfg.ClaudeBin, modelFlag, s.ID)
+		fmt.Printf("  cd %s && %s\n", wt.Path, resumeCmd)
 		fmt.Println()
 		fmt.Println(ui.DimText(fmt.Sprintf("Worktree: %s", shortPath)))
 		fmt.Println(ui.DimText(fmt.Sprintf("Session:  %s (%s)", s.ModHuman, s.SizeStr)))
@@ -104,7 +105,7 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 
 	// Open in terminal
 	fmt.Println()
-	fmt.Println(ui.BoldText(fmt.Sprintf("Resuming Claude session in new %s tab", t.Name())))
+	fmt.Println(ui.BoldText(fmt.Sprintf("Resuming %s session in new %s tab", ag.Kind(), t.Name())))
 	fmt.Printf("  Worktree: %s\n", ui.CyanText(wt.Name))
 	fmt.Printf("  Path:     %s\n", ui.DimText(shortPath))
 	fmt.Printf("  Session:  %s\n", ui.DimText(s.ID))
@@ -114,7 +115,7 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 	}
 	fmt.Println()
 
-	if err := t.OpenTabWithResume(wt.Path, s.ID, cfg.ClaudeBin, resumeModel); err != nil {
+	if err := t.OpenTab(wt.Path, resumeCmd); err != nil {
 		return fmt.Errorf("opening %s tab: %w", t.Name(), err)
 	}
 
@@ -122,36 +123,26 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 	return nil
 }
 
-// openNewSession starts a new Claude session in a new terminal tab.
-// For PR worktrees, it starts with /review-pr. For others, it starts plain claude.
-func openNewSession(wt worktree.Worktree, t terminal.Terminal) error {
+// openNewSession starts a new agent session in a new terminal tab.
+// For PR worktrees, it starts with a review prompt; for others, it starts plain.
+func openNewSession(wt worktree.Worktree, t terminal.Terminal, ag agent.Agent) error {
 	home := os.Getenv("HOME")
 	shortPath := ui.ShortenHome(wt.Path, home)
 
-	initialPrompt := "/review-pr"
-	action := "Starting PR review"
-	if wt.Type != worktree.TypePRReview {
-		initialPrompt = ""
-		action = "Starting new session"
-	} else {
-		// Ensure /review-pr command is installed
-		if err := ensureClaudeCommand("review-pr"); err != nil {
-			ui.LogInfo(fmt.Sprintf("Warning: could not install /review-pr command: %v", err))
-		}
+	initialPrompt := ""
+	action := "Starting new session"
+	if wt.Type == worktree.TypePRReview {
+		ensureReviewPrompt(ag)
+		initialPrompt = ag.ReviewPrompt(wt.Path)
+		action = "Starting PR review"
 	}
+
+	launchCmd := ag.StartCommand(initialPrompt, resumeModel)
 
 	if resumeNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Start command:"))
-		modelFlag := ""
-		if resumeModel != "" {
-			modelFlag = fmt.Sprintf(" --model %s", resumeModel)
-		}
-		if initialPrompt != "" {
-			fmt.Printf("  cd %s && %s%s %q\n", wt.Path, cfg.ClaudeBin, modelFlag, initialPrompt)
-		} else {
-			fmt.Printf("  cd %s && %s%s\n", wt.Path, cfg.ClaudeBin, modelFlag)
-		}
+		fmt.Printf("  cd %s && %s\n", wt.Path, launchCmd)
 		fmt.Println()
 		fmt.Println(ui.DimText(fmt.Sprintf("Worktree: %s", shortPath)))
 		return nil
@@ -166,17 +157,7 @@ func openNewSession(wt worktree.Worktree, t terminal.Terminal) error {
 	}
 	fmt.Println()
 
-	var err error
-	if initialPrompt != "" {
-		err = t.OpenTabWithClaude(wt.Path, initialPrompt, cfg.ClaudeBin, resumeModel)
-	} else {
-		cmd := cfg.ClaudeBin
-		if resumeModel != "" {
-			cmd += fmt.Sprintf(" --model %s", resumeModel)
-		}
-		err = t.OpenTab(wt.Path, cmd)
-	}
-	if err != nil {
+	if err := t.OpenTab(wt.Path, launchCmd); err != nil {
 		return fmt.Errorf("opening %s tab: %w", t.Name(), err)
 	}
 
@@ -251,7 +232,8 @@ func addResumeFlags(cmd *cobra.Command) {
 	cmd.Flags().IntVarP(&resumeSession, "session", "s", 0, "Resume Nth session instead of most recent (1-based)")
 	cmd.Flags().BoolVarP(&resumeList, "list", "l", false, "List available sessions without resuming")
 	cmd.Flags().BoolVar(&resumeNoITerm, "no-terminal", false, "Print the resume command instead of opening terminal")
-	cmd.Flags().StringVarP(&resumeModel, "model", "m", "", "Claude model to use (e.g., sonnet, opus, haiku)")
+	cmd.Flags().StringVarP(&resumeModel, "model", "m", "", "Model to use (agent-specific, e.g. opus or gpt-5-codex)")
+	addAgentFlag(cmd)
 }
 
 // runReviewResume handles `zen review resume <pr-number>`.

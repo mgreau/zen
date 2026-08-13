@@ -8,11 +8,12 @@ import (
 )
 
 // Terminal represents a terminal emulator that can open tabs/windows.
+//
+// The command to run is built by the agent layer (see internal/agent), so the
+// terminal only needs to launch an arbitrary shell command in a new tab.
 type Terminal interface {
 	Name() string
 	OpenTab(workDir, command string) error
-	OpenTabWithResume(workDir, sessionID, claudeBin, model string) error
-	OpenTabWithClaude(workDir, initialPrompt, claudeBin, model string) error
 }
 
 // NewTerminal creates a new terminal instance based on the terminal type.
@@ -38,14 +39,6 @@ func (t *ITermTerminal) OpenTab(workDir, command string) error {
 	return iterm.OpenTab(workDir, command)
 }
 
-func (t *ITermTerminal) OpenTabWithResume(workDir, sessionID, claudeBin, model string) error {
-	return iterm.OpenTabWithResume(workDir, sessionID, claudeBin, model)
-}
-
-func (t *ITermTerminal) OpenTabWithClaude(workDir, initialPrompt, claudeBin, model string) error {
-	return iterm.OpenTabWithClaude(workDir, initialPrompt, claudeBin, model)
-}
-
 // GhosttyTerminal wraps the Ghostty functions.
 type GhosttyTerminal struct{}
 
@@ -55,12 +48,4 @@ func (t *GhosttyTerminal) Name() string {
 
 func (t *GhosttyTerminal) OpenTab(workDir, command string) error {
 	return ghostty.OpenTab(workDir, command)
-}
-
-func (t *GhosttyTerminal) OpenTabWithResume(workDir, sessionID, claudeBin, model string) error {
-	return ghostty.OpenTabWithResume(workDir, sessionID, claudeBin, model)
-}
-
-func (t *GhosttyTerminal) OpenTabWithClaude(workDir, initialPrompt, claudeBin, model string) error {
-	return ghostty.OpenTabWithClaude(workDir, initialPrompt, claudeBin, model)
 }

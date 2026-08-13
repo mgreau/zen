@@ -14,14 +14,14 @@ import (
 
 // PRContext holds all data needed to render the CLAUDE.md template.
 type PRContext struct {
-	Number      int
-	Title       string
-	Author      string
-	URL         string
-	HeadBranch  string
-	BaseBranch  string
-	IsFork      bool
-	Body        string
+	Number       int
+	Title        string
+	Author       string
+	URL          string
+	HeadBranch   string
+	BaseBranch   string
+	IsFork       bool
+	Body         string
 	ChangedFiles []string
 }
 
@@ -60,25 +60,26 @@ Start by reading the changed files listed above, then provide your review.
 
 var tmpl = template.Must(template.New("claude-md").Parse(claudeMDTemplate))
 
-// InjectPRContext fetches PR metadata from GitHub and writes a CLAUDE.md
-// file in the given worktree directory.
-func InjectPRContext(ctx context.Context, worktreePath string, fullRepo string, prNumber int) error {
+// RenderPRContext fetches PR metadata from GitHub and renders the review
+// context to a markdown string. The agent layer is responsible for writing it
+// to the appropriate per-agent context file (CLAUDE.local.md, AGENTS.md, ...).
+func RenderPRContext(ctx context.Context, fullRepo string, prNumber int) (string, error) {
 	client, err := github.NewClient(ctx)
 	if err != nil {
-		return fmt.Errorf("creating GitHub client: %w", err)
+		return "", fmt.Errorf("creating GitHub client: %w", err)
 	}
 
 	details, err := client.GetPRDetails(ctx, fullRepo, prNumber)
 	if err != nil {
-		return fmt.Errorf("fetching PR details: %w", err)
+		return "", fmt.Errorf("fetching PR details: %w", err)
 	}
 
 	files, err := client.GetPRFiles(ctx, fullRepo, prNumber)
 	if err != nil {
-		return fmt.Errorf("fetching PR files: %w", err)
+		return "", fmt.Errorf("fetching PR files: %w", err)
 	}
 
-	prCtx := PRContext{
+	return RenderClaudeMD(PRContext{
 		Number:       details.Number,
 		Title:        details.Title,
 		Author:       details.Author,
@@ -88,9 +89,7 @@ func InjectPRContext(ctx context.Context, worktreePath string, fullRepo string, 
 		IsFork:       details.IsFork,
 		Body:         details.Body,
 		ChangedFiles: files,
-	}
-
-	return WriteClaudeMD(worktreePath, prCtx)
+	})
 }
 
 // WriteClaudeMD renders the template and writes PR review context to the

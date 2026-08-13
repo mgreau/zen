@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/config"
 	"github.com/mgreau/zen/internal/ui"
 	"github.com/spf13/cobra"
@@ -39,9 +40,9 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
 	fmt.Println("Prerequisites:")
-	fmt.Println("  gh auth login       — authenticate GitHub CLI")
-	fmt.Println("  iTerm2 installed    — for tab management")
-	fmt.Println("  claude installed    — Claude Code CLI")
+	fmt.Println("  gh auth login         — authenticate GitHub CLI")
+	fmt.Println("  iTerm2 installed      — for tab management")
+	fmt.Println("  claude or codex CLI   — the coding agent zen launches")
 	fmt.Println()
 
 	// Check for existing config
@@ -87,6 +88,15 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	authors := promptRequired(scanner, "GitHub username(s) for PR filtering (comma-separated)")
 	fmt.Println()
 
+	// Choose the coding agent
+	agentChoice := prompt(scanner, "Coding agent (claude or codex)", "claude")
+	agentChoice = strings.ToLower(strings.TrimSpace(agentChoice))
+	if agentChoice != "claude" && agentChoice != "codex" {
+		fmt.Printf("  Unknown agent %q, defaulting to claude\n", agentChoice)
+		agentChoice = "claude"
+	}
+	fmt.Println()
+
 	// Build config
 	repoMap := make(map[string]config.RepoConfig, len(repos))
 	for _, r := range repos {
@@ -105,7 +115,9 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		Repos:        repoMap,
 		Authors:      authorList,
 		PollInterval: "5m",
+		Agent:        agentChoice,
 		ClaudeBin:    "claude",
+		CodexBin:     "codex",
 		Watch: config.WatchConfig{
 			DispatchInterval: "10s",
 			CleanupInterval:  "1h",
@@ -134,8 +146,9 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println(ui.GreenText("✓ Config written to " + configPath))
 	fmt.Println()
 
-	// Install Claude Code commands
-	installedCount, err := installClaudeCommands(scanner)
+	// Install slash-command prompts for the chosen agent
+	ag := agent.New(agent.Kind(agentChoice), "")
+	installedCount, err := installAgentPrompts(scanner, ag)
 	if err != nil {
 		return err
 	}
@@ -145,7 +158,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println("  zen watch start     — start background daemon")
 	fmt.Println("  zen inbox           — check pending PR reviews")
 	if installedCount > 0 {
-		fmt.Println("  claude /review-pr   — review a PR with Claude")
+		fmt.Printf("  %s /review-pr — review a PR\n", agentChoice)
 	}
 	fmt.Println()
 
@@ -182,44 +195,13 @@ func promptRequired(scanner *bufio.Scanner, label string) string {
 	}
 }
 
-// ensureClaudeCommand checks if a specific Claude command file exists and
-// installs it silently from the embedded FS if missing.
-func ensureClaudeCommand(name string) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolving home directory: %w", err)
-	}
-	targetDir := filepath.Join(home, ".claude", "commands")
-	dst := filepath.Join(targetDir, name+".md")
-
-	if _, err := os.Stat(dst); err == nil {
-		return nil // already exists
-	}
-
-	srcData, err := fs.ReadFile(EmbeddedCommands, filepath.Join("commands", name+".md"))
-	if err != nil {
-		return fmt.Errorf("reading embedded %s.md: %w", name, err)
-	}
-
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return fmt.Errorf("creating %s: %w", targetDir, err)
-	}
-
-	if err := os.WriteFile(dst, srcData, 0o644); err != nil {
-		return fmt.Errorf("writing %s: %w", dst, err)
-	}
-
-	ui.LogInfo(fmt.Sprintf("Installed Claude command /%s", name))
-	return nil
-}
-
-// installClaudeCommands prompts the user and installs embedded Claude Code
-// command files to ~/.claude/commands/.
-func installClaudeCommands(scanner *bufio.Scanner) (int, error) {
-	// List available commands from the embedded FS
+// installAgentPrompts prompts the user and installs embedded slash-command
+// prompt files into the chosen agent's prompts directory.
+func installAgentPrompts(scanner *bufio.Scanner, ag agent.Agent) (int, error) {
+	// List available prompts from the embedded FS
 	entries, err := fs.ReadDir(EmbeddedCommands, "commands")
 	if err != nil {
-		// No embedded commands (shouldn't happen with a proper build)
+		// No embedded prompts (shouldn't happen with a proper build)
 		return 0, nil
 	}
 
@@ -233,9 +215,10 @@ func installClaudeCommands(scanner *bufio.Scanner) (int, error) {
 		return 0, nil
 	}
 
-	fmt.Println("Install Claude Code commands?")
-	fmt.Printf("  Commands: %s\n", strings.Join(names, ", "))
-	fmt.Println("  Target:   ~/.claude/commands/")
+	targetDir := ag.PromptsDir()
+	fmt.Printf("Install %s slash-command prompts?\n", ag.Kind())
+	fmt.Printf("  Prompts: %s\n", strings.Join(names, ", "))
+	fmt.Printf("  Target:  %s\n", targetDir)
 	fmt.Print("Install? [Y/n]: ")
 	scanner.Scan()
 	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
@@ -244,41 +227,26 @@ func installClaudeCommands(scanner *bufio.Scanner) (int, error) {
 		return 0, nil
 	}
 
-	targetDir := filepath.Join(os.Getenv("HOME"), ".claude", "commands")
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return 0, fmt.Errorf("creating %s: %w", targetDir, err)
-	}
-
 	installed := 0
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-
 		srcData, err := fs.ReadFile(EmbeddedCommands, filepath.Join("commands", e.Name()))
 		if err != nil {
 			return installed, fmt.Errorf("reading embedded %s: %w", e.Name(), err)
 		}
-
-		dst := filepath.Join(targetDir, e.Name())
-
-		// Check if file already exists
-		if _, err := os.Stat(dst); err == nil {
-			fmt.Printf("  %s already exists. Overwrite? [y/N]: ", dst)
-			scanner.Scan()
-			if strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
-				fmt.Printf("  Skipped %s\n", e.Name())
-				continue
-			}
+		name := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+		wrote, err := ag.EnsurePrompt(name, srcData)
+		if err != nil {
+			return installed, err
 		}
-
-		if err := os.WriteFile(dst, srcData, 0o644); err != nil {
-			return installed, fmt.Errorf("writing %s: %w", dst, err)
+		if wrote {
+			installed++
 		}
-		installed++
 	}
 
-	fmt.Println(ui.GreenText(fmt.Sprintf("✓ Installed %d command(s) to %s", installed, targetDir)))
+	fmt.Println(ui.GreenText(fmt.Sprintf("✓ Installed %d prompt(s) to %s", installed, targetDir)))
 	fmt.Println()
 
 	return installed, nil

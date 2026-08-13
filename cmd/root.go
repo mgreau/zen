@@ -27,7 +27,7 @@ var rootCmd = &cobra.Command{
 	Short: "Worktree orchestrator for PR reviews and feature work",
 	Long: `zen - Worktree orchestrator for PR reviews and feature work
 
-Manages git worktrees and Claude Code sessions across iTerm tabs.
+Manages git worktrees and agent sessions (Claude Code or Codex) across iTerm tabs.
 Silently prepares worktrees, retries failures, and cleans up after itself.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		ui.DebugEnabled = debugFlag

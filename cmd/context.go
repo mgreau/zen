@@ -32,6 +32,7 @@ func init() {
 	contextInjectCmd.Flags().StringVar(&contextRepo, "repo", "", "Repository short name (required)")
 	contextInjectCmd.MarkFlagRequired("pr")
 	contextInjectCmd.MarkFlagRequired("repo")
+	addAgentFlag(contextInjectCmd)
 
 	contextCmd.AddCommand(contextInjectCmd)
 	rootCmd.AddCommand(contextCmd)
@@ -40,13 +41,19 @@ func init() {
 func runContextInject(cmd *cobra.Command, args []string) error {
 	worktreePath := args[0]
 	fullRepo := cfg.RepoFullName(contextRepo)
+	ag := resolveAgent()
 
 	ui.LogInfo(fmt.Sprintf("Injecting PR #%d context from %s into %s", contextPR, fullRepo, worktreePath))
 
-	if err := ctxpkg.InjectPRContext(cmd.Context(), worktreePath, fullRepo, contextPR); err != nil {
+	rendered, err := ctxpkg.RenderPRContext(cmd.Context(), fullRepo, contextPR)
+	if err != nil {
+		return fmt.Errorf("rendering context: %w", err)
+	}
+	ref, err := ag.InjectContext(worktreePath, rendered)
+	if err != nil {
 		return fmt.Errorf("injecting context: %w", err)
 	}
 
-	ui.LogSuccess(fmt.Sprintf("Wrote CLAUDE.local.md to %s", worktreePath))
+	ui.LogSuccess(fmt.Sprintf("Wrote %s to %s", ref, worktreePath))
 	return nil
 }

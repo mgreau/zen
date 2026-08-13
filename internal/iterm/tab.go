@@ -9,16 +9,16 @@ import (
 
 // Tab color presets — pleasant palette for iTerm tab identification.
 var palette = [][3]int{
-	{66, 133, 244},  // blue
-	{52, 168, 83},   // green
-	{251, 188, 4},   // yellow
-	{234, 67, 53},   // red
-	{171, 71, 188},  // purple
-	{0, 172, 193},   // teal
-	{255, 112, 67},  // orange
-	{124, 179, 66},  // lime
-	{38, 166, 154},  // cyan
-	{236, 64, 122},  // pink
+	{66, 133, 244}, // blue
+	{52, 168, 83},  // green
+	{251, 188, 4},  // yellow
+	{234, 67, 53},  // red
+	{171, 71, 188}, // purple
+	{0, 172, 193},  // teal
+	{255, 112, 67}, // orange
+	{124, 179, 66}, // lime
+	{38, 166, 154}, // cyan
+	{236, 64, 122}, // pink
 }
 
 // RandomColor returns an escape sequence for a random iTerm tab color.
@@ -58,24 +58,4 @@ end tell`
 		return fmt.Errorf("osascript: %w: %s", err, string(out))
 	}
 	return nil
-}
-
-// OpenTabWithResume opens a new iTerm2 tab to resume a Claude session.
-func OpenTabWithResume(workDir, sessionID, claudeBin, model string) error {
-	cmd := claudeBin
-	if model != "" {
-		cmd += fmt.Sprintf(" --model %s", model)
-	}
-	cmd += fmt.Sprintf(" --resume %s", sessionID)
-	return OpenTab(workDir, cmd)
-}
-
-// OpenTabWithClaude opens a new iTerm2 tab with Claude and an initial prompt.
-func OpenTabWithClaude(workDir, initialPrompt, claudeBin, model string) error {
-	cmd := claudeBin
-	if model != "" {
-		cmd += fmt.Sprintf(" --model %s", model)
-	}
-	cmd += fmt.Sprintf(" %q", initialPrompt)
-	return OpenTab(workDir, cmd)
 }

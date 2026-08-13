@@ -11,8 +11,9 @@ import (
 	"strings"
 	"time"
 
-	ctxpkg "github.com/mgreau/zen/internal/context"
+	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/config"
+	ctxpkg "github.com/mgreau/zen/internal/context"
 	"github.com/mgreau/zen/internal/github"
 	"github.com/mgreau/zen/internal/prcache"
 	wt "github.com/mgreau/zen/internal/worktree"
@@ -41,7 +42,7 @@ func noop(string) {}
 //
 // If the worktree already exists, returns a Result with the existing path.
 // The caller is responsible for detecting the repo if repoShort is empty.
-func CreateWorktree(ctx context.Context, cfg *config.Config, repoShort string, prNumber int, log Logger) (*Result, error) {
+func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, repoShort string, prNumber int, log Logger) (*Result, error) {
 	if log == nil {
 		log = noop
 	}
@@ -124,10 +125,14 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, repoShort string, p
 
 	wt.GitMu.Unlock()
 
-	// Inject PR context into CLAUDE.local.md
-	log("Injecting PR context into CLAUDE.local.md...")
-	if err := ctxpkg.InjectPRContext(ctx, worktreePath, fullRepo, prNumber); err != nil {
-		log(fmt.Sprintf("Warning: failed to inject context: %v", err))
+	// Inject PR context into the agent's context file (e.g. CLAUDE.local.md, AGENTS.md).
+	log(fmt.Sprintf("Injecting PR context into %s...", ag.ContextFile()))
+	if rendered, rerr := ctxpkg.RenderPRContext(ctx, fullRepo, prNumber); rerr != nil {
+		log(fmt.Sprintf("Warning: failed to render context: %v", rerr))
+	} else if ref, ierr := ag.InjectContext(worktreePath, rendered); ierr != nil {
+		log(fmt.Sprintf("Warning: failed to inject context: %v", ierr))
+	} else {
+		log(fmt.Sprintf("Wrote PR context to %s", ref))
 	}
 
 	// Cache PR metadata

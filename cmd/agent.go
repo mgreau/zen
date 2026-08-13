@@ -22,20 +22,21 @@ var (
 
 var agentCmd = &cobra.Command{
 	Use:   "agent",
-	Short: "Manage Claude agent sessions",
+	Short: "Manage agent sessions",
 }
 
 var agentStatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Show all Claude sessions across worktrees",
-	Long: `Displays a table of Claude Code sessions found across all worktrees,
-including token usage, running status, and last activity time.`,
+	Short: "Show all agent sessions across worktrees",
+	Long: `Displays a table of agent sessions (Claude Code or Codex) found across
+all worktrees, including token usage, running status, and last activity time.`,
 	RunE: runAgentStatus,
 }
 
 func init() {
 	agentStatusCmd.Flags().BoolVar(&agentRunning, "running", false, "Only show running sessions")
 	agentStatusCmd.Flags().BoolVar(&agentFull, "full", false, "Scan full session files for accurate token totals (slower)")
+	addAgentFlag(agentStatusCmd)
 
 	agentCmd.AddCommand(agentStatusCmd)
 	rootCmd.AddCommand(agentCmd)
@@ -98,24 +99,24 @@ func runAgentStatus(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("listing worktrees: %w", err)
 		}
 
+		ag := resolveAgent()
 		for _, wt := range wts {
-			sessions, _ := session.FindSessions(wt.Path)
+			sessions, _ := ag.FindSessions(wt.Path)
 			if len(sessions) == 0 {
 				continue
 			}
 
 			s := sessions[0]
-			filePath := session.SessionFilePath(wt.Path, s.ID)
 
 			var model string
 			var tokens session.TokenUsage
 			if agentFull {
-				model, tokens, _ = session.ParseSessionDetailFull(filePath)
+				model, tokens, _ = ag.ParseTokensFull(s.Path)
 			} else {
-				model, tokens, _ = session.ParseSessionDetailTail(filePath)
+				model, tokens, _ = ag.ParseTokensTail(s.Path)
 			}
 
-			running := session.IsProcessRunning(s.ID)
+			running := ag.IsProcessRunning(s.ID)
 
 			if agentRunning && !running {
 				continue
@@ -136,7 +137,7 @@ func runAgentStatus(cmd *cobra.Command, args []string) error {
 				SessionID:       s.ID,
 				Status:          status,
 				Size:            s.SizeStr,
-				Model:           session.ShortenModel(model),
+				Model:           ag.ShortenModel(model),
 				InputTokens:     session.FormatTokenCount(tokens.InputTokens),
 				OutputTokens:    session.FormatTokenCount(tokens.OutputTokens),
 				LastActive:      session.FormatAge(lastActive),

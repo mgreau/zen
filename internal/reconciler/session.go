@@ -36,20 +36,21 @@ func ScanSessions(cfg *config.Config, idleThreshold time.Duration) {
 		return
 	}
 
+	ag := cfg.NewAgent("")
 	now := time.Now()
 	var states []SessionState
 
 	for _, wt := range wts {
-		sessions, _ := session.FindSessions(wt.Path)
+		sessions, _ := ag.FindSessions(wt.Path)
 		if len(sessions) == 0 {
 			continue
 		}
 
 		// Only track the most recent session per worktree
 		s := sessions[0]
-		filePath := session.SessionFilePath(wt.Path, s.ID)
+		filePath := s.Path
 
-		running := session.IsProcessRunning(s.ID)
+		running := ag.IsProcessRunning(s.ID)
 
 		var status string
 		switch {
@@ -62,8 +63,8 @@ func ScanSessions(cfg *config.Config, idleThreshold time.Duration) {
 		}
 
 		// Parse model and tokens from the tail of the session file
-		model, tokens, _ := session.ParseSessionDetailTail(filePath)
-		shortenedModel := session.ShortenModel(model)
+		model, tokens, _ := ag.ParseTokensTail(filePath)
+		shortenedModel := ag.ShortenModel(model)
 
 		// Notify on running → waiting transition (debounced)
 		if status == "waiting" {

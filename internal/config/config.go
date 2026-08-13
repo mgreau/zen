@@ -9,20 +9,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mgreau/zen/internal/agent"
 	"gopkg.in/yaml.v3"
 )
 
 // Config holds the complete zen configuration.
 type Config struct {
-	Repos         map[string]RepoConfig `yaml:"repos"`
-	WatchPaths    []string              `yaml:"watch_paths"`
-	Authors       []string              `yaml:"authors"`
-	PollInterval  string                `yaml:"poll_interval"`
-	ClaudeBin     string                `yaml:"claude_bin"`
-	Terminal      string                `yaml:"terminal"` // "iterm" or "ghostty"
-	BranchPrefix  string                `yaml:"branch_prefix"`
-	IgnoreDrafts  bool                  `yaml:"ignore_drafts"`
-	Watch         WatchConfig           `yaml:"watch"`
+	Repos        map[string]RepoConfig `yaml:"repos"`
+	WatchPaths   []string              `yaml:"watch_paths"`
+	Authors      []string              `yaml:"authors"`
+	PollInterval string                `yaml:"poll_interval"`
+	Agent        string                `yaml:"agent"` // "claude" (default) or "codex"
+	ClaudeBin    string                `yaml:"claude_bin"`
+	CodexBin     string                `yaml:"codex_bin"`
+	Terminal     string                `yaml:"terminal"` // "iterm" or "ghostty"
+	BranchPrefix string                `yaml:"branch_prefix"`
+	IgnoreDrafts bool                  `yaml:"ignore_drafts"`
+	Watch        WatchConfig           `yaml:"watch"`
 }
 
 // WatchConfig holds configuration for the watch daemon's workqueue behavior.
@@ -138,6 +141,15 @@ func Load() (*Config, error) {
 	if cfg.ClaudeBin == "" {
 		cfg.ClaudeBin = "claude"
 	}
+	if cfg.CodexBin == "" {
+		cfg.CodexBin = "codex"
+	}
+	if cfg.Agent == "" {
+		cfg.Agent = "claude" // default for backward compatibility
+	}
+	if cfg.Agent != "claude" && cfg.Agent != "codex" {
+		return nil, fmt.Errorf("invalid agent %q: must be \"claude\" or \"codex\"", cfg.Agent)
+	}
 	if cfg.Terminal == "" {
 		cfg.Terminal = "iterm" // default to iTerm for backward compatibility
 	}
@@ -155,6 +167,28 @@ func Load() (*Config, error) {
 // GetTerminal returns the configured terminal type.
 func (c *Config) GetTerminal() string {
 	return c.Terminal
+}
+
+// AgentKind returns the effective agent kind. A non-empty override (e.g. from
+// a --agent flag) wins over the configured default.
+func (c *Config) AgentKind(override string) string {
+	if override != "" {
+		return override
+	}
+	if c.Agent != "" {
+		return c.Agent
+	}
+	return "claude"
+}
+
+// NewAgent builds the configured agent, honouring an optional override kind.
+func (c *Config) NewAgent(override string) agent.Agent {
+	kind := c.AgentKind(override)
+	bin := c.ClaudeBin
+	if kind == "codex" {
+		bin = c.CodexBin
+	}
+	return agent.New(agent.Kind(kind), bin)
 }
 
 // GetBranchPrefix returns the prefix for feature branch names.

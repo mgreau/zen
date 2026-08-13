@@ -54,7 +54,8 @@ var (
 func init() {
 	reviewCmd.Flags().StringVar(&reviewRepo, "repo", "", "Repository short name from config (auto-detected if omitted)")
 	reviewCmd.Flags().BoolVar(&reviewNoITerm, "no-terminal", false, "Create worktree only, don't open terminal tab")
-	reviewCmd.Flags().StringVarP(&reviewModel, "model", "m", "", "Claude model to use (e.g., sonnet, opus, haiku)")
+	reviewCmd.Flags().StringVarP(&reviewModel, "model", "m", "", "Model to use (agent-specific, e.g. opus or gpt-5-codex)")
+	addAgentFlag(reviewCmd)
 	addResumeFlags(reviewResumeCmd)
 	reviewDeleteCmd.Flags().BoolVarP(&reviewDeleteForce, "force", "f", false, "Skip confirmation")
 	reviewCmd.AddCommand(reviewResumeCmd)
@@ -96,8 +97,10 @@ func runReview(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	ag := resolveAgent()
+
 	// Create worktree using shared logic
-	result, err := review.CreateWorktree(ctx, cfg, reviewRepo, prNumber, ui.LogInfo)
+	result, err := review.CreateWorktree(ctx, cfg, ag, reviewRepo, prNumber, ui.LogInfo)
 	if err != nil {
 		return err
 	}
@@ -119,19 +122,15 @@ func runReview(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Model:  %s\n", ui.CyanText(reviewModel))
 	}
 
-	// Ensure /review-pr command is installed
-	if err := ensureClaudeCommand("review-pr"); err != nil {
-		ui.LogInfo(fmt.Sprintf("Warning: could not install /review-pr command: %v", err))
-	}
+	// Ensure the /review-pr prompt is installed for the chosen agent
+	ensureReviewPrompt(ag)
+
+	launchCmd := ag.StartCommand(ag.ReviewPrompt(result.WorktreePath), reviewModel)
 
 	if reviewNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Open manually:"))
-		modelFlag := ""
-		if reviewModel != "" {
-			modelFlag = fmt.Sprintf(" --model %s", reviewModel)
-		}
-		fmt.Printf("  cd %s && %s%s \"/review-pr\"\n", result.WorktreePath, cfg.ClaudeBin, modelFlag)
+		fmt.Printf("  cd %s && %s\n", result.WorktreePath, launchCmd)
 		return nil
 	}
 
@@ -141,7 +140,7 @@ func runReview(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := term.OpenTabWithClaude(result.WorktreePath, "/review-pr", cfg.ClaudeBin, reviewModel); err != nil {
+	if err := term.OpenTab(result.WorktreePath, launchCmd); err != nil {
 		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
 	}
 
@@ -193,9 +192,9 @@ func runReviewDelete(cmd *cobra.Command, args []string) error {
 // openReviewTab resumes an existing worktree in a new iTerm tab.
 func openReviewTab(worktreePath, worktreeName string) error {
 	w := wt.Worktree{
-		Path:   worktreePath,
-		Name:   worktreeName,
-		Type:   wt.TypePRReview,
+		Path: worktreePath,
+		Name: worktreeName,
+		Type: wt.TypePRReview,
 	}
 	term, err := terminal.NewTerminal(cfg.GetTerminal())
 	if err != nil {

@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/mgreau/zen/internal/session"
 	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
 	wt "github.com/mgreau/zen/internal/worktree"
@@ -56,7 +55,8 @@ var (
 
 func init() {
 	workNewCmd.Flags().BoolVar(&workNewNoITerm, "no-terminal", false, "Create worktree only, don't open terminal tab")
-	workNewCmd.Flags().StringVarP(&workNewModel, "model", "m", "", "Claude model to use (e.g., sonnet, opus, haiku)")
+	workNewCmd.Flags().StringVarP(&workNewModel, "model", "m", "", "Model to use (agent-specific, e.g. opus or gpt-5-codex)")
+	addAgentFlag(workNewCmd)
 	workDeleteCmd.Flags().BoolVarP(&workDeleteForce, "force", "f", false, "Skip confirmation")
 	addResumeFlags(workResumeCmd)
 	workCmd.AddCommand(workNewCmd)
@@ -77,6 +77,8 @@ func runWork(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("listing worktrees: %w", err)
 	}
 
+	ag := resolveAgent()
+
 	var features []wt.Worktree
 	for _, w := range wts {
 		if w.Type == wt.TypeFeature {
@@ -84,12 +86,17 @@ func runWork(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	hasSession := func(path string) bool {
+		s, _ := ag.FindSessions(path)
+		return len(s) > 0
+	}
+
 	if jsonFlag {
 		var entries []WorkEntry
 		for _, f := range features {
 			entries = append(entries, WorkEntry{
 				Worktree:   f,
-				HasSession: session.HasActiveSession(f.Path),
+				HasSession: hasSession(f.Path),
 			})
 		}
 		printJSON(entries)
@@ -113,7 +120,7 @@ func runWork(cmd *cobra.Command, args []string) error {
 	home := homeDir()
 	for _, f := range features {
 		sessionIndicator := ""
-		if session.HasActiveSession(f.Path) {
+		if hasSession(f.Path) {
 			sessionIndicator = ui.GreenText("●")
 		}
 
@@ -122,7 +129,7 @@ func runWork(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println()
-	ui.Hint("● = Active Claude session")
+	ui.Hint(fmt.Sprintf("● = Active %s session", ag.Kind()))
 	fmt.Println()
 	return nil
 }
@@ -205,18 +212,13 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Model:  %s\n", ui.CyanText(workNewModel))
 	}
 
+	ag := resolveAgent()
+	launchCmd := ag.StartCommand(context, workNewModel)
+
 	if workNewNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Open manually:"))
-		modelFlag := ""
-		if workNewModel != "" {
-			modelFlag = fmt.Sprintf(" --model %s", workNewModel)
-		}
-		if context != "" {
-			fmt.Printf("  cd %s && %s%s %q\n", worktreePath, cfg.ClaudeBin, modelFlag, context)
-		} else {
-			fmt.Printf("  cd %s && %s%s\n", worktreePath, cfg.ClaudeBin, modelFlag)
-		}
+		fmt.Printf("  cd %s && %s\n", worktreePath, launchCmd)
 		return nil
 	}
 
@@ -226,18 +228,8 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if context != "" {
-		if err := term.OpenTabWithClaude(worktreePath, context, cfg.ClaudeBin, workNewModel); err != nil {
-			return fmt.Errorf("opening %s tab: %w", term.Name(), err)
-		}
-	} else {
-		cmd := cfg.ClaudeBin
-		if workNewModel != "" {
-			cmd += fmt.Sprintf(" --model %s", workNewModel)
-		}
-		if err := term.OpenTab(worktreePath, cmd); err != nil {
-			return fmt.Errorf("opening %s tab: %w", term.Name(), err)
-		}
+	if err := term.OpenTab(worktreePath, launchCmd); err != nil {
+		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
 	}
 
 	ui.LogSuccess(fmt.Sprintf("%s tab opened", term.Name()))
@@ -283,11 +275,12 @@ func runWorkDelete(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no worktree found matching %q", target)
 	}
 
+	ag := resolveAgent()
 	home := homeDir()
 	shortPath := ui.ShortenHome(match.Path, home)
 
 	// Gather info for summary
-	sessions, _ := session.FindSessions(match.Path)
+	sessions, _ := ag.FindSessions(match.Path)
 	age := ""
 	if days, err := wt.AgeDays(match.Path); err == nil {
 		if days == 0 {
@@ -334,15 +327,12 @@ func runWorkDelete(cmd *cobra.Command, args []string) error {
 	}
 	ui.LogSuccess("Removed worktree")
 
-	// Clean up Claude session files
+	// Clean up agent session files
 	if len(sessions) > 0 {
-		sessionDir := session.ProjectDir(match.Path)
-		if sessionDir != "" {
-			if err := os.RemoveAll(sessionDir); err != nil {
-				fmt.Printf("  %s clean session files: %v\n", ui.YellowText("Warning:"), err)
-			} else {
-				ui.LogSuccess(fmt.Sprintf("Cleaned %d session file(s)", len(sessions)))
-			}
+		if removed, err := ag.CleanSessions(match.Path); err != nil {
+			fmt.Printf("  %s clean session files: %v\n", ui.YellowText("Warning:"), err)
+		} else if removed > 0 {
+			ui.LogSuccess(fmt.Sprintf("Cleaned %d session file(s)", removed))
 		}
 	}
 

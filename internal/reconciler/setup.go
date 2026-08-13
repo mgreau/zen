@@ -151,11 +151,16 @@ func (r *SetupReconciler) ensureWorktree(originPath, worktreePath, worktreeName 
 }
 
 func (r *SetupReconciler) ensureContextInjected(ctx context.Context, worktreePath, fullRepo string, prNumber int) error {
-	claudeLocal := filepath.Join(worktreePath, "CLAUDE.local.md")
-	if _, err := os.Stat(claudeLocal); err == nil {
+	ag := r.cfg.NewAgent("")
+	if ag.ContextPresent(worktreePath) {
 		return nil // already injected
 	}
-	return ctxpkg.InjectPRContext(ctx, worktreePath, fullRepo, prNumber)
+	rendered, err := ctxpkg.RenderPRContext(ctx, fullRepo, prNumber)
+	if err != nil {
+		return err
+	}
+	_, err = ag.InjectContext(worktreePath, rendered)
+	return err
 }
 
 func logf(format string, args ...any) {

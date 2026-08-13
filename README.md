@@ -80,7 +80,8 @@ Authors: alice bob charlie dave
 zen review 42                    # create worktree + open terminal tab
 zen review 42 --repo other       # specify repo explicitly
 zen review 42 --no-terminal      # create worktree only, print command
-zen review 42 --model opus       # pick Claude model (sonnet, opus, haiku)
+zen review 42 --model opus       # pick model (agent-specific, e.g. opus or gpt-5-codex)
+zen review 42 --agent codex      # use Codex for this review (overrides config)
 zen review resume 42             # open existing worktree in new terminal tab
 zen review resume 42 --list      # list available sessions
 zen review resume 42 --session 2 # resume specific session
@@ -201,6 +202,10 @@ authors:
 
 `zen setup` walks you through this interactively. The daemon hot-reloads config on every poll tick — no restart needed.
 
+### Claude or Codex
+
+By default zen drives [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Set `agent: codex` in config (or pass `--agent codex` to `zen review`/`zen work`) to use OpenAI's [Codex CLI](https://developers.openai.com/codex/cli) instead. zen adapts the launch/resume commands, the injected context file (`CLAUDE.local.md` vs `AGENTS.md`), where slash-command prompts are installed, and how it discovers sessions and token usage. See [docs/configuration.md](docs/configuration.md#agent).
+
 Full reference (poll intervals, terminal selection, branch prefix, multi-repo disambiguation, state file paths) in [docs/configuration.md](docs/configuration.md).
 
 ## MCP server
@@ -233,7 +238,7 @@ zen context inject <path> --pr 42 --repo app
 | **Git** | Worktree creation, fetching PR branches, cleanup |
 | **[GitHub CLI](https://cli.github.com/) (`gh`)** | Authentication and GitHub API access — must be logged in (`gh auth login`) |
 | **[iTerm2](https://iterm2.com/)** or **[Ghostty](https://ghostty.io/)** | Opens review/work sessions in new tabs. Ghostty needs accessibility permissions for tab creation; falls back to new windows otherwise (see [docs/configuration.md](docs/configuration.md#terminal)) |
-| **[Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)** | AI-assisted PR reviews and coding sessions |
+| **[Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`) or [Codex](https://developers.openai.com/codex/cli) (`codex`)** | AI-assisted PR reviews and coding sessions — pick one with `agent:` in config (see [Configuration](#configuration)) |
 | **Go 1.24+** | Building from source |
 
 ## Building
