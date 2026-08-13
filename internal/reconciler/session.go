@@ -21,8 +21,8 @@ var (
 
 const sessionNotifyDebounce = 5 * time.Minute
 
-// ScanSessions scans all worktrees for Claude sessions and writes
-// a cached snapshot to ~/.zen/state/sessions.json.
+// ScanSessions scans all worktrees for sessions of the configured agent and
+// writes a cached snapshot to ~/.zen/state/sessions.json.
 //
 // A session is classified as:
 //   - "stopped"  — process not alive

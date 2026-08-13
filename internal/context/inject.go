@@ -4,15 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"text/template"
 
 	"github.com/mgreau/zen/internal/github"
-	"github.com/mgreau/zen/internal/ui"
 )
 
-// PRContext holds all data needed to render the CLAUDE.md template.
+// PRContext holds all data needed to render the PR-review context template.
 type PRContext struct {
 	Number       int
 	Title        string
@@ -25,7 +22,7 @@ type PRContext struct {
 	ChangedFiles []string
 }
 
-const claudeMDTemplate = `# PR Review: #{{.Number}} — {{.Title}}
+const prContextTemplate = `# PR Review: #{{.Number}} — {{.Title}}
 
 ## PR Info
 
@@ -58,7 +55,7 @@ You are reviewing PR #{{.Number}}. Focus on:
 Start by reading the changed files listed above, then provide your review.
 `
 
-var tmpl = template.Must(template.New("claude-md").Parse(claudeMDTemplate))
+var tmpl = template.Must(template.New("pr-context").Parse(prContextTemplate))
 
 // RenderPRContext fetches PR metadata from GitHub and renders the review
 // context to a markdown string. The agent layer is responsible for writing it
@@ -79,7 +76,7 @@ func RenderPRContext(ctx context.Context, fullRepo string, prNumber int) (string
 		return "", fmt.Errorf("fetching PR files: %w", err)
 	}
 
-	return RenderClaudeMD(PRContext{
+	return Render(PRContext{
 		Number:       details.Number,
 		Title:        details.Title,
 		Author:       details.Author,
@@ -92,26 +89,8 @@ func RenderPRContext(ctx context.Context, fullRepo string, prNumber int) (string
 	})
 }
 
-// WriteClaudeMD renders the template and writes PR review context to the
-// worktree. Always writes to CLAUDE.local.md so the repo's own CLAUDE.md
-// is never modified — no risk of accidental commits.
-func WriteClaudeMD(dir string, prCtx PRContext) error {
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, prCtx); err != nil {
-		return fmt.Errorf("rendering template: %w", err)
-	}
-
-	outPath := filepath.Join(dir, "CLAUDE.local.md")
-	if err := os.WriteFile(outPath, buf.Bytes(), 0o644); err != nil {
-		return fmt.Errorf("writing %s: %w", outPath, err)
-	}
-
-	ui.LogDebug(fmt.Sprintf("Wrote PR context to %s", outPath))
-	return nil
-}
-
-// RenderClaudeMD renders the template to a string (useful for testing/preview).
-func RenderClaudeMD(prCtx PRContext) (string, error) {
+// Render renders the PR-review context template to a markdown string.
+func Render(prCtx PRContext) (string, error) {
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, prCtx); err != nil {
 		return "", fmt.Errorf("rendering template: %w", err)

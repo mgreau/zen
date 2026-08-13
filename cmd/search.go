@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mgreau/zen/internal/session"
+	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/ui"
 	"github.com/mgreau/zen/internal/worktree"
 	"github.com/spf13/cobra"
@@ -40,7 +40,12 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	term := args[0]
 	termLower := strings.ToLower(term)
 
-	results := searchWorktrees(termLower)
+	ag, err := resolveAgent()
+	if err != nil {
+		return err
+	}
+
+	results := searchWorktrees(ag, termLower)
 
 	if jsonFlag {
 		printJSON(results)
@@ -129,12 +134,12 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 	ui.Separator()
 	fmt.Printf("Found: %s results\n", ui.BoldText(fmt.Sprintf("%d", len(results))))
-	ui.Hint("● = Active Claude session")
+	ui.Hint(fmt.Sprintf("● = Active %s session", ag.Kind()))
 	fmt.Println()
 	return nil
 }
 
-func searchWorktrees(termLower string) []SearchResult {
+func searchWorktrees(ag agent.Agent, termLower string) []SearchResult {
 	wts, err := worktree.ListAll(cfg)
 	if err != nil {
 		return nil
@@ -179,7 +184,7 @@ func searchWorktrees(termLower string) []SearchResult {
 				PRNumber:   wt.PRNumber,
 				Branch:     wt.Branch,
 				Repo:       wt.Repo,
-				HasSession: session.HasActiveSession(wt.Path),
+				HasSession: hasAgentSession(ag, wt.Path),
 			})
 		}
 	}

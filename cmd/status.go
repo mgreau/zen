@@ -11,11 +11,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/config"
 	"github.com/mgreau/zen/internal/github"
 	"github.com/mgreau/zen/internal/prcache"
 	"github.com/mgreau/zen/internal/reconciler"
-	"github.com/mgreau/zen/internal/session"
 	"github.com/mgreau/zen/internal/ui"
 	"github.com/mgreau/zen/internal/worktree"
 	"github.com/spf13/cobra"
@@ -44,10 +44,10 @@ type StatusData struct {
 // StatusPRReview enriches a worktree with remote PR state and cleanup info.
 type StatusPRReview struct {
 	worktree.Worktree
-	Title      string `json:"title,omitempty"`
-	State      string `json:"state,omitempty"`
-	AgeDays    int    `json:"age_days"`
-	CleanupIn  int    `json:"cleanup_in_days,omitempty"`
+	Title     string `json:"title,omitempty"`
+	State     string `json:"state,omitempty"`
+	AgeDays   int    `json:"age_days"`
+	CleanupIn int    `json:"cleanup_in_days,omitempty"`
 }
 
 // StatusFeature enriches a feature worktree with session and age info.
@@ -86,7 +86,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	prReviews := enrichPRReviews(prWTs, prCache)
 
 	// Enrich features with session and age info
-	enrichedFeatures := enrichFeatures(features)
+	ag, err := resolveAgent()
+	if err != nil {
+		return err
+	}
+	enrichedFeatures := enrichFeatures(ag, features)
 
 	// Daemon status
 	daemonStatus, daemonPID := getDaemonStatus()
@@ -197,7 +201,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 // enrichFeatures builds StatusFeature entries with age and session info.
 // Uses cached session snapshot when available and fresh (< 60s), falls back
 // to real-time scanning otherwise.
-func enrichFeatures(wts []worktree.Worktree) []StatusFeature {
+func enrichFeatures(ag agent.Agent, wts []worktree.Worktree) []StatusFeature {
 	// Try to use cached session data
 	sessionMap := make(map[string]reconciler.SessionState)
 	snapshot, _ := reconciler.ReadSessionSnapshot()
@@ -230,10 +234,10 @@ func enrichFeatures(wts []worktree.Worktree) []StatusFeature {
 			f.SessionStatus = cached.Status
 		} else if len(sessionMap) == 0 {
 			// No cache available — fall back to real-time scanning
-			sessions, _ := session.FindSessions(wt.Path)
+			sessions, _ := ag.FindSessions(wt.Path)
 			if len(sessions) > 0 {
 				f.HasSession = true
-				f.Running = session.IsProcessRunning(sessions[0].ID)
+				f.Running = ag.IsProcessRunning(sessions[0].ID)
 				if f.Running {
 					f.SessionStatus = "running"
 				} else {

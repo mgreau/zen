@@ -158,7 +158,12 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println("  zen watch start     — start background daemon")
 	fmt.Println("  zen inbox           — check pending PR reviews")
 	if installedCount > 0 {
-		fmt.Printf("  %s /review-pr — review a PR\n", agentChoice)
+		if agentChoice == "codex" {
+			// Codex expands custom prompts only inside its TUI composer.
+			fmt.Println("  codex, then type /review-pr — review a PR")
+		} else {
+			fmt.Println("  claude /review-pr   — review a PR")
+		}
 	}
 	fmt.Println()
 

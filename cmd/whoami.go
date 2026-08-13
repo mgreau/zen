@@ -16,9 +16,9 @@ import (
 )
 
 var (
-	whoamiPeriod  string
-	whoamiRepo    string
-	whoamiMerged  bool
+	whoamiPeriod string
+	whoamiRepo   string
+	whoamiMerged bool
 )
 
 var whoamiCmd = &cobra.Command{
@@ -27,7 +27,7 @@ var whoamiCmd = &cobra.Command{
 	Long: `Shows a summary of work done for a given time period.
 
 Includes merged PRs (deployed to main), in-progress feature branches,
-PR reviews, and Claude session activity. Defaults to the last 7 days.`,
+PR reviews, and agent session activity. Defaults to the last 7 days.`,
 	RunE: runWhoami,
 }
 
@@ -111,6 +111,11 @@ func runWhoami(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("listing worktrees: %w", err)
 	}
 
+	ag, err := resolveAgent()
+	if err != nil {
+		return err
+	}
+
 	var inProgress, prReviews []whoamiEntry
 	repoSet := make(map[string]bool)
 	totalBranchCommits := 0
@@ -121,9 +126,10 @@ func runWhoami(cmd *cobra.Command, args []string) error {
 		}
 
 		commits := countCommits(w.Path, since)
-		hasSession := session.HasActiveSession(w.Path)
+		sessions, _ := ag.FindSessions(w.Path)
+		hasSession := len(sessions) > 0
 
-		if commits == 0 && !hasRecentSession(w.Path, since) {
+		if commits == 0 && !hasRecentSession(sessions, since) {
 			continue
 		}
 
@@ -145,9 +151,7 @@ func runWhoami(cmd *cobra.Command, args []string) error {
 
 		if hasSession {
 			entry.HasSession = true
-			if sessions, _ := session.FindSessions(w.Path); len(sessions) > 0 {
-				entry.SessionAge = session.FormatAge(time.Unix(sessions[0].Modified, 0))
-			}
+			entry.SessionAge = session.FormatAge(time.Unix(sessions[0].Modified, 0))
 		}
 
 		if w.Type == wt.TypePRReview {
@@ -505,9 +509,8 @@ func commitLabel(n int) string {
 	return fmt.Sprintf("%d commits", n)
 }
 
-// hasRecentSession returns true if the worktree has a session modified since the given time.
-func hasRecentSession(worktreePath string, since time.Time) bool {
-	sessions, _ := session.FindSessions(worktreePath)
+// hasRecentSession returns true if any session was modified since the given time.
+func hasRecentSession(sessions []session.Session, since time.Time) bool {
 	if len(sessions) == 0 {
 		return false
 	}

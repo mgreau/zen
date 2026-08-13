@@ -51,8 +51,10 @@ type Agent interface {
 	// ContextFile when a pre-existing file forced a fallback location).
 	InjectContext(worktreePath, rendered string) (ref string, err error)
 	// ContextPresent reports whether zen has already injected PR context into
-	// the worktree. It must be true after InjectContext and false before, even
-	// when the repo ships its own context file.
+	// the worktree. It must be true after InjectContext. Detection is
+	// best-effort: an implementation may be unable to distinguish a
+	// repo-shipped context file from an injected one (see the Claude
+	// implementation); Codex uses a sentinel to disambiguate AGENTS.md.
 	ContextPresent(worktreePath string) bool
 	// ReviewPrompt returns the initial prompt used to start a PR review in a
 	// worktree whose context has already been injected.

@@ -41,7 +41,10 @@ func init() {
 func runContextInject(cmd *cobra.Command, args []string) error {
 	worktreePath := args[0]
 	fullRepo := cfg.RepoFullName(contextRepo)
-	ag := resolveAgent()
+	ag, err := resolveAgent()
+	if err != nil {
+		return err
+	}
 
 	ui.LogInfo(fmt.Sprintf("Injecting PR #%d context from %s into %s", contextPR, fullRepo, worktreePath))
 

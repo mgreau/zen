@@ -25,7 +25,10 @@ var (
 
 // resumeWorktree handles the core resume logic for a matched worktree.
 func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) error {
-	ag := resolveAgent()
+	ag, err := resolveAgent()
+	if err != nil {
+		return err
+	}
 
 	// Find agent sessions
 	sessions, err := ag.FindSessions(wt.Path)

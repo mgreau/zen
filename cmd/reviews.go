@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/mgreau/zen/internal/prcache"
-	"github.com/mgreau/zen/internal/session"
 	"github.com/mgreau/zen/internal/ui"
 	"github.com/mgreau/zen/internal/worktree"
 	"github.com/spf13/cobra"
@@ -36,6 +35,11 @@ func runReviews(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("listing worktrees: %w", err)
 	}
 
+	ag, err := resolveAgent()
+	if err != nil {
+		return err
+	}
+
 	// Filter to PR reviews within age limit
 	var reviews []worktree.Worktree
 	for _, wt := range wts {
@@ -64,7 +68,7 @@ func runReviews(cmd *cobra.Command, args []string) error {
 			entries = append(entries, ReviewEntry{
 				Worktree:   r,
 				Title:      title,
-				HasSession: session.HasActiveSession(r.Path),
+				HasSession: hasAgentSession(ag, r.Path),
 			})
 		}
 		printJSON(entries)
@@ -94,7 +98,7 @@ func runReviews(cmd *cobra.Command, args []string) error {
 		}
 
 		sessionIndicator := ""
-		if session.HasActiveSession(r.Path) {
+		if hasAgentSession(ag, r.Path) {
 			sessionIndicator = ui.GreenText("●")
 		}
 
@@ -108,7 +112,7 @@ func runReviews(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println()
-	ui.Hint("● = Active Claude session")
+	ui.Hint(fmt.Sprintf("● = Active %s session", ag.Kind()))
 	fmt.Println()
 	return nil
 }

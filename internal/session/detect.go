@@ -63,13 +63,6 @@ func FindSessions(worktreePath string) ([]Session, error) {
 	return sessions, nil
 }
 
-// HasActiveSession checks if a worktree has any Claude session files.
-// This is a lightweight check - it doesn't verify if the session is running.
-func HasActiveSession(worktreePath string) bool {
-	sessions, _ := FindSessions(worktreePath)
-	return len(sessions) > 0
-}
-
 // ProjectDir returns the Claude projects directory for a worktree path.
 // Returns empty string if the directory doesn't exist.
 func ProjectDir(worktreePath string) string {
@@ -136,12 +129,6 @@ type jsonUsage struct {
 // tailSize is the number of bytes to read from the end of a session file
 // for fast (non-full) parsing.
 const tailSize = 64 * 1024
-
-// SessionFilePath returns the full filesystem path for a session .jsonl file.
-func SessionFilePath(worktreePath, sessionID string) string {
-	projectDirName := pathToClaudeProject(worktreePath)
-	return filepath.Join(os.Getenv("HOME"), ".claude", "projects", projectDirName, sessionID+".jsonl")
-}
 
 // IsProcessRunning checks if a Claude process is running for the given session ID
 // by looking for a process whose command line contains the session ID.

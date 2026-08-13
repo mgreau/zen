@@ -77,7 +77,10 @@ func runWork(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("listing worktrees: %w", err)
 	}
 
-	ag := resolveAgent()
+	ag, err := resolveAgent()
+	if err != nil {
+		return err
+	}
 
 	var features []wt.Worktree
 	for _, w := range wts {
@@ -86,17 +89,12 @@ func runWork(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	hasSession := func(path string) bool {
-		s, _ := ag.FindSessions(path)
-		return len(s) > 0
-	}
-
 	if jsonFlag {
 		var entries []WorkEntry
 		for _, f := range features {
 			entries = append(entries, WorkEntry{
 				Worktree:   f,
-				HasSession: hasSession(f.Path),
+				HasSession: hasAgentSession(ag, f.Path),
 			})
 		}
 		printJSON(entries)
@@ -120,7 +118,7 @@ func runWork(cmd *cobra.Command, args []string) error {
 	home := homeDir()
 	for _, f := range features {
 		sessionIndicator := ""
-		if hasSession(f.Path) {
+		if hasAgentSession(ag, f.Path) {
 			sessionIndicator = ui.GreenText("●")
 		}
 
@@ -212,7 +210,10 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Model:  %s\n", ui.CyanText(workNewModel))
 	}
 
-	ag := resolveAgent()
+	ag, err := resolveAgent()
+	if err != nil {
+		return err
+	}
 	launchCmd := ag.StartCommand(context, workNewModel)
 
 	if workNewNoITerm {
@@ -275,7 +276,10 @@ func runWorkDelete(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no worktree found matching %q", target)
 	}
 
-	ag := resolveAgent()
+	ag, err := resolveAgent()
+	if err != nil {
+		return err
+	}
 	home := homeDir()
 	shortPath := ui.ShortenHome(match.Path, home)
 

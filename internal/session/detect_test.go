@@ -79,25 +79,6 @@ func TestFindSessionsWithFixture(t *testing.T) {
 	}
 }
 
-func TestHasActiveSession(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
-
-	// No sessions exist
-	if HasActiveSession("/tmp/nonexistent") {
-		t.Error("HasActiveSession should be false when no sessions exist")
-	}
-
-	// Create a session
-	projectDir := filepath.Join(tmpDir, ".claude", "projects", "-tmp-testworkdir")
-	os.MkdirAll(projectDir, 0o755)
-	os.WriteFile(filepath.Join(projectDir, "session1.jsonl"), []byte("{}"), 0o644)
-
-	if !HasActiveSession("/tmp/testworkdir") {
-		t.Error("HasActiveSession should be true when sessions exist")
-	}
-}
-
 func TestParseSessionDetailFull(t *testing.T) {
 	tmpDir := t.TempDir()
 	sessionFile := filepath.Join(tmpDir, "test-session.jsonl")
@@ -207,16 +188,5 @@ func TestFormatAge(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("FormatAge(%v) = %q, want %q", tt.t, got, tt.want)
 		}
-	}
-}
-
-func TestSessionFilePath(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
-
-	got := SessionFilePath("/tmp/my-worktree", "abc-123")
-	want := filepath.Join(tmpDir, ".claude", "projects", "-tmp-my-worktree", "abc-123.jsonl")
-	if got != want {
-		t.Errorf("SessionFilePath() = %q, want %q", got, want)
 	}
 }

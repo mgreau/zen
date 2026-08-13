@@ -97,7 +97,10 @@ func runReview(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	ag := resolveAgent()
+	ag, err := resolveAgent()
+	if err != nil {
+		return err
+	}
 
 	// Create worktree using shared logic
 	result, err := review.CreateWorktree(ctx, cfg, ag, reviewRepo, prNumber, ui.LogInfo)

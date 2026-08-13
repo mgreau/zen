@@ -25,13 +25,16 @@ import (
 // from the worktree path), Codex stores every session as a rollout file under
 // ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl keyed only by date.
 // To attribute sessions to a worktree we read each rollout's session_meta line
-// and match its recorded cwd. File→cwd results are cached for the process
-// lifetime (a rollout's cwd never changes) so repeated daemon scans stay cheap.
+// and match its recorded cwd.
 type codexAgent struct {
 	bin string
-
-	cwdCache sync.Map // rollout file path -> cwd string
 }
+
+// cwdCache caches rollout file path → recorded cwd. It is package-level (not
+// per-agent) so it survives callers like the daemon that construct a fresh
+// agent on every scan tick; a rollout's cwd never changes once written, so
+// entries stay valid for the process lifetime.
+var cwdCache sync.Map
 
 func (a *codexAgent) Kind() Kind  { return Codex }
 func (a *codexAgent) Bin() string { return a.bin }
@@ -39,18 +42,22 @@ func (a *codexAgent) Bin() string { return a.bin }
 func (a *codexAgent) StartCommand(prompt, model string) string {
 	cmd := a.bin
 	if model != "" {
-		cmd += fmt.Sprintf(" -m %s", model)
+		cmd += " -m " + shellQuote(model)
 	}
 	if prompt != "" {
-		cmd += fmt.Sprintf(" %q", prompt)
+		cmd += " " + shellQuote(prompt)
 	}
 	return cmd
 }
 
-// ResumeCommand resumes a recorded session by UUID. The model is restored from
-// the session itself, so it is not re-specified here.
-func (a *codexAgent) ResumeCommand(sessionID, _ string) string {
-	return fmt.Sprintf("%s resume %s", a.bin, sessionID)
+// ResumeCommand resumes a recorded session by UUID. Codex restores the model
+// from the session itself; an explicit --model override is forwarded via -m.
+func (a *codexAgent) ResumeCommand(sessionID, model string) string {
+	cmd := fmt.Sprintf("%s resume %s", a.bin, shellQuote(sessionID))
+	if model != "" {
+		cmd += " -m " + shellQuote(model)
+	}
+	return cmd
 }
 
 // ContextFile is AGENTS.md, the project-context file Codex reads automatically.
@@ -67,8 +74,13 @@ const (
 // InjectContext writes AGENTS.md when the worktree has none. If the repo
 // already ships its own AGENTS.md, zen never clobbers it — the context goes to
 // .zen/PR_CONTEXT.md instead, which ReviewPrompt then points the agent at.
-// The written path and the .zen/ marker dir are added to the worktree's git
-// exclude so nothing shows up as a pending change.
+//
+// Only the zen-owned .zen/ directory is added to the git exclude file. That
+// file (info/exclude) is shared by every worktree of the repo — git has no
+// per-worktree exclude — so excluding AGENTS.md there would hide a repo
+// contributor's own AGENTS.md from git status in the main checkout. An
+// injected AGENTS.md therefore shows as untracked, exactly like Claude's
+// CLAUDE.local.md.
 func (a *codexAgent) InjectContext(worktreePath, rendered string) (string, error) {
 	ref := a.ContextFile()
 	if _, err := os.Stat(filepath.Join(worktreePath, ref)); err == nil {
@@ -89,7 +101,6 @@ func (a *codexAgent) InjectContext(worktreePath, rendered string) (string, error
 		_ = os.WriteFile(sentinel, nil, 0o644)
 	}
 
-	addToGitExclude(worktreePath, ref)
 	addToGitExclude(worktreePath, ".zen/")
 	return ref, nil
 }
@@ -101,9 +112,12 @@ func (a *codexAgent) ContextPresent(worktreePath string) bool {
 	return err == nil
 }
 
-// ReviewPrompt points Codex at whichever context file was injected. The
-// side-file is not auto-loaded by Codex, so it must be named explicitly; even
-// for AGENTS.md naming it keeps the instruction unambiguous.
+// ReviewPrompt points Codex at whichever context file was injected. Unlike
+// Claude, this is an inline instruction rather than the /review-pr slash
+// command: Codex only expands custom prompts typed into the TUI composer — a
+// "/review-pr" CLI argument would be sent as literal prompt text. The
+// side-file is also not auto-loaded by Codex, so it must be named explicitly;
+// even for AGENTS.md naming it keeps the instruction unambiguous.
 func (a *codexAgent) ReviewPrompt(worktreePath string) string {
 	ref := a.ContextFile()
 	if _, err := os.Stat(filepath.Join(worktreePath, codexSideContextFile)); err == nil {
@@ -148,6 +162,14 @@ func (a *codexAgent) FindSessions(worktreePath string) ([]session.Session, error
 	root := sessionsRoot()
 	var sessions []session.Session
 
+	// Rollouts record the cwd as Codex saw it, which may be a symlinked form
+	// of the worktree path (e.g. /tmp vs /private/tmp on macOS); compare
+	// against the resolved path too.
+	resolvedWT := worktreePath
+	if r, err := filepath.EvalSymlinks(worktreePath); err == nil {
+		resolvedWT = r
+	}
+
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries
@@ -155,8 +177,8 @@ func (a *codexAgent) FindSessions(worktreePath string) ([]session.Session, error
 		if d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
 			return nil
 		}
-		cwd := a.rolloutCwd(path)
-		if cwd != worktreePath {
+		cwd := rolloutCwd(path)
+		if cwd != worktreePath && cwd != resolvedWT {
 			return nil
 		}
 		info, ierr := d.Info()
@@ -184,12 +206,16 @@ func (a *codexAgent) FindSessions(worktreePath string) ([]session.Session, error
 }
 
 // rolloutCwd returns the recorded cwd for a rollout file, caching the result.
-func (a *codexAgent) rolloutCwd(path string) string {
-	if v, ok := a.cwdCache.Load(path); ok {
+// Empty results are not cached: a rollout scanned in the instant before Codex
+// flushes its session_meta line would otherwise stay invisible forever.
+func rolloutCwd(path string) string {
+	if v, ok := cwdCache.Load(path); ok {
 		return v.(string)
 	}
 	cwd := readRolloutCwd(path)
-	a.cwdCache.Store(path, cwd)
+	if cwd != "" {
+		cwdCache.Store(path, cwd)
+	}
 	return cwd
 }
 
@@ -199,7 +225,8 @@ type codexLine struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
-// readRolloutCwd reads the session_meta line and returns its cwd, or "".
+// readRolloutCwd reads the session_meta line and returns its cwd
+// (symlink-resolved when possible), or "".
 func readRolloutCwd(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -222,6 +249,9 @@ func readRolloutCwd(path string) string {
 			Cwd string `json:"cwd"`
 		}
 		if json.Unmarshal(line.Payload, &meta) == nil && meta.Cwd != "" {
+			if r, rerr := filepath.EvalSymlinks(meta.Cwd); rerr == nil {
+				return r
+			}
 			return meta.Cwd
 		}
 	}
@@ -264,7 +294,36 @@ func (a *codexAgent) ParseTokensTail(path string) (string, session.TokenUsage, e
 	if offset > 0 {
 		reader.ReadString('\n') // discard partial line
 	}
-	return parseCodexLines(reader)
+	model, tokens, perr := parseCodexLines(reader)
+	if model == "" && offset > 0 {
+		// A single turn can emit >64KB of events, pushing the last
+		// turn_context out of the tail window — fall back to the first one.
+		model = readHeadModel(f)
+	}
+	return model, tokens, perr
+}
+
+// readHeadModel re-reads the start of a rollout file and returns the first
+// turn_context model, or "".
+func readHeadModel(f *os.File) string {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return ""
+	}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for i := 0; i < 50 && sc.Scan(); i++ {
+		var line codexLine
+		if json.Unmarshal(sc.Bytes(), &line) != nil || line.Type != "turn_context" {
+			continue
+		}
+		var tc struct {
+			Model string `json:"model"`
+		}
+		if json.Unmarshal(line.Payload, &tc) == nil && tc.Model != "" {
+			return tc.Model
+		}
+	}
+	return ""
 }
 
 func (a *codexAgent) ParseTokensFull(path string) (string, session.TokenUsage, error) {
@@ -336,12 +395,16 @@ func (a *codexAgent) CleanSessions(worktreePath string) (int, error) {
 		if err := os.Remove(s.Path); err != nil {
 			return removed, err
 		}
-		a.cwdCache.Delete(s.Path)
+		cwdCache.Delete(s.Path)
 		removed++
 	}
 	return removed, nil
 }
 
+// IsProcessRunning matches the session UUID against process command lines.
+// Only *resumed* sessions carry the UUID in argv — a fresh `codex` launch does
+// not, so this reports false negatives for new sessions (same limitation as
+// Claude's implementation).
 func (a *codexAgent) IsProcessRunning(sessionID string) bool {
 	if sessionID == "" {
 		return false
@@ -369,8 +432,13 @@ func formatSize(bytes int64) string {
 	}
 }
 
-// addToGitExclude appends ref to the worktree's git exclude file so the
-// injected context file never appears as an untracked change. Best-effort.
+// addToGitExclude appends ref to the repository's git exclude file
+// (info/exclude). Best-effort.
+//
+// NOTE: info/exclude is shared across all worktrees of a repo, so only
+// zen-owned names (like .zen/) belong here — never a name a contributor might
+// legitimately create, since the entry would hide it from git status
+// everywhere and outlive the review worktree.
 func addToGitExclude(worktreePath, ref string) {
 	out, err := runGit(worktreePath, "rev-parse", "--git-path", "info/exclude")
 	if err != nil {
@@ -384,12 +452,14 @@ func addToGitExclude(worktreePath, ref string) {
 		excludePath = filepath.Join(worktreePath, excludePath)
 	}
 
+	needsNewline := false
 	if data, err := os.ReadFile(excludePath); err == nil {
 		for _, l := range strings.Split(string(data), "\n") {
 			if strings.TrimSpace(l) == ref {
 				return // already excluded
 			}
 		}
+		needsNewline = len(data) > 0 && data[len(data)-1] != '\n'
 	}
 	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
 		return
@@ -399,6 +469,9 @@ func addToGitExclude(worktreePath, ref string) {
 		return
 	}
 	defer f.Close()
+	if needsNewline {
+		fmt.Fprintln(f)
+	}
 	fmt.Fprintf(f, "%s\n", ref)
 }
 

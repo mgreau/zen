@@ -25,8 +25,18 @@ func addAgentFlag(cmd *cobra.Command) {
 }
 
 // resolveAgent builds the agent for the current invocation, honouring --agent.
-func resolveAgent() agent.Agent {
-	return cfg.NewAgent(agentFlag)
+// An unrecognised --agent value is an error rather than a silent fallback.
+func resolveAgent() (agent.Agent, error) {
+	if kind := agent.Kind(cfg.AgentKind(agentFlag)); !kind.Valid() {
+		return nil, fmt.Errorf("invalid agent %q: must be \"claude\" or \"codex\"", kind)
+	}
+	return cfg.NewAgent(agentFlag), nil
+}
+
+// hasAgentSession reports whether the agent has any session for the worktree.
+func hasAgentSession(ag agent.Agent, worktreePath string) bool {
+	sessions, _ := ag.FindSessions(worktreePath)
+	return len(sessions) > 0
 }
 
 // ensureReviewPrompt installs the embedded /review-pr slash-command prompt into

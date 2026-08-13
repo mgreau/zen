@@ -21,10 +21,10 @@ func (a *claudeAgent) Bin() string { return a.bin }
 func (a *claudeAgent) StartCommand(prompt, model string) string {
 	cmd := a.bin
 	if model != "" {
-		cmd += fmt.Sprintf(" --model %s", model)
+		cmd += " --model " + shellQuote(model)
 	}
 	if prompt != "" {
-		cmd += fmt.Sprintf(" %q", prompt)
+		cmd += " " + shellQuote(prompt)
 	}
 	return cmd
 }
@@ -32,9 +32,9 @@ func (a *claudeAgent) StartCommand(prompt, model string) string {
 func (a *claudeAgent) ResumeCommand(sessionID, model string) string {
 	cmd := a.bin
 	if model != "" {
-		cmd += fmt.Sprintf(" --model %s", model)
+		cmd += " --model " + shellQuote(model)
 	}
-	return cmd + fmt.Sprintf(" --resume %s", sessionID)
+	return cmd + " --resume " + shellQuote(sessionID)
 }
 
 // ContextFile is CLAUDE.local.md so the repo's own CLAUDE.md is never touched.
@@ -49,8 +49,10 @@ func (a *claudeAgent) InjectContext(worktreePath, rendered string) (string, erro
 	return ref, nil
 }
 
-// ContextPresent is true once CLAUDE.local.md has been written. The repo's own
-// CLAUDE.md is a separate file and never satisfies this check.
+// ContextPresent is true once CLAUDE.local.md exists. The repo's own CLAUDE.md
+// is a separate file and never satisfies this check, but a repo that commits a
+// CLAUDE.local.md (unusual — the file is meant to be local) is treated as
+// already-injected.
 func (a *claudeAgent) ContextPresent(worktreePath string) bool {
 	_, err := os.Stat(filepath.Join(worktreePath, a.ContextFile()))
 	return err == nil

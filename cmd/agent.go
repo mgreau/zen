@@ -99,7 +99,10 @@ func runAgentStatus(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("listing worktrees: %w", err)
 		}
 
-		ag := resolveAgent()
+		ag, err := resolveAgent()
+		if err != nil {
+			return err
+		}
 		for _, wt := range wts {
 			sessions, _ := ag.FindSessions(wt.Path)
 			if len(sessions) == 0 {

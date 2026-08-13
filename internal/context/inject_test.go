@@ -1,13 +1,11 @@
 package context
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestRenderClaudeMD(t *testing.T) {
+func TestRender(t *testing.T) {
 	prCtx := PRContext{
 		Number:     42,
 		Title:      "Add user authentication",
@@ -24,9 +22,9 @@ func TestRenderClaudeMD(t *testing.T) {
 		},
 	}
 
-	out, err := RenderClaudeMD(prCtx)
+	out, err := Render(prCtx)
 	if err != nil {
-		t.Fatalf("RenderClaudeMD() error: %v", err)
+		t.Fatalf("Render() error: %v", err)
 	}
 
 	checks := []string{
@@ -55,7 +53,7 @@ func TestRenderClaudeMD(t *testing.T) {
 	}
 }
 
-func TestRenderClaudeMD_Fork(t *testing.T) {
+func TestRender_Fork(t *testing.T) {
 	prCtx := PRContext{
 		Number:       10,
 		Title:        "Fix typo",
@@ -68,9 +66,9 @@ func TestRenderClaudeMD_Fork(t *testing.T) {
 		ChangedFiles: []string{"README.md"},
 	}
 
-	out, err := RenderClaudeMD(prCtx)
+	out, err := Render(prCtx)
 	if err != nil {
-		t.Fatalf("RenderClaudeMD() error: %v", err)
+		t.Fatalf("Render() error: %v", err)
 	}
 
 	if !strings.Contains(out, "| **Fork** | Yes |") {
@@ -79,32 +77,5 @@ func TestRenderClaudeMD_Fork(t *testing.T) {
 
 	if !strings.Contains(out, "_No description provided._") {
 		t.Error("output should show placeholder when body is empty")
-	}
-}
-
-func TestWriteClaudeMD(t *testing.T) {
-	dir := t.TempDir()
-
-	prCtx := PRContext{
-		Number:       1,
-		Title:        "Test PR",
-		Author:       "tester",
-		URL:          "https://github.com/org/repo/pull/1",
-		HeadBranch:   "test-branch",
-		BaseBranch:   "main",
-		ChangedFiles: []string{"file.go"},
-	}
-
-	if err := WriteClaudeMD(dir, prCtx); err != nil {
-		t.Fatalf("WriteClaudeMD() error: %v", err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(dir, "CLAUDE.local.md"))
-	if err != nil {
-		t.Fatalf("reading CLAUDE.local.md: %v", err)
-	}
-
-	if !strings.Contains(string(data), "# PR Review: #1") {
-		t.Error("CLAUDE.local.md missing expected content")
 	}
 }

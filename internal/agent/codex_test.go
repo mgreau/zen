@@ -101,14 +101,33 @@ func TestCodexParseTokensTakesLatestCumulative(t *testing.T) {
 func TestCodexCommands(t *testing.T) {
 	ag := New(Codex, "codex")
 
-	if got := ag.StartCommand("/review-pr", "gpt-5-codex"); got != `codex -m gpt-5-codex "/review-pr"` {
+	if got := ag.StartCommand("/review-pr", "gpt-5-codex"); got != `codex -m 'gpt-5-codex' '/review-pr'` {
 		t.Errorf("StartCommand = %q", got)
 	}
 	if got := ag.StartCommand("", ""); got != "codex" {
 		t.Errorf("StartCommand(empty) = %q", got)
 	}
-	if got := ag.ResumeCommand("abc-123", "ignored"); got != "codex resume abc-123" {
+	if got := ag.ResumeCommand("abc-123", ""); got != "codex resume 'abc-123'" {
 		t.Errorf("ResumeCommand = %q", got)
+	}
+	// An explicit model override on resume is forwarded.
+	if got := ag.ResumeCommand("abc-123", "gpt-5"); got != "codex resume 'abc-123' -m 'gpt-5'" {
+		t.Errorf("ResumeCommand(model) = %q", got)
+	}
+}
+
+func TestCommandQuoting(t *testing.T) {
+	ag := New(Claude, "claude")
+
+	if got := ag.StartCommand("review this", "opus"); got != "claude --model 'opus' 'review this'" {
+		t.Errorf("StartCommand = %q", got)
+	}
+	if got := ag.ResumeCommand("abc-123", ""); got != "claude --resume 'abc-123'" {
+		t.Errorf("ResumeCommand = %q", got)
+	}
+	// $, backticks, and single quotes in the prompt must be inert in the shell.
+	if got := ag.StartCommand("don't run `id` or $(pwd)", ""); got != `claude 'don'\''t run `+"`id`"+` or $(pwd)'` {
+		t.Errorf("StartCommand(hostile prompt) = %q", got)
 	}
 }
 
