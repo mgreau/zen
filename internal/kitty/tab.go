@@ -6,6 +6,7 @@ package kitty
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 )
 
@@ -19,21 +20,23 @@ import (
 // If remote control is unavailable, it falls back to starting a new kitty
 // instance, detached from zen's process.
 func OpenTab(workDir, command string) error {
-	// Exec into the user's shell after the command finishes, so the window ends up
-	// in a real interactive shell (matching iTerm/Ghostty) instead of closing the
-	// instant the command exits — which would also hide errors like claude missing
-	// from PATH.
-	fullCmd := fmt.Sprintf(`%s; exec "$SHELL"`, command)
-
 	// Try remote control first: a new OS window from the running kitty instance.
-	rcCmd := exec.Command("kitty", "@", "launch", "--type=os-window", "--cwd", workDir, "/bin/sh", "-c", fullCmd)
+	// Runs the command through the user's own shell so it matches their normal
+	// session. --hold keeps the window open after the command exits, so a
+	// failure (e.g. claude missing from PATH) stays readable instead of
+	// flashing the window shut.
+	shellPath := os.Getenv("SHELL")
+	if shellPath == "" {
+		shellPath = "/bin/sh"
+	}
+	rcCmd := exec.Command("kitty", "@", "launch", "--type=os-window", "--hold", "--cwd", workDir, shellPath, "-c", command)
 	if err := rcCmd.Run(); err == nil {
 		return nil
 	}
 
 	// Fallback: a new kitty instance.
 	// This happens if zen isn't running inside kitty or remote control is disabled.
-	winCmd := exec.Command("kitty", "--detach", "--directory", workDir, "/bin/sh", "-c", fullCmd)
+	winCmd := exec.Command("kitty", "--hold", "--detach", "--directory", workDir, "/bin/sh", "-c", command)
 	out, err := winCmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("kitty: %w: %s", err, string(out))
