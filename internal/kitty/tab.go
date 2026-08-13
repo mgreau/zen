@@ -19,7 +19,11 @@ import (
 // If remote control is unavailable, it falls back to starting a new kitty
 // instance, detached from zen's process.
 func OpenTab(workDir, command string) error {
-	fullCmd := fmt.Sprintf("cd %q && %s", workDir, command)
+	// Exec into the user's shell after the command finishes, so the window ends up
+	// in a real interactive shell (matching iTerm/Ghostty) instead of closing the
+	// instant the command exits — which would also hide errors like claude missing
+	// from PATH.
+	fullCmd := fmt.Sprintf(`%s; exec "$SHELL"`, command)
 
 	// Try remote control first: a new OS window from the running kitty instance.
 	rcCmd := exec.Command("kitty", "@", "launch", "--type=os-window", "--cwd", workDir, "/bin/sh", "-c", fullCmd)
