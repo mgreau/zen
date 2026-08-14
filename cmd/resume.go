@@ -1,13 +1,16 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mgreau/zen/internal/agent"
+	"github.com/mgreau/zen/internal/migrate"
 	"github.com/mgreau/zen/internal/session"
 	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
@@ -21,6 +24,7 @@ var (
 	resumeList    bool
 	resumeNoITerm bool
 	resumeModel   string
+	resumeMigrate bool
 )
 
 // resumeWorktree handles the core resume logic for a matched worktree.
@@ -75,9 +79,17 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 		return nil
 	}
 
-	// No existing sessions — start a new agent session
+	// No existing sessions for this agent — offer to migrate the other
+	// agent's work before falling back to a fresh session.
 	if noSessions {
-		return openNewSession(wt, t, ag)
+		migrated, err := maybeMigrateSession(wt, ag)
+		if err != nil {
+			return err
+		}
+		if migrated == nil {
+			return openNewSession(wt, t, ag)
+		}
+		sessions = []session.Session{*migrated}
 	}
 
 	// Pick session
@@ -124,6 +136,64 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 
 	ui.LogSuccess(fmt.Sprintf("%s tab opened", t.Name()))
 	return nil
+}
+
+// maybeMigrateSession offers to carry the other agent's most recent session
+// over to ag when ag has none for the worktree. It returns the migrated
+// session, or nil when there is nothing to migrate or the user declined.
+// With --migrate the prompt is skipped.
+//
+// Directions differ by design: Codex ships its own Claude-session importer
+// (driven via app-server JSON-RPC), while Claude Code has none, so zen
+// translates the Codex rollout into a Claude session file itself.
+func maybeMigrateSession(wt worktree.Worktree, ag agent.Agent) (*session.Session, error) {
+	otherKind := agent.Claude
+	if ag.Kind() == agent.Claude {
+		otherKind = agent.Codex
+	}
+	other := cfg.NewAgent(string(otherKind))
+	otherSessions, err := other.FindSessions(wt.Path)
+	if err != nil || len(otherSessions) == 0 {
+		return nil, nil
+	}
+	src := otherSessions[0]
+
+	if !resumeMigrate {
+		fmt.Printf("No %s session for this worktree, but %d %s session(s) exist.\n", ag.Kind(), len(otherSessions), other.Kind())
+		fmt.Printf("Migrate the most recent one (%s, %s) to %s and resume it? [Y/n]: ", src.ModHuman, src.SizeStr, ag.Kind())
+		var resp string
+		fmt.Scanln(&resp)
+		resp = strings.ToLower(strings.TrimSpace(resp))
+		if resp == "n" || resp == "no" {
+			return nil, nil
+		}
+	}
+
+	ui.LogInfo(fmt.Sprintf("Migrating %s session %s to %s...", other.Kind(), src.ID, ag.Kind()))
+
+	var newID string
+	switch ag.Kind() {
+	case agent.Codex:
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		newID, err = migrate.ClaudeToCodex(ctx, src.Path, ag.Bin())
+	default:
+		newID, err = migrate.CodexToClaude(src.Path, wt.Path)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("migrating %s session to %s: %w", other.Kind(), ag.Kind(), err)
+	}
+	ui.LogSuccess(fmt.Sprintf("Migrated to %s session %s", ag.Kind(), newID))
+
+	// Re-discover so the resume flow gets real file metadata.
+	if newSessions, err := ag.FindSessions(wt.Path); err == nil {
+		for _, s := range newSessions {
+			if s.ID == newID {
+				return &s, nil
+			}
+		}
+	}
+	return &session.Session{ID: newID}, nil
 }
 
 // openNewSession starts a new agent session in a new terminal tab.
@@ -236,6 +306,7 @@ func addResumeFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVarP(&resumeList, "list", "l", false, "List available sessions without resuming")
 	cmd.Flags().BoolVar(&resumeNoITerm, "no-terminal", false, "Print the resume command instead of opening terminal")
 	cmd.Flags().StringVarP(&resumeModel, "model", "m", "", "Model to use (agent-specific, e.g. opus or gpt-5-codex)")
+	cmd.Flags().BoolVar(&resumeMigrate, "migrate", false, "When the agent has no session here, migrate the other agent's most recent one without prompting")
 	addAgentFlag(cmd)
 }
 

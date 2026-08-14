@@ -8,13 +8,15 @@ import (
 )
 
 func TestPathToClaudeProject(t *testing.T) {
+	// Non-existent paths cannot be symlink-resolved and are munged literally.
 	tests := []struct {
 		path string
 		want string
 	}{
 		{"/Users/maxime/git/mono-pr-123", "-Users-maxime-git-mono-pr-123"},
 		{"/Users/alice/code/repo", "-Users-alice-code-repo"},
-		{"/tmp/test", "-tmp-test"},
+		{"/Users/alice/code/my_feature.v2", "-Users-alice-code-my-feature-v2"},
+		{"/Users/alice/code/repo worktree", "-Users-alice-code-repo-worktree"},
 	}
 
 	for _, tt := range tests {
@@ -24,6 +26,24 @@ func TestPathToClaudeProject(t *testing.T) {
 				t.Errorf("pathToClaudeProject(%q) = %q, want %q", tt.path, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPathToClaudeProjectResolvesSymlinks(t *testing.T) {
+	// Claude Code munges the symlink-resolved path (on macOS, a session in
+	// /tmp/foo lives under -private-tmp-foo). Reproduce with our own link.
+	tmp := t.TempDir()
+	real := filepath.Join(tmp, "real")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(tmp, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	if got, want := pathToClaudeProject(link), pathToClaudeProject(real); got != want {
+		t.Errorf("pathToClaudeProject(%q) = %q, want resolved form %q", link, got, want)
 	}
 }
 

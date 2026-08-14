@@ -66,18 +66,41 @@ func FindSessions(worktreePath string) ([]Session, error) {
 // ProjectDir returns the Claude projects directory for a worktree path.
 // Returns empty string if the directory doesn't exist.
 func ProjectDir(worktreePath string) string {
-	dir := filepath.Join(os.Getenv("HOME"), ".claude", "projects", pathToClaudeProject(worktreePath))
+	dir := ProjectDirPath(worktreePath)
 	if _, err := os.Stat(dir); err != nil {
 		return ""
 	}
 	return dir
 }
 
+// ProjectDirPath returns the Claude projects directory for a worktree path
+// whether or not it exists on disk, so callers can create it (e.g. when
+// migrating a session from another agent).
+func ProjectDirPath(worktreePath string) string {
+	return filepath.Join(os.Getenv("HOME"), ".claude", "projects", pathToClaudeProject(worktreePath))
+}
+
 // pathToClaudeProject converts a worktree path to the Claude projects directory name.
+// Claude Code derives the name from the symlink-resolved path with every
+// non-alphanumeric character replaced by '-' (not just '/' and '.'): on macOS
+// /tmp/foo becomes -private-tmp-foo, and my_branch becomes my-branch. A
+// non-existent path cannot be resolved and is munged literally.
 // /Users/maxime.greau/git/cgr/repo-mono/mono-pr-123
 // -> -Users-maxime-greau-git-cgr-repo-mono-mono-pr-123
 func pathToClaudeProject(path string) string {
-	return strings.NewReplacer("/", "-", ".", "-").Replace(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	var b strings.Builder
+	b.Grow(len(path))
+	for _, r := range path {
+		if ('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || ('0' <= r && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
 }
 
 func formatSize(bytes int64) string {
