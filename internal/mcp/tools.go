@@ -12,6 +12,7 @@ import (
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/mgreau/zen/internal/agent"
 	ghpkg "github.com/mgreau/zen/internal/github"
 	"github.com/mgreau/zen/internal/reconciler"
 	"github.com/mgreau/zen/internal/review"
@@ -119,6 +120,7 @@ func (s *Server) handlePRFiles(ctx context.Context, req mcpgo.CallToolRequest) (
 
 // agentStatusEntry holds one row of agent status output for MCP.
 type agentStatusEntry struct {
+	Agent        string `json:"agent"`
 	Worktree     string `json:"worktree"`
 	SessionID    string `json:"session_id"`
 	Status       string `json:"status"`
@@ -129,40 +131,56 @@ type agentStatusEntry struct {
 	LastActive   string `json:"last_active"`
 }
 
-// handleAgentStatus lists Claude sessions across worktrees.
-// Uses cached session snapshot when available, falls back to real-time scanning.
+// handleAgentStatus lists every agent's sessions across worktrees. The daemon
+// snapshot only tracks the configured agent, so it substitutes for that
+// agent's scan only; other agents are always scanned in real time.
 func (s *Server) handleAgentStatus(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	runningOnly := req.GetBool("running_only", false)
 
-	var entries []agentStatusEntry
+	kinds := []agent.Kind{agent.Claude, agent.Codex}
+	configured := agent.Kind(s.cfg.AgentKind(""))
 
-	// Try cached snapshot first — only use if it contains paths matching our config
+	// The snapshot is only usable if it is fresh and contains paths matching our config
 	snapshot, _ := reconciler.ReadSessionSnapshot()
 	basePaths := s.cfg.AllBasePaths()
-	if reconciler.IsSnapshotFresh(snapshot, 60*time.Second) && reconciler.SnapshotMatchesConfig(snapshot, basePaths) {
-		for _, ss := range snapshot.Sessions {
-			if runningOnly && ss.Status == "stopped" {
-				continue
+	cacheFresh := reconciler.IsSnapshotFresh(snapshot, 60*time.Second) &&
+		reconciler.SnapshotMatchesConfig(snapshot, basePaths)
+
+	var wts []worktree.Worktree
+	for _, k := range kinds {
+		if !cacheFresh || k != configured {
+			var err error
+			wts, err = worktree.ListAll(s.cfg)
+			if err != nil {
+				return mcpgo.NewToolResultError("failed to list worktrees: " + err.Error()), nil
 			}
-			entries = append(entries, agentStatusEntry{
-				Worktree:     ss.WorktreePath,
-				SessionID:    ss.SessionID,
-				Status:       ss.Status,
-				Size:         ss.Size,
-				Model:        ss.Model,
-				InputTokens:  ss.InputTokens,
-				OutputTokens: ss.OutputTokens,
-				LastActive:   session.FormatAge(time.Unix(ss.LastModified, 0)),
-			})
+			break
 		}
-	} else {
-		// Fall back to real-time scanning
-		wts, err := worktree.ListAll(s.cfg)
-		if err != nil {
-			return mcpgo.NewToolResultError("failed to list worktrees: " + err.Error()), nil
+	}
+
+	var entries []agentStatusEntry
+	for _, k := range kinds {
+		if cacheFresh && k == configured {
+			for _, ss := range snapshot.Sessions {
+				if runningOnly && ss.Status == "stopped" {
+					continue
+				}
+				entries = append(entries, agentStatusEntry{
+					Agent:        string(k),
+					Worktree:     ss.WorktreePath,
+					SessionID:    ss.SessionID,
+					Status:       ss.Status,
+					Size:         ss.Size,
+					Model:        ss.Model,
+					InputTokens:  ss.InputTokens,
+					OutputTokens: ss.OutputTokens,
+					LastActive:   session.FormatAge(time.Unix(ss.LastModified, 0)),
+				})
+			}
+			continue
 		}
 
-		ag := s.cfg.NewAgent("")
+		ag := s.cfg.NewAgent(string(k))
 		for _, wt := range wts {
 			sessions, _ := ag.FindSessions(wt.Path)
 			if len(sessions) == 0 {
@@ -185,6 +203,7 @@ func (s *Server) handleAgentStatus(ctx context.Context, req mcpgo.CallToolReques
 			lastActive := time.Unix(sess.Modified, 0)
 
 			entries = append(entries, agentStatusEntry{
+				Agent:        string(k),
 				Worktree:     wt.Path,
 				SessionID:    sess.ID,
 				Status:       status,

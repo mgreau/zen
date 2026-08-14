@@ -88,7 +88,7 @@ func (s *Server) registerTools() {
 
 	s.server.AddTool(
 		mcpgo.NewTool("zen_agent_status",
-			mcpgo.WithDescription("List Claude sessions across worktrees with token usage and running status"),
+			mcpgo.WithDescription("List agent sessions (Claude Code and Codex) across worktrees with token usage and running status"),
 			mcpgo.WithBoolean("running_only", mcpgo.Description("Only show running sessions")),
 			mcpgo.WithReadOnlyHintAnnotation(true),
 			mcpgo.WithDestructiveHintAnnotation(false),

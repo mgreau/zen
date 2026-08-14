@@ -101,6 +101,8 @@ zen never overwrites a repo's committed `AGENTS.md`; if one exists, the context 
 
 Note that the background daemon always uses the **configured** agent: if you run `zen review 42 --agent codex` while `agent: claude` is set in config, the daemon's context injection and session tracking for that worktree still act as Claude. Set `agent:` in config when switching agents for more than a one-off session.
 
+`zen agent status` (and the `zen_agent_status` MCP tool) is the exception to single-agent behaviour: it lists sessions from **all** agents in one table with an AGENT column; pass `--agent claude|codex` to narrow it. "waiting" detection comes from the daemon's snapshot and is only available for the configured agent — other agents' sessions show as running/stopped.
+
 ## Terminal
 
 `terminal: iterm` (default) or `terminal: ghostty`.

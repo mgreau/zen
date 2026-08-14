@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/reconciler"
 	"github.com/mgreau/zen/internal/session"
 	"github.com/mgreau/zen/internal/ui"
@@ -36,7 +37,9 @@ all worktrees, including token usage, running status, and last activity time.`,
 func init() {
 	agentStatusCmd.Flags().BoolVar(&agentRunning, "running", false, "Only show running sessions")
 	agentStatusCmd.Flags().BoolVar(&agentFull, "full", false, "Scan full session files for accurate token totals (slower)")
-	addAgentFlag(agentStatusCmd)
+	// Unlike the launch commands, status defaults to every agent, not the
+	// configured one — --agent narrows the listing.
+	agentStatusCmd.Flags().StringVar(&agentFlag, "agent", "", "Only show sessions for this agent: claude or codex (default: all)")
 
 	agentCmd.AddCommand(agentStatusCmd)
 	rootCmd.AddCommand(agentCmd)
@@ -44,6 +47,7 @@ func init() {
 
 // agentStatusEntry holds one row of the agent status output.
 type agentStatusEntry struct {
+	Agent           string `json:"agent"`
 	Worktree        string `json:"worktree"`
 	SessionID       string `json:"session_id"`
 	Status          string `json:"status"`
@@ -58,51 +62,70 @@ type agentStatusEntry struct {
 func runAgentStatus(cmd *cobra.Command, args []string) error {
 	home := homeDir()
 
+	// Which agents to list: an explicit --agent narrows to one, default is all.
+	kinds := []agent.Kind{agent.Claude, agent.Codex}
+	if agentFlag != "" {
+		k := agent.Kind(agentFlag)
+		if !k.Valid() {
+			return fmt.Errorf("invalid agent %q: must be \"claude\" or \"codex\"", k)
+		}
+		kinds = []agent.Kind{k}
+	}
+
+	// The daemon snapshot only tracks the configured agent, so it can only
+	// substitute for that agent's scan — and never when --full is requested.
+	configured := agent.Kind(cfg.AgentKind(""))
+	snapshot, _ := reconciler.ReadSessionSnapshot()
+	cacheFresh := !agentFull && reconciler.IsSnapshotFresh(snapshot, 60*time.Second)
+
+	var wts []worktree.Worktree
+	for _, k := range kinds {
+		if !cacheFresh || k != configured {
+			var err error
+			wts, err = worktree.ListAll(cfg)
+			if err != nil {
+				return fmt.Errorf("listing worktrees: %w", err)
+			}
+			break
+		}
+	}
+
 	var entries []agentStatusEntry
 	var totalRunning, totalWaiting, totalStopped int
 
-	// Try cached snapshot first (unless --full requests accurate totals)
-	snapshot, _ := reconciler.ReadSessionSnapshot()
-	usedCache := !agentFull && reconciler.IsSnapshotFresh(snapshot, 60*time.Second)
+	for _, k := range kinds {
+		if cacheFresh && k == configured {
+			for _, s := range snapshot.Sessions {
+				if agentRunning && s.Status == "stopped" {
+					continue
+				}
 
-	if usedCache {
-		for _, s := range snapshot.Sessions {
-			if agentRunning && s.Status == "stopped" {
-				continue
+				switch s.Status {
+				case "running":
+					totalRunning++
+				case "waiting":
+					totalWaiting++
+				default:
+					totalStopped++
+				}
+
+				entries = append(entries, agentStatusEntry{
+					Agent:           string(k),
+					Worktree:        ui.ShortenHome(s.WorktreePath, home),
+					SessionID:       s.SessionID,
+					Status:          s.Status,
+					Size:            s.Size,
+					Model:           s.Model,
+					InputTokens:     s.InputTokens,
+					OutputTokens:    s.OutputTokens,
+					LastActive:      session.FormatAge(time.Unix(s.LastModified, 0)),
+					lastActiveEpoch: s.LastModified,
+				})
 			}
-
-			switch s.Status {
-			case "running":
-				totalRunning++
-			case "waiting":
-				totalWaiting++
-			default:
-				totalStopped++
-			}
-
-			entries = append(entries, agentStatusEntry{
-				Worktree:        ui.ShortenHome(s.WorktreePath, home),
-				SessionID:       s.SessionID,
-				Status:          s.Status,
-				Size:            s.Size,
-				Model:           s.Model,
-				InputTokens:     s.InputTokens,
-				OutputTokens:    s.OutputTokens,
-				LastActive:      session.FormatAge(time.Unix(s.LastModified, 0)),
-				lastActiveEpoch: s.LastModified,
-			})
-		}
-	} else {
-		// Fall back to real-time scanning
-		wts, err := worktree.ListAll(cfg)
-		if err != nil {
-			return fmt.Errorf("listing worktrees: %w", err)
+			continue
 		}
 
-		ag, err := resolveAgent()
-		if err != nil {
-			return err
-		}
+		ag := cfg.NewAgent(string(k))
 		for _, wt := range wts {
 			sessions, _ := ag.FindSessions(wt.Path)
 			if len(sessions) == 0 {
@@ -136,6 +159,7 @@ func runAgentStatus(cmd *cobra.Command, args []string) error {
 			lastActive := time.Unix(s.Modified, 0)
 
 			entries = append(entries, agentStatusEntry{
+				Agent:           string(k),
 				Worktree:        ui.ShortenHome(wt.Path, home),
 				SessionID:       s.ID,
 				Status:          status,
@@ -183,8 +207,8 @@ func runAgentStatus(cmd *cobra.Command, args []string) error {
 
 	// Use tabwriter only for plain-text columns, then append colored status after
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(w, "%-7s  %-*s  %-7s  %-6s  %-12s  %s\n", "STATUS", maxWT, "WORKTREE", "SIZE", "MODEL", "TOKENS(I/O)", "LAST ACTIVE")
-	fmt.Fprintf(w, "%-7s  %-*s  %-7s  %-6s  %-12s  %s\n", "───────", maxWT, strings.Repeat("─", maxWT), "───────", "──────", "────────────", "───────────")
+	fmt.Fprintf(w, "%-7s  %-6s  %-*s  %-7s  %-6s  %-12s  %s\n", "STATUS", "AGENT", maxWT, "WORKTREE", "SIZE", "MODEL", "TOKENS(I/O)", "LAST ACTIVE")
+	fmt.Fprintf(w, "%-7s  %-6s  %-*s  %-7s  %-6s  %-12s  %s\n", "───────", "──────", maxWT, strings.Repeat("─", maxWT), "───────", "──────", "────────────", "───────────")
 
 	for _, e := range entries {
 		statusStr := fmt.Sprintf("%-7s", e.Status)
@@ -200,8 +224,8 @@ func runAgentStatus(cmd *cobra.Command, args []string) error {
 		tokenStr := fmt.Sprintf("%s/%s", e.InputTokens, e.OutputTokens)
 		name := worktreeDisplayName(e.Worktree)
 
-		fmt.Fprintf(w, "%s  %-*s  %-7s  %-6s  %-12s  %s\n",
-			statusStr, maxWT, name, e.Size, e.Model, tokenStr, ui.DimText(e.LastActive))
+		fmt.Fprintf(w, "%s  %-6s  %-*s  %-7s  %-6s  %-12s  %s\n",
+			statusStr, e.Agent, maxWT, name, e.Size, e.Model, tokenStr, ui.DimText(e.LastActive))
 	}
 	w.Flush()
 
