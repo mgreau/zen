@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 )
 
@@ -15,13 +16,27 @@ func zenBin() string {
 	return "zen"
 }
 
-// Send sends a macOS notification using osascript.
+// Send sends a desktop notification.
+// On Linux it uses notify-send (libnotify); elsewhere it uses macOS osascript.
 func Send(title, message, subtitle string) error {
+	if runtime.GOOS == "linux" {
+		return exec.Command("notify-send", linuxNotifyArgs(title, message, subtitle)...).Run()
+	}
 	script := fmt.Sprintf(`display notification %q with title %q`, message, title)
 	if subtitle != "" {
 		script = fmt.Sprintf(`display notification %q with title %q subtitle %q`, message, title, subtitle)
 	}
 	return exec.Command("osascript", "-e", script).Run()
+}
+
+// linuxNotifyArgs builds the notify-send arguments. notify-send has no
+// subtitle concept, so the subtitle goes on a second line of the body.
+func linuxNotifyArgs(title, message, subtitle string) []string {
+	body := message
+	if subtitle != "" {
+		body += "\n" + subtitle
+	}
+	return []string{"--app-name=zen", title, body}
 }
 
 // terminalNotifierPath returns the path to terminal-notifier if installed.
@@ -31,8 +46,9 @@ func terminalNotifierPath() string {
 }
 
 // SendWithAction sends a notification with an optional click action.
-// If terminal-notifier is installed, clicking the notification runs executeOnClick.
-// Otherwise falls back to osascript with the command appended to the subtitle.
+// If terminal-notifier is installed (macOS only), clicking the notification
+// runs executeOnClick. Otherwise falls back to Send with the command appended
+// to the subtitle so it stays visible.
 func SendWithAction(title, message, subtitle, executeOnClick string) error {
 	tn := terminalNotifierPath()
 	if tn != "" && executeOnClick != "" {
@@ -53,7 +69,6 @@ func SendWithAction(title, message, subtitle, executeOnClick string) error {
 	}
 	return Send(title, message, subtitle)
 }
-
 
 // PRReview notifies about a new PR review request.
 func PRReview(prNumber int, prTitle, author, repo string) error {

@@ -171,6 +171,52 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadTerminal(t *testing.T) {
+	tests := []struct {
+		name     string
+		terminal string
+		want     string
+		wantErr  bool
+	}{
+		{"default is iterm", "", "iterm", false},
+		{"iterm", "iterm", "iterm", false},
+		{"ghostty", "ghostty", "ghostty", false},
+		{"kitty", "kitty", "kitty", false},
+		{"invalid", "konsole", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			t.Setenv("HOME", tmpDir)
+
+			zenDir := filepath.Join(tmpDir, ".zen")
+			os.MkdirAll(zenDir, 0o755)
+
+			yamlContent := `repos:
+  mono:
+    full_name: chainguard-dev/mono
+    base_path: /tmp/mono
+`
+			if tt.terminal != "" {
+				yamlContent += "terminal: " + tt.terminal + "\n"
+			}
+			os.WriteFile(filepath.Join(zenDir, "config.yaml"), []byte(yamlContent), 0o644)
+
+			cfg, err := Load()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Load() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if got := cfg.GetTerminal(); got != tt.want {
+				t.Errorf("GetTerminal() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadMissingConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
