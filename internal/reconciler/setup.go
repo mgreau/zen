@@ -87,7 +87,7 @@ func (r *SetupReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 	fullRepo := r.cfg.RepoFullName(repo)
 
 	// Step 1: Ensure worktree exists (retryable on failure)
-	if err := r.ensureWorktree(originPath, worktreePath, worktreeName, prNumber); err != nil {
+	if err := r.ensureWorktree(originPath, fullRepo, worktreePath, worktreeName, prNumber); err != nil {
 		return fmt.Errorf("ensureWorktree: %w", err)
 	}
 
@@ -106,7 +106,7 @@ func (r *SetupReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 	return nil
 }
 
-func (r *SetupReconciler) ensureWorktree(originPath, worktreePath, worktreeName string, prNumber int) error {
+func (r *SetupReconciler) ensureWorktree(originPath, fullRepo, worktreePath, worktreeName string, prNumber int) error {
 	if _, err := os.Stat(worktreePath); err == nil {
 		return nil // already exists
 	}
@@ -119,8 +119,9 @@ func (r *SetupReconciler) ensureWorktree(originPath, worktreePath, worktreeName 
 		return nil
 	}
 
+	remote := wt.RemoteForRepo(originPath, fullRepo)
 	fetchRef := fmt.Sprintf("+pull/%d/head:pr-%d", prNumber, prNumber)
-	fetchCmd := exec.Command("git", "fetch", "origin", fetchRef)
+	fetchCmd := exec.Command("git", "fetch", remote, fetchRef)
 	fetchCmd.Dir = originPath
 	if out, err := fetchCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git fetch: %w: %s", err, string(out))
