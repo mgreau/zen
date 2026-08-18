@@ -220,7 +220,7 @@ When the selected agent has no session for the worktree but the other agent does
 - **Claude → Codex** uses Codex's own importer (driven over `codex app-server`), so the thread is a first-class Codex session. Already-imported sessions are detected via Codex's import ledger and resumed directly. Codex only detects recent sessions (last 30 days, ~50 most recent).
 - **Codex → Claude** translates the rollout into a Claude session file: text and shell commands carry over (shell calls become `Bash` tool history, other tools become annotated text); Codex's encrypted reasoning cannot be migrated. The session opens with a note that it was migrated.
 
-Both directions are lossy where the agents' formats don't overlap — treat the migrated session as carried-over context, not a bit-perfect transcript.
+Both directions are lossy where the agents' formats don't overlap — treat the migrated session as carried-over context, not a bit-perfect transcript. Full mechanics in [docs/session-migration.md](docs/session-migration.md).
 
 Full reference (poll intervals, terminal selection, branch prefix, multi-repo disambiguation, state file paths) in [docs/configuration.md](docs/configuration.md).
 
