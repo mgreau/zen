@@ -21,6 +21,7 @@ import (
 	ghpkg "github.com/mgreau/zen/internal/github"
 	"github.com/mgreau/zen/internal/notify"
 	"github.com/mgreau/zen/internal/reconciler"
+	slackpkg "github.com/mgreau/zen/internal/slack"
 	"github.com/mgreau/zen/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -220,6 +221,12 @@ func watchStatus() error {
 	} else {
 		fmt.Println("Auto-spawn: disabled (no authors configured)")
 	}
+
+	if cfg.Slack.Enabled {
+		fmt.Printf("Slack watcher: enabled (emoji: :%s:)\n", cfg.Slack.GetEmoji())
+	} else {
+		fmt.Println("Slack watcher: disabled")
+	}
 	fmt.Println()
 	return nil
 }
@@ -265,14 +272,43 @@ func watchDaemon() error {
 	// Create tagged contexts so dispatcher logs identify which queue they belong to
 	setupCtx := clog.WithLogger(ctx, clog.FromContext(ctx).With("queue", "setup"))
 	cleanupCtx := clog.WithLogger(ctx, clog.FromContext(ctx).With("queue", "cleanup"))
+	slackCtx := clog.WithLogger(ctx, clog.FromContext(ctx).With("queue", "slack"))
 
 	// Create workqueues and reconcilers
 	setupQueue := inmem.NewWorkQueue(10)
 	cleanupQueue := inmem.NewWorkQueue(10)
+	slackQueue := inmem.NewWorkQueue(10)
 	setupRec := reconciler.NewSetupReconciler(cfg)
 	cleanupRec := reconciler.NewCleanupReconciler(cfg)
 
 	seenPRs := loadSeenPRs()
+
+	// Slack task watcher (opt-in): polls for the user's own emoji reactions
+	// and spins up a feature worktree + live agent session per flagged
+	// thread. Disabled unless slack.enabled is true AND ZEN_SLACK_TOKEN is set.
+	slackEnabled := cfg.Slack.Enabled
+	var slackClient *slackpkg.Client
+	var slackRec *reconciler.SlackReconciler
+	if slackEnabled {
+		token := os.Getenv("ZEN_SLACK_TOKEN")
+		if token == "" {
+			fmt.Printf("[%s] Slack watcher disabled: slack.enabled is true but ZEN_SLACK_TOKEN is not set\n", time.Now().Format(time.RFC3339))
+			slackEnabled = false
+		} else {
+			slackClient = slackpkg.NewClient(token)
+			authCtx, authCancel := context.WithTimeout(ctx, 10*time.Second)
+			selfUserID, err := slackClient.AuthTest(authCtx)
+			authCancel()
+			if err != nil {
+				fmt.Printf("[%s] Slack watcher disabled: auth.test failed: %v\n", time.Now().Format(time.RFC3339), err)
+				slackEnabled = false
+			} else {
+				slackRec = reconciler.NewSlackReconciler(cfg, slackClient, selfUserID)
+				reconciler.SlackReadyHook = slackRec.NotifyReady
+			}
+		}
+	}
+	slackSeen := loadSeenSlack()
 
 	pollTicker := time.NewTicker(pollInterval)
 	defer pollTicker.Stop()
@@ -297,8 +333,22 @@ func watchDaemon() error {
 		digestC = digestTicker.C
 	}
 
+	// Slack poll ticker — only active when the Slack watcher is enabled
+	var slackC <-chan time.Time
+	if slackEnabled {
+		slackTicker := time.NewTicker(cfg.Slack.PollIntervalDuration())
+		defer slackTicker.Stop()
+		slackC = slackTicker.C
+	}
+
 	// Initial poll and session scan
 	pollOnce(ctx, seenPRs, setupQueue, setupRec)
+	if slackEnabled {
+		pollSlackOnce(ctx, slackClient, slackSeen, slackQueue)
+		if err := slackRec.PruneDone(ctx); err != nil {
+			fmt.Printf("[%s] Slack prune error: %v\n", time.Now().Format(time.RFC3339), err)
+		}
+	}
 	reconciler.ScanSessions(cfg, 10*time.Second)
 
 	for {
@@ -312,8 +362,11 @@ func watchDaemon() error {
 			rotateLogIfNeeded()
 
 		case <-pollTicker.C:
-			reloadConfig(setupRec, cleanupRec, pollTicker)
+			reloadConfig(setupRec, cleanupRec, slackRec, pollTicker)
 			pollOnce(ctx, seenPRs, setupQueue, setupRec)
+
+		case <-slackC:
+			pollSlackOnce(ctx, slackClient, slackSeen, slackQueue)
 
 		case <-dispatchTicker.C:
 			if err := dispatcher.HandleAsync(setupCtx, setupQueue, concurrency, concurrency, setupRec.Reconcile, maxRetries)(); err != nil {
@@ -322,12 +375,22 @@ func watchDaemon() error {
 			if err := dispatcher.HandleAsync(cleanupCtx, cleanupQueue, 1, 1, cleanupRec.Reconcile, 3)(); err != nil {
 				fmt.Printf("[%s] Cleanup dispatch error: %v\n", time.Now().Format(time.RFC3339), err)
 			}
+			if slackEnabled {
+				if err := dispatcher.HandleAsync(slackCtx, slackQueue, concurrency, concurrency, slackRec.Reconcile, maxRetries)(); err != nil {
+					fmt.Printf("[%s] Slack dispatch error: %v\n", time.Now().Format(time.RFC3339), err)
+				}
+			}
 
 		case <-sessionTicker.C:
 			reconciler.ScanSessions(cfg, 10*time.Second)
 
 		case <-cleanupTicker.C:
 			reconciler.ScanMergedPRs(ctx, cfg, cleanupQueue, cfg.Watch.GetCleanupAfterDays())
+			if slackEnabled {
+				if err := slackRec.PruneDone(ctx); err != nil {
+					fmt.Printf("[%s] Slack prune error: %v\n", time.Now().Format(time.RFC3339), err)
+				}
+			}
 
 		case <-digestC:
 			reconciler.SendDigest(cfg)
@@ -337,7 +400,8 @@ func watchDaemon() error {
 
 // reloadConfig re-reads ~/.zen/config.yaml and updates the global cfg
 // and reconcilers. If the poll interval changed, the ticker is reset.
-func reloadConfig(setupRec *reconciler.SetupReconciler, cleanupRec *reconciler.CleanupReconciler, pollTicker *time.Ticker) {
+// slackRec is nil when the Slack watcher isn't running.
+func reloadConfig(setupRec *reconciler.SetupReconciler, cleanupRec *reconciler.CleanupReconciler, slackRec *reconciler.SlackReconciler, pollTicker *time.Ticker) {
 	newCfg, err := config.Load()
 	if err != nil {
 		fmt.Printf("[%s] Config reload failed: %v\n", time.Now().Format(time.RFC3339), err)
@@ -367,6 +431,9 @@ func reloadConfig(setupRec *reconciler.SetupReconciler, cleanupRec *reconciler.C
 	cfg = newCfg
 	setupRec.SetConfig(newCfg)
 	cleanupRec.SetConfig(newCfg)
+	if slackRec != nil {
+		slackRec.SetConfig(newCfg)
+	}
 }
 
 type checkState struct {
@@ -438,6 +505,81 @@ func pollOnce(ctx context.Context, seenPRs map[string]bool, queue workqueue.Inte
 	}
 
 	saveState(seenPRs, len(reviews))
+}
+
+func slackSeenFile() string {
+	return filepath.Join(config.StateDir(), "slack_seen.json")
+}
+
+type slackSeenState struct {
+	Timestamp string   `json:"timestamp"`
+	SeenKeys  []string `json:"seen_keys"`
+}
+
+func loadSeenSlack() map[string]bool {
+	data, err := os.ReadFile(slackSeenFile())
+	if err != nil {
+		return make(map[string]bool)
+	}
+	var state slackSeenState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return make(map[string]bool)
+	}
+	m := make(map[string]bool)
+	for _, k := range state.SeenKeys {
+		m[k] = true
+	}
+	return m
+}
+
+func saveSeenSlack(seen map[string]bool) {
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	state := slackSeenState{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		SeenKeys:  keys,
+	}
+	data, _ := json.MarshalIndent(state, "", "  ")
+	os.WriteFile(slackSeenFile(), data, 0o644)
+}
+
+// pollSlackOnce checks for new instances of the configured emoji reaction
+// on the user's own messages, acks each new one in-thread, and queues it
+// for SlackReconciler to turn into a worktree + live agent session.
+func pollSlackOnce(ctx context.Context, client *slackpkg.Client, seen map[string]bool, queue workqueue.Interface) {
+	emoji := cfg.Slack.GetEmoji()
+	hits, err := client.ListReactions(ctx, emoji, 5)
+	if err != nil {
+		fmt.Printf("[%s] Error polling Slack reactions: %v\n", time.Now().Format(time.RFC3339), err)
+		return
+	}
+
+	for _, hit := range hits {
+		key := reconciler.MakeSlackKey(hit.ChannelID, hit.MessageTS)
+		if seen[key] {
+			continue
+		}
+
+		fmt.Printf("[%s] New :%s: reaction: %s\n", time.Now().Format(time.RFC3339), emoji, key)
+
+		if ack := cfg.Slack.GetAckReaction(); ack != "" {
+			if err := client.AddReaction(ctx, hit.ChannelID, hit.MessageTS, ack); err != nil {
+				fmt.Printf("[%s] Warning: failed to add ack reaction to %s: %v\n", time.Now().Format(time.RFC3339), key, err)
+			}
+		}
+
+		if err := queue.Queue(ctx, key, workqueue.Options{Priority: 1}); err != nil {
+			fmt.Printf("[%s] Error queuing Slack task %s: %v\n", time.Now().Format(time.RFC3339), key, err)
+		} else {
+			fmt.Printf("[%s] Queued Slack task %s\n", time.Now().Format(time.RFC3339), key)
+		}
+
+		seen[key] = true
+	}
+
+	saveSeenSlack(seen)
 }
 
 const maxLogSize = 10 * 1024 * 1024 // 10 MB

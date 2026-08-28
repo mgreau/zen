@@ -55,6 +55,14 @@ watch:
   cleanup_after_days: 5         # Days after merge before removing worktree
   concurrency: 2                # Parallel worktree setups
   max_retries: 5                # Max retry attempts for git failures
+
+# Slack task watcher (opt-in, off by default) — see "Slack task watcher" below.
+slack:
+  enabled: true
+  emoji: claudecode      # reaction name (no colons), default "claudecode"
+  default_repo: mono     # short repo name worktrees are created in
+  poll_interval: "5m"
+  ack_reaction: eyes      # reaction added on pickup, default "eyes"
 ```
 
 The daemon re-reads `config.yaml` on every poll tick. Changes to `poll_interval`, `authors`, `repos`, and other settings take effect without restarting.
@@ -125,6 +133,20 @@ from inside kitty with `allow_remote_control yes` set in `kitty.conf` (or a
 socket configured via `listen_on`), the window is opened from the running
 kitty instance; otherwise zen starts a separate kitty instance per session.
 
+## Slack task watcher
+
+An opt-in daemon loop that polls for the user's own emoji reaction (`slack.emoji`, default `claudecode`) via `reactions.list`, then for each new hit: adds an ack reaction in-thread (`slack.ack_reaction`, default `eyes`), fetches the thread, creates a feature worktree in `slack.default_repo` from `origin/main`, and immediately launches the agent in a terminal tab with the thread as the initial prompt — the launched session does all the "figure out what to do" work, not the daemon. Unlike the PR-review flow, this does open a terminal tab automatically: a Slack reaction is a deliberate, comparatively rare signal, not the high-volume PR-review firehose.
+
+When that worktree's session later goes idle ("waiting", the same signal that drives the desktop `notify.SessionWaiting`), the daemon also sends a Slack DM to the user with the worktree name, resume command, and a link back to the original thread.
+
+Setup:
+
+1. `slack.enabled: true` in config, plus `slack.default_repo` (required — no hardcoded default).
+2. Create a Slack app (a dedicated personal one is recommended over reusing a shared org bot) with these token scopes: `reactions:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `chat:write`.
+3. Export the resulting token as `ZEN_SLACK_TOKEN` in the environment the daemon starts in (`zen watch start` inherits your shell's env). The token is never written to `config.yaml` or any state file.
+
+If `slack.enabled` is true but `ZEN_SLACK_TOKEN` is unset, or `auth.test` fails at startup, the daemon logs a warning and runs with the Slack watcher disabled rather than failing to start.
+
 ## State files
 
 All state lives in `~/.zen/state/`:
@@ -136,3 +158,5 @@ All state lives in `~/.zen/state/`:
 | `last_check.json` | Timestamp of last GitHub poll |
 | `pr_cache.json` | PR titles/authors for display |
 | `sessions.json` | Cached agent session states (updated every 10s by daemon) |
+| `slack_seen.json` | Message keys already processed by the Slack task watcher |
+| `slack_origins.json` | Worktree path → originating Slack thread, for the completion DM |

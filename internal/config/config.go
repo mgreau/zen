@@ -26,6 +26,56 @@ type Config struct {
 	BranchPrefix string                `yaml:"branch_prefix"`
 	IgnoreDrafts bool                  `yaml:"ignore_drafts"`
 	Watch        WatchConfig           `yaml:"watch"`
+	Slack        SlackConfig           `yaml:"slack"`
+}
+
+// SlackConfig holds configuration for the Slack task watcher: polling for the
+// user's own emoji reaction on a message, then spinning up a feature worktree
+// seeded with the thread as context. Disabled unless Enabled is explicitly
+// set to true. The Slack token itself is never stored here — it's read from
+// the ZEN_SLACK_TOKEN environment variable at daemon startup.
+type SlackConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	Emoji        string `yaml:"emoji"`         // reaction name (no colons) that flags a task, default "claudecode"
+	DefaultRepo  string `yaml:"default_repo"`  // short repo name (from repos:) worktrees are created in
+	PollInterval string `yaml:"poll_interval"` // default "5m"
+	AckReaction  string `yaml:"ack_reaction"`  // reaction added on pickup, default "eyes"
+	DoneEmoji    string `yaml:"done_emoji"`    // reaction (on the original message) or a merged PR from the worktree's branch stops further completion DMs, default "done_check"
+}
+
+// GetEmoji returns the configured reaction name, defaulting to "claudecode".
+func (s SlackConfig) GetEmoji() string {
+	if s.Emoji != "" {
+		return s.Emoji
+	}
+	return "claudecode"
+}
+
+// GetAckReaction returns the reaction added on pickup, defaulting to "eyes".
+func (s SlackConfig) GetAckReaction() string {
+	if s.AckReaction != "" {
+		return s.AckReaction
+	}
+	return "eyes"
+}
+
+// GetDoneEmoji returns the reaction name that marks a task done, defaulting
+// to "done_check".
+func (s SlackConfig) GetDoneEmoji() string {
+	if s.DoneEmoji != "" {
+		return s.DoneEmoji
+	}
+	return "done_check"
+}
+
+// PollIntervalDuration returns the Slack poll interval, defaulting to 5 minutes.
+func (s SlackConfig) PollIntervalDuration() time.Duration {
+	if s.PollInterval != "" {
+		if d, err := time.ParseDuration(s.PollInterval); err == nil {
+			return d
+		}
+	}
+	return 5 * time.Minute
 }
 
 // WatchConfig holds configuration for the watch daemon's workqueue behavior.

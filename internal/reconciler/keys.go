@@ -23,3 +23,19 @@ func ParsePRKey(key string) (repo string, number int, err error) {
 	}
 	return parts[0], n, nil
 }
+
+// MakeSlackKey creates a workqueue key for a Slack-flagged message in the
+// format "channelID:messageTS". Message timestamps use a literal dot
+// (e.g. "1700000000.123456"), so splitting on the first colon is safe.
+func MakeSlackKey(channelID, messageTS string) string {
+	return fmt.Sprintf("%s:%s", channelID, messageTS)
+}
+
+// ParseSlackKey parses a workqueue key back into channel ID and message timestamp.
+func ParseSlackKey(key string) (channelID, messageTS string, err error) {
+	parts := strings.SplitN(key, ":", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("invalid Slack key %q: expected format channel:ts", key)
+	}
+	return parts[0], parts[1], nil
+}

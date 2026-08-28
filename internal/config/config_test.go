@@ -359,3 +359,42 @@ func TestWatchConfigCustom(t *testing.T) {
 		t.Errorf("GetMaxRetries = %d, want 3", n)
 	}
 }
+
+func TestSlackConfigDefaults(t *testing.T) {
+	s := SlackConfig{}
+
+	if got := s.GetEmoji(); got != "claudecode" {
+		t.Errorf("GetEmoji default = %q, want %q", got, "claudecode")
+	}
+	if got := s.GetAckReaction(); got != "eyes" {
+		t.Errorf("GetAckReaction default = %q, want %q", got, "eyes")
+	}
+	if got := s.GetDoneEmoji(); got != "done_check" {
+		t.Errorf("GetDoneEmoji default = %q, want %q", got, "done_check")
+	}
+	if d := s.PollIntervalDuration(); d.String() != "5m0s" {
+		t.Errorf("PollIntervalDuration default = %v, want 5m0s", d)
+	}
+}
+
+func TestSlackConfigCustom(t *testing.T) {
+	s := SlackConfig{
+		Emoji:        "eyes-on-this",
+		AckReaction:  "raised_hands",
+		PollInterval: "90s",
+		DoneEmoji:    "white_check_mark",
+	}
+
+	if got := s.GetEmoji(); got != "eyes-on-this" {
+		t.Errorf("GetEmoji = %q, want %q", got, "eyes-on-this")
+	}
+	if got := s.GetAckReaction(); got != "raised_hands" {
+		t.Errorf("GetAckReaction = %q, want %q", got, "raised_hands")
+	}
+	if got := s.GetDoneEmoji(); got != "white_check_mark" {
+		t.Errorf("GetDoneEmoji = %q, want %q", got, "white_check_mark")
+	}
+	if d := s.PollIntervalDuration(); d.String() != "1m30s" {
+		t.Errorf("PollIntervalDuration = %v, want 1m30s", d)
+	}
+}

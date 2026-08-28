@@ -163,41 +163,11 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("worktree already exists: %s\n  Resume with: zen work resume %s", worktreePath, branch)
 	}
 
-	// Create worktree under lock
-	wt.GitMu.Lock()
-
 	ui.LogInfo(fmt.Sprintf("Fetching origin/main in %s...", repo))
-	fetchCmd := exec.Command("git", "fetch", "origin", "main")
-	fetchCmd.Dir = originPath
-	if out, err := fetchCmd.CombinedOutput(); err != nil {
-		wt.GitMu.Unlock()
-		return fmt.Errorf("git fetch: %w: %s", err, string(out))
-	}
-
 	ui.LogInfo(fmt.Sprintf("Creating worktree %s (branch %s)...", worktreeName, gitBranch))
-	// Use --no-checkout + separate checkout to avoid "Could not write new index file"
-	// on large repos (13K+ files). The two-step approach handles the index write reliably.
-	wtCmd := exec.Command("git", "worktree", "add", "--no-checkout", worktreePath, "-b", gitBranch, "origin/main")
-	wtCmd.Dir = originPath
-	if out, err := wtCmd.CombinedOutput(); err != nil {
-		wt.CleanupFailedAdd(originPath, worktreePath, gitBranch)
-		wt.GitMu.Unlock()
-		return fmt.Errorf("git worktree add: %w: %s", err, string(out))
+	if err := wt.CreateFromMain(originPath, worktreePath, worktreeName, gitBranch); err != nil {
+		return err
 	}
-
-	checkoutCmd := exec.Command("git", "checkout")
-	checkoutCmd.Dir = worktreePath
-	if out, err := checkoutCmd.CombinedOutput(); err != nil {
-		wt.CleanupFailedAdd(originPath, worktreePath, gitBranch)
-		wt.GitMu.Unlock()
-		return fmt.Errorf("git checkout in worktree: %w: %s", err, string(out))
-	}
-
-	// Clean stale index.lock (only if holding process is dead)
-	lockFile := filepath.Join(originPath, ".git", "worktrees", worktreeName, "index.lock")
-	wt.RemoveStaleLock(lockFile, worktreeName)
-
-	wt.GitMu.Unlock()
 
 	home := homeDir()
 	shortPath := ui.ShortenHome(worktreePath, home)

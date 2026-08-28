@@ -79,6 +79,9 @@ func ScanSessions(cfg *config.Config, idleThreshold time.Duration) {
 						fmt.Printf("[%s] Session notify error for %s: %v\n",
 							time.Now().Format(time.RFC3339), wt.Name, err)
 					}
+					if SlackReadyHook != nil {
+						SlackReadyHook(wt.Path, wt.Name, resumeCmd)
+					}
 					lastNotifiedAt.Store(s.ID, now)
 				}
 			}
