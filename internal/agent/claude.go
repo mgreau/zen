@@ -97,8 +97,8 @@ func (a *claudeAgent) CleanSessions(worktreePath string) (int, error) {
 	return len(sessions), nil
 }
 
-func (a *claudeAgent) IsProcessRunning(sessionID string) bool {
-	return session.IsProcessRunning(sessionID)
+func (a *claudeAgent) IsProcessRunning(sessionID, worktreePath string) bool {
+	return session.IsProcessRunningInWorktree(filepath.Base(a.bin), sessionID, worktreePath)
 }
 
 func (a *claudeAgent) ShortenModel(model string) string {

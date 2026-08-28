@@ -142,7 +142,7 @@ func runAgentStatus(cmd *cobra.Command, args []string) error {
 				model, tokens, _ = ag.ParseTokensTail(s.Path)
 			}
 
-			running := ag.IsProcessRunning(s.ID)
+			running := ag.IsProcessRunning(s.ID, wt.Path)
 
 			if agentRunning && !running {
 				continue

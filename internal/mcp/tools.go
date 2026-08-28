@@ -189,7 +189,7 @@ func (s *Server) handleAgentStatus(ctx context.Context, req mcpgo.CallToolReques
 
 			sess := sessions[0]
 			model, tokens, _ := ag.ParseTokensTail(sess.Path)
-			running := ag.IsProcessRunning(sess.ID)
+			running := ag.IsProcessRunning(sess.ID, wt.Path)
 
 			if runningOnly && !running {
 				continue

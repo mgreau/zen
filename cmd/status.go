@@ -237,7 +237,7 @@ func enrichFeatures(ag agent.Agent, wts []worktree.Worktree) []StatusFeature {
 			sessions, _ := ag.FindSessions(wt.Path)
 			if len(sessions) > 0 {
 				f.HasSession = true
-				f.Running = ag.IsProcessRunning(sessions[0].ID)
+				f.Running = ag.IsProcessRunning(sessions[0].ID, wt.Path)
 				if f.Running {
 					f.SessionStatus = "running"
 				} else {

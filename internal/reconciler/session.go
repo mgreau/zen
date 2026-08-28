@@ -50,7 +50,7 @@ func ScanSessions(cfg *config.Config, idleThreshold time.Duration) {
 		s := sessions[0]
 		filePath := s.Path
 
-		running := ag.IsProcessRunning(s.ID)
+		running := ag.IsProcessRunning(s.ID, wt.Path)
 
 		var status string
 		switch {

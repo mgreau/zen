@@ -401,15 +401,12 @@ func (a *codexAgent) CleanSessions(worktreePath string) (int, error) {
 	return removed, nil
 }
 
-// IsProcessRunning matches the session UUID against process command lines.
-// Only *resumed* sessions carry the UUID in argv — a fresh `codex` launch does
-// not, so this reports false negatives for new sessions (same limitation as
-// Claude's implementation).
-func (a *codexAgent) IsProcessRunning(sessionID string) bool {
-	if sessionID == "" {
-		return false
-	}
-	return exec.Command("pgrep", "-f", sessionID).Run() == nil
+// IsProcessRunning matches the process's cwd against worktreePath first — the
+// reliable signal for fresh sessions, which never carry their UUID in argv —
+// falling back to matching the session UUID against process command lines
+// (covers --resume invocations).
+func (a *codexAgent) IsProcessRunning(sessionID, worktreePath string) bool {
+	return session.IsProcessRunningInWorktree(filepath.Base(a.bin), sessionID, worktreePath)
 }
 
 // ShortenModel trims provider prefixes for compact display, e.g.

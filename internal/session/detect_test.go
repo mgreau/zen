@@ -2,6 +2,7 @@ package session
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -188,6 +189,55 @@ func TestShortenModel(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("ShortenModel(%q) = %q, want %q", tt.model, got, tt.want)
 		}
+	}
+}
+
+// TestIsProcessRunningInWorktree_MatchesFreshSessionByCwd reproduces the bug
+// this function fixes: a freshly launched agent process (no --resume flag)
+// never carries its own session ID in argv, so the old sessionID-only check
+// always reported "not running" for brand-new sessions. Matching on cwd
+// instead works from the very first scan.
+func TestIsProcessRunningInWorktree_MatchesFreshSessionByCwd(t *testing.T) {
+	if _, err := exec.LookPath("pgrep"); err != nil {
+		t.Skip("pgrep not available")
+	}
+	if _, err := exec.LookPath("lsof"); err != nil {
+		t.Skip("lsof not available")
+	}
+
+	dir := t.TempDir()
+	cmd := exec.Command("sleep", "30")
+	cmd.Dir = dir
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting sleep: %v", err)
+	}
+	defer cmd.Process.Kill()
+
+	// Give lsof a moment to see the new process's cwd.
+	deadline := time.Now().Add(3 * time.Second)
+	var got bool
+	for time.Now().Before(deadline) {
+		// "sleep-not-a-real-session-id" stands in for a fresh session's ID:
+		// it never appears in argv, so a match here can only come from the
+		// cwd check, not the sessionID fallback.
+		got = IsProcessRunningInWorktree("sleep", "sleep-not-a-real-session-id", dir)
+		if got {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !got {
+		t.Error("IsProcessRunningInWorktree() = false, want true for a live process with matching cwd")
+	}
+
+	if got := IsProcessRunningInWorktree("sleep", "sleep-not-a-real-session-id", t.TempDir()); got {
+		t.Error("IsProcessRunningInWorktree() = true for an unrelated worktree, want false")
+	}
+}
+
+func TestIsProcessRunningInWorktree_NoMatchReturnsFalse(t *testing.T) {
+	if got := IsProcessRunningInWorktree("definitely-not-a-real-binary-name", "", "/nonexistent"); got {
+		t.Error("IsProcessRunningInWorktree() = true, want false for no matching process and empty sessionID")
 	}
 }
 

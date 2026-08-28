@@ -76,8 +76,9 @@ type Agent interface {
 	// CleanSessions removes the agent's session files for a worktree and
 	// returns the number removed.
 	CleanSessions(worktreePath string) (int, error)
-	// IsProcessRunning best-effort reports whether a process for sessionID is alive.
-	IsProcessRunning(sessionID string) bool
+	// IsProcessRunning best-effort reports whether a process for sessionID,
+	// running in worktreePath, is alive.
+	IsProcessRunning(sessionID, worktreePath string) bool
 	// ShortenModel renders a model identifier in compact form for display.
 	ShortenModel(model string) string
 }

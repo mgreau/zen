@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -159,6 +160,69 @@ func IsProcessRunning(sessionID string) bool {
 	cmd := exec.Command("pgrep", "-f", sessionID)
 	err := cmd.Run()
 	return err == nil
+}
+
+// IsProcessRunningInWorktree reports whether an agent process is alive for a
+// worktree. It checks the process's cwd against worktreePath first, falling
+// back to matching sessionID in the process's command line.
+//
+// The cwd check is the primary signal: a freshly launched session (started
+// without --resume) never carries its own session ID in argv — Claude/Codex
+// generate that ID internally after the process starts — so IsProcessRunning
+// alone reports a false "not running" for every fresh session until it has
+// been resumed at least once. Matching on cwd instead works from the first
+// scan, since zen always launches the agent with the worktree as its
+// working directory.
+func IsProcessRunningInWorktree(binName, sessionID, worktreePath string) bool {
+	if hasProcessWithCwd(binName, worktreePath) {
+		return true
+	}
+	if sessionID == "" {
+		return false
+	}
+	return IsProcessRunning(sessionID)
+}
+
+// hasProcessWithCwd reports whether any process named binName has cwd equal
+// to dir (or its symlink-resolved form, since macOS reports /tmp paths under
+// /private/tmp). Best-effort: any lookup failure (pgrep/lsof unavailable, no
+// permission to inspect a process, no match) is treated as "no match", not
+// an error — this must never block session scanning.
+func hasProcessWithCwd(binName, dir string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "pgrep", "-x", binName).Output()
+	if err != nil {
+		return false
+	}
+
+	resolvedDir := dir
+	if r, rerr := filepath.EvalSymlinks(dir); rerr == nil {
+		resolvedDir = r
+	}
+
+	for _, pid := range strings.Fields(string(out)) {
+		if cwd := processCwd(ctx, pid); cwd != "" && (cwd == dir || cwd == resolvedDir) {
+			return true
+		}
+	}
+	return false
+}
+
+// processCwd returns the current working directory of pid via lsof, or "" if
+// it can't be determined.
+func processCwd(ctx context.Context, pid string) string {
+	out, err := exec.CommandContext(ctx, "lsof", "-a", "-p", pid, "-d", "cwd", "-Fn").Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "n") {
+			return strings.TrimPrefix(line, "n")
+		}
+	}
+	return ""
 }
 
 // ParseSessionDetailTail reads the last tailSize bytes of a session file
