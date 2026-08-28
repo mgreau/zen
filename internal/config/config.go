@@ -22,7 +22,7 @@ type Config struct {
 	Agent        string                `yaml:"agent"` // "claude" (default) or "codex"
 	ClaudeBin    string                `yaml:"claude_bin"`
 	CodexBin     string                `yaml:"codex_bin"`
-	Terminal     string                `yaml:"terminal"` // "iterm", "ghostty", or "kitty"
+	Terminal     string                `yaml:"terminal"` // "iterm", "ghostty", "kitty", or "macos"
 	BranchPrefix string                `yaml:"branch_prefix"`
 	IgnoreDrafts bool                  `yaml:"ignore_drafts"`
 	Watch        WatchConfig           `yaml:"watch"`
@@ -203,8 +203,8 @@ func Load() (*Config, error) {
 	if cfg.Terminal == "" {
 		cfg.Terminal = "iterm" // default to iTerm for backward compatibility
 	}
-	if cfg.Terminal != "iterm" && cfg.Terminal != "ghostty" && cfg.Terminal != "kitty" {
-		return nil, fmt.Errorf("invalid terminal type %q: must be \"iterm\", \"ghostty\", or \"kitty\"", cfg.Terminal)
+	if cfg.Terminal != "iterm" && cfg.Terminal != "ghostty" && cfg.Terminal != "kitty" && cfg.Terminal != "macos" {
+		return nil, fmt.Errorf("invalid terminal type %q: must be \"iterm\", \"ghostty\", \"kitty\", or \"macos\"", cfg.Terminal)
 	}
 	if cfg.Repos == nil {
 		cfg.Repos = make(map[string]RepoConfig)

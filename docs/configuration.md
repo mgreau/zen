@@ -36,7 +36,7 @@ agent: claude
 claude_bin: claude   # executable used when agent: claude
 codex_bin: codex     # executable used when agent: codex
 
-terminal: iterm  # or "ghostty" or "kitty"
+terminal: iterm  # or "ghostty", "kitty", or "macos"
 
 # Prefix for feature branches created by `zen work new`.
 # If unset, falls back to `git config user.name` (spaces → hyphens), then no prefix.
@@ -117,7 +117,7 @@ Note that the background daemon always uses the **configured** agent: if you run
 
 ## Terminal
 
-`terminal: iterm` (default), `terminal: ghostty`, or `terminal: kitty`.
+`terminal: iterm` (default), `terminal: ghostty`, `terminal: kitty`, or `terminal: macos`.
 
 For Ghostty tab creation on macOS:
 
@@ -133,11 +133,15 @@ from inside kitty with `allow_remote_control yes` set in `kitty.conf` (or a
 socket configured via `listen_on`), the window is opened from the running
 kitty instance; otherwise zen starts a separate kitty instance per session.
 
+`terminal: macos` uses the built-in macOS Terminal.app. If Terminal already has
+a window, zen opens a new tab via Cmd+T (needs Accessibility, same as Ghostty);
+if none exist, or tab creation fails, it opens a new window. macOS-only.
+
 ## Slack task watcher
 
 An opt-in daemon loop that polls for the user's own emoji reaction (`slack.emoji`, default `claudecode`) via `reactions.list`, then for each new hit: adds an ack reaction in-thread (`slack.ack_reaction`, default `eyes`), fetches the thread, creates a feature worktree in `slack.default_repo` from `origin/main`, and immediately launches the agent in a terminal tab with the thread as the initial prompt — the launched session does all the "figure out what to do" work, not the daemon. Unlike the PR-review flow, this does open a terminal tab automatically: a Slack reaction is a deliberate, comparatively rare signal, not the high-volume PR-review firehose.
 
-When that worktree's session later goes idle ("waiting", the same signal that drives the desktop `notify.SessionWaiting`), the daemon also sends a Slack DM to the user with the worktree name, resume command, and a link back to the original thread.
+When that worktree's session later goes idle ("waiting", the same signal that drives the desktop `notify.SessionWaiting`), the daemon also sends a Slack DM to the user with the worktree name, resume command, and a link back to the original thread. That DM stops once the task is actually done: either a merged PR from the worktree's branch, or the configured `slack.done_emoji` (default `done_check`) reacted onto the original message.
 
 Setup:
 

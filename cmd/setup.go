@@ -41,7 +41,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	fmt.Println("Prerequisites:")
 	fmt.Println("  gh auth login         — authenticate GitHub CLI")
-	fmt.Println("  iTerm2 installed      — for tab management")
+	fmt.Println("  a terminal emulator   — iTerm2, Ghostty, kitty, or macOS Terminal")
 	fmt.Println("  claude or codex CLI   — the coding agent zen launches")
 	fmt.Println()
 
@@ -97,6 +97,14 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println()
 
+	terminalChoice := prompt(scanner, "Terminal (iterm, ghostty, kitty, or macos)", "iterm")
+	terminalChoice = strings.ToLower(strings.TrimSpace(terminalChoice))
+	if terminalChoice != "iterm" && terminalChoice != "ghostty" && terminalChoice != "kitty" && terminalChoice != "macos" {
+		fmt.Printf("  Unknown terminal %q, defaulting to iterm\n", terminalChoice)
+		terminalChoice = "iterm"
+	}
+	fmt.Println()
+
 	// Build config
 	repoMap := make(map[string]config.RepoConfig, len(repos))
 	for _, r := range repos {
@@ -118,6 +126,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		Agent:        agentChoice,
 		ClaudeBin:    "claude",
 		CodexBin:     "codex",
+		Terminal:     terminalChoice,
 		Watch: config.WatchConfig{
 			DispatchInterval: "10s",
 			CleanupInterval:  "1h",

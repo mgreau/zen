@@ -182,6 +182,7 @@ func TestLoadTerminal(t *testing.T) {
 		{"iterm", "iterm", "iterm", false},
 		{"ghostty", "ghostty", "ghostty", false},
 		{"kitty", "kitty", "kitty", false},
+		{"macos", "macos", "macos", false},
 		{"invalid", "konsole", "", true},
 	}
 

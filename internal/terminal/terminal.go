@@ -6,6 +6,7 @@ import (
 	"github.com/mgreau/zen/internal/ghostty"
 	"github.com/mgreau/zen/internal/iterm"
 	"github.com/mgreau/zen/internal/kitty"
+	"github.com/mgreau/zen/internal/macos"
 )
 
 // Terminal represents a terminal emulator that can open tabs/windows.
@@ -26,6 +27,8 @@ func NewTerminal(terminalType string) (Terminal, error) {
 		return &GhosttyTerminal{}, nil
 	case "kitty":
 		return &KittyTerminal{}, nil
+	case "macos":
+		return &MacOSTerminal{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported terminal type: %s", terminalType)
 	}
@@ -62,4 +65,15 @@ func (t *KittyTerminal) Name() string {
 
 func (t *KittyTerminal) OpenTab(workDir, command string) error {
 	return kitty.OpenTab(workDir, command)
+}
+
+// MacOSTerminal wraps the macOS Terminal.app functions.
+type MacOSTerminal struct{}
+
+func (t *MacOSTerminal) Name() string {
+	return "Terminal"
+}
+
+func (t *MacOSTerminal) OpenTab(workDir, command string) error {
+	return macos.OpenTab(workDir, command)
 }

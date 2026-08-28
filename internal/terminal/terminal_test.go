@@ -14,6 +14,7 @@ func TestNewTerminal(t *testing.T) {
 		{"iterm explicit", "iterm", "iTerm2", false},
 		{"ghostty", "ghostty", "Ghostty", false},
 		{"kitty", "kitty", "kitty", false},
+		{"macos", "macos", "Terminal", false},
 		{"empty is invalid", "", "", true},
 		{"invalid terminal", "invalid", "", true},
 	}
@@ -53,5 +54,12 @@ func TestKittyTerminalName(t *testing.T) {
 	term := &KittyTerminal{}
 	if got := term.Name(); got != "kitty" {
 		t.Errorf("KittyTerminal.Name() = %q, want %q", got, "kitty")
+	}
+}
+
+func TestMacOSTerminalName(t *testing.T) {
+	term := &MacOSTerminal{}
+	if got := term.Name(); got != "Terminal" {
+		t.Errorf("MacOSTerminal.Name() = %q, want %q", got, "Terminal")
 	}
 }
