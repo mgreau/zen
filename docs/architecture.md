@@ -95,6 +95,7 @@ zen
 ├── commands/                     # Slash-command prompts (embedded in binary)
 ├── internal/
 │   ├── agent/                    # Agent abstraction (Claude Code / Codex)
+│   ├── board/                    # `zen board` bubbletea TUI: live PR status view
 │   ├── config/                   # YAML config (~/.zen/config.yaml)
 │   ├── context/                  # PR-review context rendering
 │   ├── ghostty/                  # Ghostty tab/window management via AppleScript

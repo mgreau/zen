@@ -132,6 +132,19 @@ zen status                       # alias: zen dashboard
 
 Worktree counts, PR reviews (with remote state and cleanup ETA), feature work, and daemon state.
 
+### `zen board` — live PR board
+
+```bash
+zen board                        # interactive, auto-refreshes every 30s
+```
+
+Two live tables:
+
+- **My Pull Requests** — grouped by status (ready to merge, failing CI, changes requested, in review, in flight, draft). PRs stacked on one of your other open PRs (same repo, base branch = another PR's head branch) are shown together with a `|----` marker instead of being scattered by status.
+- **Needs Your Review** — across all configured repos, unlike `zen inbox` not filtered by the `authors` config, so nothing slips through. Sorted into three tiers: PRs from someone in your `authors` config, then PRs touching a `watch_paths` entry, then everyone else — newest first within each tier.
+
+Keys: `tab` switches tables, `enter`/`o` opens the selected PR in your browser, `v` starts/resumes a review for the selected row (same as `zen review <number>`), `s` shows/hides the first 20 lines of the selected PR's description (fetched on demand), `r` refreshes now, `q` quits.
+
 ### `zen reviews` — your recent reviews
 
 ```bash
