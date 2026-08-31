@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 	"time"
@@ -110,44 +109,7 @@ func (r *SetupReconciler) ensureWorktree(originPath, worktreePath, worktreeName 
 	if _, err := os.Stat(worktreePath); err == nil {
 		return nil // already exists
 	}
-
-	wt.GitMu.Lock()
-	defer wt.GitMu.Unlock()
-
-	// Re-check after acquiring lock
-	if _, err := os.Stat(worktreePath); err == nil {
-		return nil
-	}
-
-	fetchRef := fmt.Sprintf("+pull/%d/head:pr-%d", prNumber, prNumber)
-	fetchCmd := exec.Command("git", "fetch", "origin", fetchRef)
-	fetchCmd.Dir = originPath
-	if out, err := fetchCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git fetch: %w: %s", err, string(out))
-	}
-
-	branch := fmt.Sprintf("pr-%d", prNumber)
-	// Use --no-checkout + separate checkout to avoid "Could not write new index file"
-	// on large repos (13K+ files).
-	wtCmd := exec.Command("git", "worktree", "add", "--no-checkout", worktreePath, branch)
-	wtCmd.Dir = originPath
-	if out, err := wtCmd.CombinedOutput(); err != nil {
-		wt.CleanupFailedAdd(originPath, worktreePath, branch)
-		return fmt.Errorf("git worktree add: %w: %s", err, string(out))
-	}
-
-	checkoutCmd := exec.Command("git", "checkout")
-	checkoutCmd.Dir = worktreePath
-	if out, err := checkoutCmd.CombinedOutput(); err != nil {
-		wt.CleanupFailedAdd(originPath, worktreePath, branch)
-		return fmt.Errorf("git checkout in worktree: %w: %s", err, string(out))
-	}
-
-	// Clean stale index.lock (only if holding process is dead)
-	lockFile := filepath.Join(originPath, ".git", "worktrees", worktreeName, "index.lock")
-	wt.RemoveStaleLock(lockFile, worktreeName)
-
-	return nil
+	return wt.CreateFromPR(originPath, worktreePath, worktreeName, prNumber)
 }
 
 func (r *SetupReconciler) ensureContextInjected(ctx context.Context, worktreePath, fullRepo string, prNumber int) error {
