@@ -107,15 +107,32 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 
 	log(fmt.Sprintf("Creating worktree %s...", worktreeName))
 	gitCtx, cancel = context.WithTimeout(ctx, gitTimeout)
-	wtCmd := exec.CommandContext(gitCtx, "git", "worktree", "add", worktreePath, branchName)
+	// Use --no-checkout + separate checkout to avoid "Could not write new index file"
+	// on large repos (13K+ files). The two-step approach handles the index write reliably.
+	wtCmd := exec.CommandContext(gitCtx, "git", "worktree", "add", "--no-checkout", worktreePath, branchName)
 	wtCmd.Dir = originPath
 	if out, err := wtCmd.CombinedOutput(); err != nil {
 		cancel()
+		wt.CleanupFailedAdd(originPath, worktreePath, branchName)
 		wt.GitMu.Unlock()
 		if gitCtx.Err() == context.DeadlineExceeded {
 			return nil, fmt.Errorf("git worktree add timed out after %s", gitTimeout)
 		}
 		return nil, fmt.Errorf("git worktree add: %w: %s", err, string(out))
+	}
+	cancel()
+
+	gitCtx, cancel = context.WithTimeout(ctx, gitTimeout)
+	checkoutCmd := exec.CommandContext(gitCtx, "git", "checkout")
+	checkoutCmd.Dir = worktreePath
+	if out, err := checkoutCmd.CombinedOutput(); err != nil {
+		cancel()
+		wt.CleanupFailedAdd(originPath, worktreePath, branchName)
+		wt.GitMu.Unlock()
+		if gitCtx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("git checkout in worktree timed out after %s", gitTimeout)
+		}
+		return nil, fmt.Errorf("git checkout in worktree: %w: %s", err, string(out))
 	}
 	cancel()
 
