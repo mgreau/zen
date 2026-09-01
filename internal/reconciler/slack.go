@@ -152,7 +152,7 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 
 	slug := slackSlug(messageTS)
 	worktreeName := fmt.Sprintf("%s-slack-%s", repo, slug)
-	worktreePath := filepath.Join(basePath, worktreeName)
+	worktreePath := wt.Resolve(r.cfg, repo, worktreeName)
 	originPath := filepath.Join(basePath, repo)
 
 	branchSuffix := fmt.Sprintf("slack-%s", slug)

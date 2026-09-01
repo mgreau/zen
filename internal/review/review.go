@@ -58,7 +58,7 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 
 	originPath := filepath.Join(basePath, repoShort)
 	worktreeName := wt.PRName(repoShort, prNumber)
-	worktreePath := filepath.Join(basePath, worktreeName)
+	worktreePath := wt.Resolve(cfg, repoShort, worktreeName)
 
 	if _, err := os.Stat(worktreePath); err == nil {
 		return refreshExisting(ctx, ag, repoShort, fullRepo, originPath, worktreePath, prNumber, log, confirmReset)
@@ -131,6 +131,8 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 		return nil, fmt.Errorf("git checkout in worktree: %w: %s", err, string(out))
 	}
 	cancel()
+
+	wt.EnsureNestedExcluded(originPath, worktreePath)
 
 	wt.GitMu.Unlock()
 	repoLock.Release()

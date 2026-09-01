@@ -4,7 +4,34 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/mgreau/zen/internal/gitignore"
+	"github.com/mgreau/zen/internal/ui"
 )
+
+// EnsureNestedExcluded keeps a worktree created *inside* the clone out of
+// `git status` in the main checkout, by adding its top-level directory to
+// the clone's info/exclude.
+//
+// Derived from the paths rather than from config so it stays correct
+// whatever decided the layout, and a no-op for a worktree beside the clone.
+// The committed .gitignore is never touched: zen manages repos the user may
+// not own, and excluding a zen-owned path there would mean a commit to
+// someone else's project.
+func EnsureNestedExcluded(originPath, worktreePath string) {
+	rel, err := filepath.Rel(originPath, worktreePath)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return // beside the clone: nothing inside the repo to hide
+	}
+	top := strings.Split(rel, string(filepath.Separator))[0] + "/"
+	if !gitignore.EnsureExcluded(originPath, top) {
+		ui.LogWarn(fmt.Sprintf(
+			"%s is inside %s but git does not ignore it -- add %s to .gitignore, or it will show as untracked",
+			top, originPath, top))
+	}
+}
 
 // CreateFromMain fetches origin/main and creates a new worktree checked out
 // to a new branch cut from it. Used for feature work (branch didn't exist
@@ -37,6 +64,8 @@ func CreateFromMain(originPath, worktreePath, worktreeName, branch string) error
 		CleanupFailedAdd(originPath, worktreePath, branch)
 		return fmt.Errorf("git worktree add: %w: %s", err, string(out))
 	}
+
+	EnsureNestedExcluded(originPath, worktreePath)
 
 	checkoutCmd := exec.Command("git", "checkout")
 	checkoutCmd.Dir = worktreePath
@@ -91,6 +120,8 @@ func CreateFromPR(originPath, worktreePath, worktreeName string, prNumber int) e
 		CleanupFailedAdd(originPath, worktreePath, branch)
 		return fmt.Errorf("git worktree add: %w: %s", err, string(out))
 	}
+
+	EnsureNestedExcluded(originPath, worktreePath)
 
 	checkoutCmd := exec.Command("git", "checkout")
 	checkoutCmd.Dir = worktreePath

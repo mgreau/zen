@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -75,5 +76,49 @@ func TestCreateFromMain_FetchFailure(t *testing.T) {
 	err := CreateFromMain(dir, filepath.Join(dir, "wt"), "wt", "mgreau/feature")
 	if err == nil {
 		t.Fatal("expected error for non-repo originPath")
+	}
+}
+
+// A worktree created inside the clone must not show up as untracked in the
+// main checkout -- that is the one drawback of the nested layout, and the
+// whole reason EnsureNestedExcluded runs during creation.
+func TestCreateFromMainNestedIsExcluded(t *testing.T) {
+	repoPath := initTestRepo(t)
+	worktreePath := filepath.Join(repoPath, NestedDir, "repo-feature")
+
+	if err := CreateFromMain(repoPath, worktreePath, "repo-feature", "mgreau/feature"); err != nil {
+		t.Fatalf("CreateFromMain() error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "README.md")); err != nil {
+		t.Fatalf("expected checked-out worktree, README.md missing: %v", err)
+	}
+
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "" {
+		t.Errorf("git status in the clone = %q, want clean (the worktree should be excluded)", got)
+	}
+}
+
+// The sibling layout has nothing inside the clone to exclude, so creation
+// must not write an entry to info/exclude on its behalf.
+func TestCreateFromMainSiblingWritesNoExclude(t *testing.T) {
+	repoPath := initTestRepo(t)
+	worktreePath := filepath.Join(filepath.Dir(repoPath), "repo-feature")
+
+	if err := CreateFromMain(repoPath, worktreePath, "repo-feature", "mgreau/feature"); err != nil {
+		t.Fatalf("CreateFromMain() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(repoPath, ".git", "info", "exclude"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "repo-feature") {
+		t.Errorf("info/exclude mentions a sibling worktree: %q", data)
 	}
 }

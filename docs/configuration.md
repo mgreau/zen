@@ -104,6 +104,33 @@ repos:
 
 All repos and authors must be configured — there are no hardcoded defaults.
 
+## Worktree layout
+
+`worktree_layout` decides where zen creates worktrees:
+
+```yaml
+worktree_layout: nested        # "sibling" (default) or "nested"
+
+repos:
+  app:
+    full_name: octo-sts/app
+    base_path: ~/git/repo-octo-sts-app
+    worktree_layout: sibling   # optional, overrides the global setting
+```
+
+| Value | Where a new worktree goes |
+|-------|---------------------------|
+| `sibling` (default) | `<base_path>/<name>` — beside the clone |
+| `nested` | `<base_path>/<repo>/_worktrees/<name>` — inside the clone |
+
+`nested` keeps the parent directory holding only repositories, makes it obvious which repo a worktree belongs to, and removes the worktrees along with the clone. Under `nested`, `base_path` means only where the clone lives — zen no longer writes anything beside it.
+
+zen adds `_worktrees/` to the clone's `.git/info/exclude` so it stays out of `git status`. Your committed `.gitignore` is never modified: zen works on repos you may not own, and this way excluding it needs no commit. If something else in the repo overrides that exclusion (a `!_worktrees` line in `.gitignore`, say), zen warns once and you can add the entry wherever suits the project.
+
+The per-repo override exists for repos where nesting is wrong for reasons zen cannot see — a Docker build context, which honours `.dockerignore` rather than `.gitignore` and would otherwise copy every worktree into the image, or tooling that walks the tree without consulting git. Note that `rg` and the Go tool are both fine: `rg` respects `.gitignore`, and `go build ./...` skips `_`-prefixed directories.
+
+**Changing this setting does not move existing worktrees, and does not need to.** zen looks a worktree up in git before falling back to the layout, so worktrees created under the old setting keep working — review worktrees are cleaned up `cleanup_after_days` after merge and feature worktrees go through `zen cleanup`, so the old layout empties itself. Moving one by hand is not recommended: agent sessions are keyed by worktree path, so `git worktree move` orphans the history `zen review resume` and `zen work resume` depend on.
+
 ## Agent
 
 `agent: claude` (default) or `agent: codex` selects the coding agent zen launches in each worktree. Override per command with `--agent`:

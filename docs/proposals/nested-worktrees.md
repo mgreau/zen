@@ -1,7 +1,9 @@
 # In-repo worktrees
 
-**Status:** proposed. Opt-in behind `worktree_layout`, default unchanged
-(`sibling`). Flipping the default is a separate release.
+**Status:** implemented in this PR, opt-in behind `worktree_layout`, default
+unchanged (`sibling`). Flipping the default is a separate release. User-facing
+description in [configuration.md](../configuration.md#worktree-layout); the
+internals are in [architecture.md](../architecture.md#worktree-placement).
 
 ## What
 
@@ -91,7 +93,7 @@ single resolution seam:
 // Resolve returns the on-disk path for a worktree. An existing worktree is
 // located through git, wherever it happens to live; the configured layout
 // decides only where a new one will be created.
-func Resolve(cfg *config.Config, repo, name string) (path string, exists bool)
+func Resolve(cfg *config.Config, repo, name string) string
 ```
 
 `Resolve` consults the registered worktrees first and falls back to the
@@ -99,6 +101,18 @@ configured layout only when nothing is registered. Every one of the six
 sites goes through it. Mixed layouts then work by construction, in both
 directions, which is what makes the config key safe and the change
 reversible.
+
+Two details it has to get right. Registrations whose directory is gone
+(git lists them as `prunable`) are skipped, or a stale entry from the old
+layout would pin a new worktree to it. And paths are compared through
+`filepath.EvalSymlinks`, because git reports fully resolved paths while zen
+builds its own from `base_path` as the user wrote it — a symlink anywhere
+above the repo would otherwise make `Resolve` fail to match a worktree that
+is in fact the one it is looking for, or mistake the main worktree for a
+linked one. When a registration names the same location as the configured
+path, the configured spelling is what comes back: callers use this string as
+an agent-session key, so returning git's spelling for an unchanged worktree
+would orphan its history.
 
 ## Verified behaviour
 
@@ -148,18 +162,26 @@ A global `core.excludesFile` is wrong: it is the user's, not zen's, and
 changing it reaches beyond the repos zen manages.
 
 `.git/info/exclude` is right. It is per-clone, needs no commit, and zen
-already uses it — `addToGitExclude` (`internal/agent/codex.go:439`) adds
-`.zen/` there today, with a policy comment stating that only zen-owned names
-belong in a file shared by every worktree of the repo. `_worktrees/` under
-this proposal is such a name.
+already used it — `addToGitExclude` in `internal/agent/codex.go` added
+`.zen/` there, with a policy comment stating that only zen-owned names
+belong in a file shared by every worktree of the repo. `_worktrees/` is such
+a name.
 
-The proposal is therefore to **fix rather than warn**: promote
-`addToGitExclude` out of `internal/agent` into `internal/worktree` as
-`EnsureExcluded(repoPath, "_worktrees/")`, call it from `CreateFromMain` and
-`CreateFromPR` before the first nested add, and verify the result with `git
-check-ignore -q`. A warning is emitted only when that verification fails —
-an unwritable exclude file, or a negation pattern overriding it — because
-that is the only case the user has to resolve by hand.
+The approach is therefore to **fix rather than warn**: `EnsureExcluded`
+writes the entry, then verifies with `git check-ignore -q`, and a warning is
+emitted only when that verification fails — an unwritable exclude file, or a
+negation pattern overriding it — because that is the only case the user has
+to resolve by hand.
+
+That helper lives in a new leaf package, `internal/gitignore`, rather than
+in `internal/worktree` as first sketched. `internal/agent` needs it too for
+`.zen/`, and `internal/worktree` imports `internal/config`, which imports
+`internal/agent` — putting it there would have made an import cycle. The
+call site is `worktree.EnsureNestedExcluded`, which derives nesting by
+comparing the worktree path to the clone path rather than by reading config,
+so it stays correct whatever decided the layout, and runs *after* a
+successful `git worktree add`: excluding a directory for a create that was
+never going to succeed just produces a spurious warning.
 
 One honest cost: writing `_worktrees/` to `info/exclude` in a repo you do
 not own means a contributor's legitimate `_worktrees` directory would be
@@ -201,23 +223,29 @@ feature worktrees drain through `zen cleanup`. The old layout empties itself.
 
 ## Delivery
 
-1. **The seam, with no behaviour change.** Add `worktree.Resolve` and route
-   all six sites through it. Sibling remains the only layout. The test that
-   matters: with `worktree_layout: nested` configured and a sibling worktree
-   on disk, cleanup still finds and removes it, and setup still recognises
-   it rather than attempting a duplicate add.
+Shipped together in this PR, since the seam is most of it and the config key
+is inert without it:
+
+1. **The seam.** `worktree.Resolve` / `NewPath` / `OriginPath`
+   (`internal/worktree/resolve.go`), with all six sites routed through it.
+   The test that matters is `TestResolveFindsSiblingUnderNestedLayout`: with
+   `worktree_layout: nested` configured and a sibling worktree on disk,
+   `Resolve` still returns the sibling. Its mirror,
+   `TestResolveFindsNestedUnderSiblingLayout`, covers rolling the setting
+   back.
 2. **Config and exclusion.** `Config.WorktreeLayout` plus the per-repo
-   `RepoConfig.WorktreeLayout` override; `EnsureExcluded` promoted into
-   `internal/worktree` and called from both creators; `check-ignore`
-   verification and the failure-only warning.
-3. **Documentation.** The worktree naming table in
-   [architecture.md](../architecture.md) gains placement and a Slack row;
+   `RepoConfig.WorktreeLayout` override, both validated at load;
+   `internal/gitignore` with `check-ignore` verification and the
+   failure-only warning.
+3. **Documentation.** Placement and a Slack row in
+   [architecture.md](../architecture.md);
    [configuration.md](../configuration.md) documents the key and the
    narrowed meaning of `base_path`.
-4. **Default flip.** A separate release, after dogfooding on zen itself.
 
-Steps 1 and 2 are the only code. Step 4 is a one-line default change whose
-risk is entirely carried by step 1.
+Still to come, deliberately separate:
+
+4. **Default flip** to `nested`, after dogfooding on zen itself. A one-line
+   change whose risk is entirely carried by step 1.
 
 ## Notes
 
