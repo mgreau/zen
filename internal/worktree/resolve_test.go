@@ -164,3 +164,80 @@ func TestResolveUnconfiguredRepo(t *testing.T) {
 		t.Errorf("Resolve() for unconfigured repo = %q, want empty", got)
 	}
 }
+
+// TestResolveMatchesLegacyPathUnderDefaultConfig is the "nothing breaks"
+// guarantee. Before Resolve existed, every call site computed
+// filepath.Join(basePath, name). With the default config -- which is what
+// every existing user has until they opt in -- Resolve must return that
+// exact string, in each of the states a real repo can be in.
+//
+// The string identity matters beyond mere correctness: worktree paths are
+// agent-session keys (Claude encodes the path into a ~/.claude/projects
+// directory name), so a differently-spelled path for the same worktree
+// would orphan resumable history.
+func TestResolveMatchesLegacyPathUnderDefaultConfig(t *testing.T) {
+	repoPath := testRepo(t)
+	base := filepath.Dir(repoPath)
+
+	// Default config: worktree_layout unset entirely.
+	cfg := &config.Config{
+		Repos: map[string]config.RepoConfig{
+			"origin": {FullName: "acme/origin", BasePath: base},
+		},
+	}
+	legacy := func(name string) string { return filepath.Join(base, name) }
+
+	t.Run("no worktree registered", func(t *testing.T) {
+		if got := Resolve(cfg, "origin", "origin-pr-42"); got != legacy("origin-pr-42") {
+			t.Errorf("Resolve() = %q, want the legacy path %q", got, legacy("origin-pr-42"))
+		}
+	})
+
+	t.Run("worktree registered where the old code put it", func(t *testing.T) {
+		gitIn(t, repoPath, "worktree", "add", "-b", "pr-7", legacy("origin-pr-7"))
+		if got := Resolve(cfg, "origin", "origin-pr-7"); got != legacy("origin-pr-7") {
+			t.Errorf("Resolve() = %q, want the legacy path %q", got, legacy("origin-pr-7"))
+		}
+	})
+
+	t.Run("feature and slack worktree names", func(t *testing.T) {
+		for _, name := range []string{"origin-add-oidc-claims", "origin-slack-1712345678"} {
+			if got := Resolve(cfg, "origin", name); got != legacy(name) {
+				t.Errorf("Resolve(%q) = %q, want %q", name, got, legacy(name))
+			}
+		}
+	})
+
+	t.Run("clone missing entirely", func(t *testing.T) {
+		gone := &config.Config{Repos: map[string]config.RepoConfig{
+			"origin": {FullName: "acme/origin", BasePath: filepath.Join(base, "nonexistent")},
+		}}
+		want := filepath.Join(base, "nonexistent", "origin-pr-42")
+		if got := Resolve(gone, "origin", "origin-pr-42"); got != want {
+			t.Errorf("Resolve() = %q, want %q -- a failed git call must fall back, not blank out", got, want)
+		}
+	})
+}
+
+// The one default-config behaviour that does change, stated deliberately:
+// a worktree registered to this clone but living outside base_path used to
+// be invisible, so zen would try to create a duplicate and git would refuse
+// because the branch was already checked out. Resolve finds it instead.
+func TestResolveFindsWorktreeOutsideBasePath(t *testing.T) {
+	repoPath := testRepo(t)
+	base := filepath.Dir(repoPath)
+
+	elsewhere, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	strayPath := filepath.Join(elsewhere, "origin-pr-42")
+	gitIn(t, repoPath, "worktree", "add", "-b", "pr-42", strayPath)
+
+	cfg := &config.Config{Repos: map[string]config.RepoConfig{
+		"origin": {FullName: "acme/origin", BasePath: base},
+	}}
+	if got := Resolve(cfg, "origin", "origin-pr-42"); got != strayPath {
+		t.Errorf("Resolve() = %q, want the registered worktree %q", got, strayPath)
+	}
+}
