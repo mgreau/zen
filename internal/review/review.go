@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -55,7 +54,7 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 
 	originPath := filepath.Join(basePath, repoShort)
 	worktreeName := fmt.Sprintf("%s-pr-%d", repoShort, prNumber)
-	worktreePath := filepath.Join(basePath, worktreeName)
+	worktreePath := wt.Resolve(cfg, repoShort, worktreeName)
 
 	// If worktree already exists, return it
 	if _, err := os.Stat(worktreePath); err == nil {
@@ -86,61 +85,11 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 
 	log(fmt.Sprintf("PR #%d: %s (by %s)", prNumber, details.Title, details.Author))
 
-	// Create worktree under lock
-	branchName := fmt.Sprintf("pr-%d", prNumber)
-
-	wt.GitMu.Lock()
-
-	log(fmt.Sprintf("Fetching pull/%d/head...", prNumber))
-	gitCtx, cancel := context.WithTimeout(ctx, gitTimeout)
-	fetchCmd := exec.CommandContext(gitCtx, "git", "fetch", "origin", fmt.Sprintf("+pull/%d/head:%s", prNumber, branchName))
-	fetchCmd.Dir = originPath
-	if out, err := fetchCmd.CombinedOutput(); err != nil {
-		cancel()
-		wt.GitMu.Unlock()
-		if gitCtx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("git fetch timed out after %s", gitTimeout)
-		}
-		return nil, fmt.Errorf("git fetch: %w: %s", err, string(out))
+	// Creation (fetch, worktree add, checkout, nested-exclude, lock cleanup)
+	// lives in worktree.CreateFromPR so the daemon and this path cannot drift.
+	if err := wt.CreateFromPR(ctx, originPath, worktreePath, worktreeName, prNumber, gitTimeout, wt.Logger(log)); err != nil {
+		return nil, err
 	}
-	cancel()
-
-	log(fmt.Sprintf("Creating worktree %s...", worktreeName))
-	gitCtx, cancel = context.WithTimeout(ctx, gitTimeout)
-	// Use --no-checkout + separate checkout to avoid "Could not write new index file"
-	// on large repos (13K+ files). The two-step approach handles the index write reliably.
-	wtCmd := exec.CommandContext(gitCtx, "git", "worktree", "add", "--no-checkout", worktreePath, branchName)
-	wtCmd.Dir = originPath
-	if out, err := wtCmd.CombinedOutput(); err != nil {
-		cancel()
-		wt.CleanupFailedAdd(originPath, worktreePath, branchName)
-		wt.GitMu.Unlock()
-		if gitCtx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("git worktree add timed out after %s", gitTimeout)
-		}
-		return nil, fmt.Errorf("git worktree add: %w: %s", err, string(out))
-	}
-	cancel()
-
-	gitCtx, cancel = context.WithTimeout(ctx, gitTimeout)
-	checkoutCmd := exec.CommandContext(gitCtx, "git", "checkout")
-	checkoutCmd.Dir = worktreePath
-	if out, err := checkoutCmd.CombinedOutput(); err != nil {
-		cancel()
-		wt.CleanupFailedAdd(originPath, worktreePath, branchName)
-		wt.GitMu.Unlock()
-		if gitCtx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("git checkout in worktree timed out after %s", gitTimeout)
-		}
-		return nil, fmt.Errorf("git checkout in worktree: %w: %s", err, string(out))
-	}
-	cancel()
-
-	// Clean stale index.lock (only if holding process is dead)
-	lockFile := filepath.Join(originPath, ".git", "worktrees", worktreeName, "index.lock")
-	wt.RemoveStaleLock(lockFile, worktreeName)
-
-	wt.GitMu.Unlock()
 
 	// Inject PR context into the agent's context file (e.g. CLAUDE.local.md, AGENTS.md).
 	log(fmt.Sprintf("Injecting PR context into %s...", ag.ContextFile()))

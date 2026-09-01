@@ -13,6 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Diff coverage needs the merge base, which a shallow clone lacks.
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
@@ -22,7 +25,18 @@ jobs:
         run: go build ./...
 
       - name: Test
-        run: go test ./...
+        run: go test ./... -coverprofile=coverage.out -covermode=count
 
       - name: Lint
         run: go vet ./...
+
+      # Whole-project coverage lets a well-covered core hide an untested new
+      # feature. This gates only the lines the pull request adds.
+      - name: Diff coverage
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin "$GITHUB_BASE_REF"
+          python3 scripts/diffcover.py \
+            --profile coverage.out \
+            --base "origin/$GITHUB_BASE_REF" \
+            --min 75

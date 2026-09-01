@@ -85,6 +85,47 @@ repos:
 
 All repos and authors must be configured — there are no hardcoded defaults.
 
+## Worktree layout
+
+`worktree_layout` decides where zen creates worktrees:
+
+```yaml
+worktree_layout: nested        # "sibling" (default) or "nested"
+
+repos:
+  app:
+    full_name: octo-sts/app
+    base_path: ~/git/repo-octo-sts-app
+    worktree_layout: sibling   # optional, overrides the global setting
+```
+
+| Value | Where a new worktree goes |
+|-------|---------------------------|
+| `sibling` (default) | `<base_path>/<name>` — beside the clone |
+| `nested` | `<base_path>/<repo>/_worktrees/<name>` — inside the clone |
+
+`nested` keeps the parent directory holding only repositories, makes it obvious which repo a worktree belongs to, and removes the worktrees along with the clone. Under `nested`, `base_path` means only where the clone lives — zen no longer writes anything beside it.
+
+`_worktrees/` has to be ignored, or it shows as untracked in the main checkout. Where that exclusion lives is worth a moment, because `_worktrees/` describes how *you* work rather than anything about a particular project.
+
+**Preferred: a user-level ignore.** One line covers every repo, and zen then writes into none of them:
+
+```bash
+echo '_worktrees/' >> ~/.config/git/ignore
+```
+
+Git reads that path with no configuration — you do not need to set `core.excludesFile`. If you have set it, append to whatever it points at instead.
+
+**Fallback: per-clone.** If the path is not ignored when zen creates a nested worktree, it appends `_worktrees/` to that clone's `.git/info/exclude` and logs a note pointing at the user-level file. That keeps `nested` working out of the box, at the cost of an entry in each repo zen manages.
+
+Your committed `.gitignore` is never modified either way: zen works on repos you may not own, and excluding a zen-owned path there would mean a commit to someone else's project.
+
+zen checks with `git check-ignore` rather than by reading `.gitignore`, since a negated pattern (`!_worktrees`) or a `core.excludesFile` entry changes the answer invisibly. If the path still is not ignored after zen tries, it warns — that is the one case you have to resolve by hand.
+
+The per-repo override exists for repos where nesting is wrong for reasons zen cannot see — a Docker build context, which honours `.dockerignore` rather than `.gitignore` and would otherwise copy every worktree into the image, or tooling that walks the tree without consulting git. Note that `rg` and the Go tool are both fine: `rg` respects `.gitignore`, and `go build ./...` skips `_`-prefixed directories.
+
+**Changing this setting does not move existing worktrees, and does not need to.** zen looks a worktree up in git before falling back to the layout, so worktrees created under the old setting keep working — review worktrees are cleaned up `cleanup_after_days` after merge and feature worktrees go through `zen cleanup`, so the old layout empties itself. Moving one by hand is not recommended: agent sessions are keyed by worktree path, so `git worktree move` orphans the history `zen review resume` and `zen work resume` depend on.
+
 ## Agent
 
 `agent: claude` (default) or `agent: codex` selects the coding agent zen launches in each worktree. Override per command with `--agent`:

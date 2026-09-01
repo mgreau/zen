@@ -87,7 +87,7 @@ func runReview(cmd *cobra.Command, args []string) error {
 	basePath := cfg.RepoBasePath(reviewRepo)
 	if basePath != "" {
 		worktreeName := fmt.Sprintf("%s-pr-%d", reviewRepo, prNumber)
-		worktreePath := filepath.Join(basePath, worktreeName)
+		worktreePath := wt.Resolve(cfg, reviewRepo, worktreeName)
 		if _, err := os.Stat(worktreePath); err == nil {
 			ui.LogInfo(fmt.Sprintf("Worktree already exists, resuming PR #%d...", prNumber))
 			if reviewModel != "" {

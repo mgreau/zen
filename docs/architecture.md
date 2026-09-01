@@ -14,8 +14,27 @@ PR metadata (titles, authors) is cached in a lightweight JSON file (`~/.zen/stat
 |------|------------------|----------------|---------|
 | PR review | `<repo>-pr-<number>` | (fetched from remote) | `app-pr-42` |
 | Feature | `<repo>-<branch>` | `<branch_prefix>/<branch>` | `app-add-oidc-claims` → `mgreau/add-oidc-claims` |
+| Slack task | `<repo>-slack-<slug>` | `<branch_prefix>/slack-<slug>` | `app-slack-1712... ` |
 
 The git branch for feature worktrees uses `branch_prefix` from config (falling back to `git config user.name`, then no prefix). The worktree directory name itself is always `<repo>-<branch>` regardless of prefix.
+
+## Worktree placement
+
+`worktree_layout` decides where a **new** worktree goes: `sibling` (the default) puts it beside the clone at `<base_path>/<name>`, `nested` puts it inside at `<base_path>/<repo>/_worktrees/<name>`. See [configuration.md](configuration.md#worktree-layout) for the user-facing description.
+
+The `_` prefix on `_worktrees` is load-bearing. The Go tool skips directories beginning with `_` or `.`, so `go build ./...` in a Go repo does not descend into checked-out worktrees. Renaming it would break `./...` for every Go repo zen manages.
+
+**Reads come from git; only writes consult the layout.** `worktree.ListAll()` already derives inventory from `git worktree list`, so it never had a layout assumption. Path *construction* did — six call sites built `<base_path>/<name>` directly. They now go through `worktree.Resolve()`, which looks the worktree up in git first and falls back to the configured layout only when nothing is registered.
+
+That asymmetry is what makes the setting safe to change. Deriving the path from the layout alone would strand every worktree created under the previous setting, silently: `reconciler.CleanupReconciler` would `os.Stat` a path that does not exist and take its "already removed" branch, reporting success without removing anything, while `SetupReconciler` would find nothing and run `git worktree add` for a branch git already has checked out elsewhere — rejected on every poll, through the full retry backoff. Resolving through git instead means both layouts work at once, in both directions, so existing worktrees keep working and drain on their own rather than needing migration.
+
+`Resolve` returns the configured spelling of a path whenever it names the same location as the registration (compared through `filepath.EvalSymlinks`, since git reports resolved paths and `base_path` may not be one). Callers use the worktree path as an agent-session key — Claude encodes it into a directory name under `~/.claude/projects/` — so handing back a different string for an unchanged worktree would orphan its history.
+
+**Keeping git quiet.** A nested worktree would otherwise show as untracked in the main checkout. `worktree.EnsureNestedExcluded` runs after a successful `git worktree add` and delegates to `gitignore.EnsureExcluded`, which prefers to do nothing: if `git check-ignore` says the path is already ignored — by a user-level ignore, a committed `.gitignore`, or an earlier call — it returns `AlreadyIgnored` and no repository is modified. Only otherwise does it append to that clone's `.git/info/exclude` and log a note pointing at the user-level file.
+
+That ordering matters because `_worktrees/` describes how the user works, not anything about a given project, so the user-level ignore is the right scope for it; a single line in `~/.config/git/ignore` (which git reads with no `core.excludesFile` setting) puts every repo in the `AlreadyIgnored` state at once. The per-clone fallback exists so `nested` works without setup. The committed `.gitignore` is never touched in either case — zen manages repos the user may not own.
+
+Exclusion is checked with `git check-ignore` rather than by reading `.gitignore`, because a negated pattern or a `core.excludesFile` entry both change the answer invisibly. `Failed` — still not ignored after the attempt — is the only outcome that warns, and the only one a user has to fix by hand.
 
 ## Daemon architecture
 

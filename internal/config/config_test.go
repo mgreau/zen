@@ -399,3 +399,110 @@ func TestSlackConfigCustom(t *testing.T) {
 		t.Errorf("PollIntervalDuration = %v, want 1m30s", d)
 	}
 }
+
+func TestLoadWorktreeLayout(t *testing.T) {
+	tests := []struct {
+		name    string
+		extra   string
+		want    string
+		wantErr bool
+	}{
+		{"default is sibling", "", LayoutSibling, false},
+		{"explicit sibling", "worktree_layout: sibling\n", LayoutSibling, false},
+		{"nested", "worktree_layout: nested\n", LayoutNested, false},
+		{"invalid global rejected", "worktree_layout: inside\n", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			t.Setenv("HOME", tmpDir)
+
+			zenDir := filepath.Join(tmpDir, ".zen")
+			os.MkdirAll(zenDir, 0o755)
+
+			yamlContent := `repos:
+  mono:
+    full_name: chainguard-dev/mono
+    base_path: /tmp/mono
+` + tt.extra
+			os.WriteFile(filepath.Join(zenDir, "config.yaml"), []byte(yamlContent), 0o644)
+
+			cfg, err := Load()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Load() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if got := cfg.WorktreeLayoutFor("mono"); got != tt.want {
+				t.Errorf("WorktreeLayoutFor() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// A per-repo layout is the escape hatch for a repo where nesting is wrong,
+// so it has to win over the global default and be validated just as strictly.
+func TestLoadWorktreeLayoutPerRepo(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	zenDir := filepath.Join(tmpDir, ".zen")
+	os.MkdirAll(zenDir, 0o755)
+	os.WriteFile(filepath.Join(zenDir, "config.yaml"), []byte(`worktree_layout: nested
+repos:
+  mono:
+    full_name: chainguard-dev/mono
+    base_path: /tmp/mono
+  os:
+    full_name: wolfi-dev/os
+    base_path: /tmp/os
+    worktree_layout: sibling
+`), 0o644)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.WorktreeLayoutFor("mono"); got != LayoutNested {
+		t.Errorf("WorktreeLayoutFor(\"mono\") = %q, want %q (inherits global)", got, LayoutNested)
+	}
+	if got := cfg.WorktreeLayoutFor("os"); got != LayoutSibling {
+		t.Errorf("WorktreeLayoutFor(\"os\") = %q, want %q (per-repo override)", got, LayoutSibling)
+	}
+	if got := cfg.WorktreeLayoutFor("unconfigured"); got != LayoutNested {
+		t.Errorf("WorktreeLayoutFor(unknown repo) = %q, want the global %q", got, LayoutNested)
+	}
+}
+
+func TestLoadWorktreeLayoutPerRepoInvalid(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	zenDir := filepath.Join(tmpDir, ".zen")
+	os.MkdirAll(zenDir, 0o755)
+	os.WriteFile(filepath.Join(zenDir, "config.yaml"), []byte(`repos:
+  mono:
+    full_name: chainguard-dev/mono
+    base_path: /tmp/mono
+    worktree_layout: inside
+`), 0o644)
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() succeeded with an invalid per-repo worktree_layout")
+	}
+}
+
+// With no layout set anywhere -- and for a repo that is not configured at
+// all -- the effective layout is the sibling default.
+func TestWorktreeLayoutForFallsBackToSibling(t *testing.T) {
+	cfg := &Config{Repos: map[string]RepoConfig{
+		"mono": {FullName: "chainguard-dev/mono", BasePath: "/tmp/mono"},
+	}}
+	for _, repo := range []string{"mono", "not-configured"} {
+		if got := cfg.WorktreeLayoutFor(repo); got != LayoutSibling {
+			t.Errorf("WorktreeLayoutFor(%q) = %q, want %q", repo, got, LayoutSibling)
+		}
+	}
+}

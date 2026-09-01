@@ -81,12 +81,12 @@ func (r *SetupReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 	label := fmt.Sprintf("%s PR #%d %q", repo, prNumber, pr.Title)
 
 	worktreeName := fmt.Sprintf("%s-pr-%d", repo, prNumber)
-	worktreePath := filepath.Join(basePath, worktreeName)
+	worktreePath := wt.Resolve(r.cfg, repo, worktreeName)
 	originPath := filepath.Join(basePath, repo)
 	fullRepo := r.cfg.RepoFullName(repo)
 
 	// Step 1: Ensure worktree exists (retryable on failure)
-	if err := r.ensureWorktree(originPath, worktreePath, worktreeName, prNumber); err != nil {
+	if err := r.ensureWorktree(ctx, originPath, worktreePath, worktreeName, prNumber); err != nil {
 		return fmt.Errorf("ensureWorktree: %w", err)
 	}
 
@@ -105,11 +105,13 @@ func (r *SetupReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 	return nil
 }
 
-func (r *SetupReconciler) ensureWorktree(originPath, worktreePath, worktreeName string, prNumber int) error {
+func (r *SetupReconciler) ensureWorktree(ctx context.Context, originPath, worktreePath, worktreeName string, prNumber int) error {
 	if _, err := os.Stat(worktreePath); err == nil {
 		return nil // already exists
 	}
-	return wt.CreateFromPR(originPath, worktreePath, worktreeName, prNumber)
+	// No per-command timeout: the daemon's workqueue already bounds and
+	// retries a stuck reconcile, and ctx carries its cancellation.
+	return wt.CreateFromPR(ctx, originPath, worktreePath, worktreeName, prNumber, 0, nil)
 }
 
 func (r *SetupReconciler) ensureContextInjected(ctx context.Context, worktreePath, fullRepo string, prNumber int) error {

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mgreau/zen/internal/gitignore"
 	"github.com/mgreau/zen/internal/session"
 )
 
@@ -101,7 +102,7 @@ func (a *codexAgent) InjectContext(worktreePath, rendered string) (string, error
 		_ = os.WriteFile(sentinel, nil, 0o644)
 	}
 
-	addToGitExclude(worktreePath, ".zen/")
+	_ = gitignore.EnsureExcluded(worktreePath, ".zen/")
 	return ref, nil
 }
 
@@ -427,49 +428,6 @@ func formatSize(bytes int64) string {
 	default:
 		return fmt.Sprintf("%dB", bytes)
 	}
-}
-
-// addToGitExclude appends ref to the repository's git exclude file
-// (info/exclude). Best-effort.
-//
-// NOTE: info/exclude is shared across all worktrees of a repo, so only
-// zen-owned names (like .zen/) belong here — never a name a contributor might
-// legitimately create, since the entry would hide it from git status
-// everywhere and outlive the review worktree.
-func addToGitExclude(worktreePath, ref string) {
-	out, err := runGit(worktreePath, "rev-parse", "--git-path", "info/exclude")
-	if err != nil {
-		return
-	}
-	excludePath := strings.TrimSpace(out)
-	if excludePath == "" {
-		return
-	}
-	if !filepath.IsAbs(excludePath) {
-		excludePath = filepath.Join(worktreePath, excludePath)
-	}
-
-	needsNewline := false
-	if data, err := os.ReadFile(excludePath); err == nil {
-		for _, l := range strings.Split(string(data), "\n") {
-			if strings.TrimSpace(l) == ref {
-				return // already excluded
-			}
-		}
-		needsNewline = len(data) > 0 && data[len(data)-1] != '\n'
-	}
-	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
-		return
-	}
-	f, err := os.OpenFile(excludePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	if needsNewline {
-		fmt.Fprintln(f)
-	}
-	fmt.Fprintf(f, "%s\n", ref)
 }
 
 func runGit(dir string, args ...string) (string, error) {

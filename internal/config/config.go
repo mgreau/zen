@@ -27,7 +27,24 @@ type Config struct {
 	IgnoreDrafts bool                  `yaml:"ignore_drafts"`
 	Watch        WatchConfig           `yaml:"watch"`
 	Slack        SlackConfig           `yaml:"slack"`
+
+	// WorktreeLayout is where new worktrees are created: "sibling"
+	// (default) beside the clone, or "nested" inside it under _worktrees/.
+	// Per-repo overrides live on RepoConfig.
+	WorktreeLayout string `yaml:"worktree_layout"`
 }
+
+// Worktree layout values for worktree_layout.
+const (
+	// LayoutSibling places worktrees beside the clone, at
+	// <base_path>/<name>. The default, and the only layout before the key
+	// existed.
+	LayoutSibling = "sibling"
+	// LayoutNested places worktrees inside the clone, at
+	// <base_path>/<repo>/_worktrees/<name>, kept out of git status through
+	// the clone's info/exclude.
+	LayoutNested = "nested"
+)
 
 // SlackConfig holds configuration for the Slack task watcher: polling for the
 // user's own emoji reaction on a message, then spinning up a feature worktree
@@ -163,6 +180,12 @@ func (w WatchConfig) SessionScanIntervalDuration() time.Duration {
 type RepoConfig struct {
 	FullName string `yaml:"full_name"`
 	BasePath string `yaml:"base_path"`
+	// WorktreeLayout overrides the global worktree_layout for this repo.
+	// Empty means inherit. Useful where nesting is wrong for reasons zen
+	// cannot see -- a Docker build context (which honours .dockerignore,
+	// not .gitignore, and would copy every worktree into the image), or a
+	// repo whose tooling walks the tree without consulting git.
+	WorktreeLayout string `yaml:"worktree_layout"`
 }
 
 // zenHome returns the path to ~/.zen.
@@ -209,9 +232,46 @@ func Load() (*Config, error) {
 	if cfg.Repos == nil {
 		cfg.Repos = make(map[string]RepoConfig)
 	}
+	if cfg.WorktreeLayout == "" {
+		cfg.WorktreeLayout = LayoutSibling
+	}
+	if err := validLayout(cfg.WorktreeLayout); err != nil {
+		return nil, err
+	}
+	for name, repo := range cfg.Repos {
+		if repo.WorktreeLayout == "" {
+			continue
+		}
+		if err := validLayout(repo.WorktreeLayout); err != nil {
+			return nil, fmt.Errorf("repo %q: %w", name, err)
+		}
+	}
 
 	cfg.expandPaths()
 	return cfg, nil
+}
+
+// validLayout rejects an unrecognised worktree_layout. Failing at load is
+// deliberate: a typo that silently fell back to the default would scatter
+// worktrees in the layout the user was trying to move away from.
+func validLayout(layout string) error {
+	switch layout {
+	case LayoutSibling, LayoutNested:
+		return nil
+	}
+	return fmt.Errorf("invalid worktree_layout %q: must be %q or %q", layout, LayoutSibling, LayoutNested)
+}
+
+// WorktreeLayoutFor returns the effective layout for a repo: its own
+// override when set, otherwise the global default, otherwise sibling.
+func (c *Config) WorktreeLayoutFor(short string) string {
+	if repo, ok := c.Repos[short]; ok && repo.WorktreeLayout != "" {
+		return repo.WorktreeLayout
+	}
+	if c.WorktreeLayout != "" {
+		return c.WorktreeLayout
+	}
+	return LayoutSibling
 }
 
 // GetTerminal returns the configured terminal type.

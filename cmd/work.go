@@ -149,7 +149,7 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 	// Construct paths
 	originPath := filepath.Join(basePath, repo)
 	worktreeName := fmt.Sprintf("%s-%s", repo, branch)
-	worktreePath := filepath.Join(basePath, worktreeName)
+	worktreePath := wt.Resolve(cfg, repo, worktreeName)
 	prefix := cfg.GetBranchPrefix()
 	var gitBranch string
 	if prefix != "" {
