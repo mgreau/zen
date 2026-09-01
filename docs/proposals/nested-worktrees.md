@@ -237,15 +237,37 @@ is inert without it:
    `RepoConfig.WorktreeLayout` override, both validated at load;
    `internal/gitignore` with `check-ignore` verification and the
    failure-only warning.
-3. **Documentation.** Placement and a Slack row in
+3. **One creation path.** `worktree.CreateFromPR` gained a context, a
+   per-command timeout, and an optional logger so `internal/review` could
+   stop duplicating the fetch/add/checkout sequence inline. That removed a
+   third `EnsureNestedExcluded` call site: exclusion now happens in the two
+   creators and nowhere else, so a future creation path cannot silently skip
+   it. It also made the most-used creation path testable without a GitHub
+   client, which it previously was not.
+4. **Documentation.** Placement and a Slack row in
    [architecture.md](../architecture.md);
    [configuration.md](../configuration.md) documents the key and the
    narrowed meaning of `base_path`.
 
 Still to come, deliberately separate:
 
-4. **Default flip** to `nested`, after dogfooding on zen itself. A one-line
+5. **Default flip** to `nested`, after dogfooding on zen itself. A one-line
    change whose risk is entirely carried by step 1.
+
+## Coverage
+
+`make cover` reports coverage of the lines a branch adds and fails below 75%;
+CI runs the same gate on every pull request. Whole-project coverage would let
+a well-covered core hide an untested new feature, which is the case worth
+catching. This change lands at 90.4% of its new statements.
+
+The residue is deliberate: the single `Resolve` call line in each of
+`cmd/review.go`, `cmd/work.go`, `internal/reconciler/setup.go`,
+`internal/reconciler/slack.go`, and `internal/review/review.go`, plus the
+write-error branches in `internal/gitignore` that need an unwritable
+filesystem to reach. The `Resolve` lines are covered functionally instead, by
+[zen-tests](https://github.com/imkarrer/zen-tests) `scripts/worktree-layout.sh`,
+which drives the real binary through both layouts and the transition.
 
 ## Notes
 

@@ -241,3 +241,56 @@ func TestResolveFindsWorktreeOutsideBasePath(t *testing.T) {
 		t.Errorf("Resolve() = %q, want the registered worktree %q", got, strayPath)
 	}
 }
+
+// samePath falls back to a cleaned comparison when EvalSymlinks cannot
+// resolve a path, which is the normal case for a worktree that has not been
+// created yet.
+func TestSamePath(t *testing.T) {
+	dir := t.TempDir()
+	tests := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"identical strings", "/a/b", "/a/b", true},
+		{"both nonexistent, equal after cleaning", "/a/b/../b", "/a/b", true},
+		{"both nonexistent, different", "/a/b", "/a/c", false},
+		{"empty left", "", "/a/b", false},
+		{"empty right", "/a/b", "", false},
+		{"both empty", "", "", true},
+		{"existing vs nonexistent", dir, filepath.Join(dir, "nope"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := samePath(tt.a, tt.b); got != tt.want {
+				t.Errorf("samePath(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+// A symlinked path and its target are the same location.
+func TestSamePathFollowsSymlinks(t *testing.T) {
+	real, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(real, "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(real, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if !samePath(link, target) {
+		t.Errorf("samePath(%q, %q) = false, want true", link, target)
+	}
+}
+
+// registeredPath must not blow up when the directory is not a git repo.
+func TestRegisteredPathNonRepo(t *testing.T) {
+	if got := registeredPath(t.TempDir(), "anything", ""); got != "" {
+		t.Errorf("registeredPath() in a non-repo = %q, want empty", got)
+	}
+}

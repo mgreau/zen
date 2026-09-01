@@ -627,3 +627,16 @@ func TestLoadWorktreeLayoutPerRepoInvalid(t *testing.T) {
 		t.Fatal("Load() succeeded with an invalid per-repo worktree_layout")
 	}
 }
+
+// With no layout set anywhere -- and for a repo that is not configured at
+// all -- the effective layout is the sibling default.
+func TestWorktreeLayoutForFallsBackToSibling(t *testing.T) {
+	cfg := &Config{Repos: map[string]RepoConfig{
+		"mono": {FullName: "chainguard-dev/mono", BasePath: "/tmp/mono"},
+	}}
+	for _, repo := range []string{"mono", "not-configured"} {
+		if got := cfg.WorktreeLayoutFor(repo); got != LayoutSibling {
+			t.Errorf("WorktreeLayoutFor(%q) = %q, want %q", repo, got, LayoutSibling)
+		}
+	}
+}

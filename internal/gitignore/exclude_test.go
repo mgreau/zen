@@ -152,3 +152,16 @@ func TestEnsureExcludedPreservesExistingEntries(t *testing.T) {
 		t.Error("_worktrees/ was not added")
 	}
 }
+
+// Outside a git repository there is no info/exclude to write, and no way to
+// make git ignore anything. EnsureExcluded must report that rather than
+// panicking or claiming success.
+func TestEnsureExcludedOutsideRepo(t *testing.T) {
+	dir := t.TempDir()
+	if IsIgnored(dir, "_worktrees/") {
+		t.Error("IsIgnored() = true outside a repo")
+	}
+	if EnsureExcluded(dir, "_worktrees/") {
+		t.Error("EnsureExcluded() = true outside a repo, want false")
+	}
+}

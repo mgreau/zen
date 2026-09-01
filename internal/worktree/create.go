@@ -1,15 +1,48 @@
 package worktree
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mgreau/zen/internal/gitignore"
 	"github.com/mgreau/zen/internal/ui"
 )
+
+// Logger receives progress messages during a create. A nil Logger is valid
+// and discards them, which is what the daemon and MCP callers want.
+type Logger func(msg string)
+
+func (l Logger) logf(format string, args ...any) {
+	if l != nil {
+		l(fmt.Sprintf(format, args...))
+	}
+}
+
+// runGit runs one git command in dir. A non-zero timeout bounds that single
+// command, so a hung fetch on a large repo fails with a clear deadline error
+// rather than blocking GitMu indefinitely. what names the step in errors.
+func runGit(ctx context.Context, dir string, timeout time.Duration, what string, args ...string) error {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("%s timed out after %s", what, timeout)
+	}
+	return fmt.Errorf("%s: %w: %s", what, err, strings.TrimSpace(string(out)))
+}
 
 // EnsureNestedExcluded keeps a worktree created *inside* the clone out of
 // `git status` in the main checkout, by adding its top-level directory to
@@ -82,8 +115,17 @@ func CreateFromMain(originPath, worktreePath, worktreeName, branch string) error
 // worktrees, which check out an existing remote ref, as opposed to
 // CreateFromMain which cuts a brand new branch for feature work.
 //
+// This is the single creation path for review worktrees -- the CLI, the MCP
+// server, and the daemon all route through it. Keeping it single matters
+// beyond deduplication: worktree creation now has to exclude a nested
+// worktree from git status, and a second inline copy of these git calls
+// would silently skip that step.
+//
+// timeout bounds each individual git command; zero means no deadline beyond
+// ctx. log may be nil.
+//
 // If worktreePath already exists by the time the lock is acquired (e.g. a
-// concurrent caller created it first), this is a no-op — callers that need
+// concurrent caller created it first), this is a no-op -- callers that need
 // a fast pre-lock existence check too (to skip the wait entirely in the
 // common case) can still do their own os.Stat before calling.
 //
@@ -92,7 +134,7 @@ func CreateFromMain(originPath, worktreePath, worktreeName, branch string) error
 // cleaned up. Serializes on RepoLock and GitMu to prevent concurrent
 // index.lock conflicts across worktree operations on the same origin repo,
 // in this process or another.
-func CreateFromPR(originPath, worktreePath, worktreeName string, prNumber int) error {
+func CreateFromPR(ctx context.Context, originPath, worktreePath, worktreeName string, prNumber int, timeout time.Duration, log Logger) error {
 	repoLock, err := AcquireRepoLock(originPath)
 	if err != nil {
 		return err
@@ -106,29 +148,25 @@ func CreateFromPR(originPath, worktreePath, worktreeName string, prNumber int) e
 	}
 
 	branch := PRBranch(prNumber)
-	fetchRef := fmt.Sprintf("+pull/%d/head:%s", prNumber, branch)
 
-	fetchCmd := exec.Command("git", "fetch", "origin", fetchRef)
-	fetchCmd.Dir = originPath
-	if out, err := fetchCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git fetch: %w: %s", err, string(out))
+	log.logf("Fetching pull/%d/head...", prNumber)
+	fetchRef := fmt.Sprintf("+pull/%d/head:%s", prNumber, branch)
+	if err := runGit(ctx, originPath, timeout, "git fetch", "fetch", "origin", fetchRef); err != nil {
+		return err
 	}
 
-	wtCmd := exec.Command("git", "worktree", "add", "--no-checkout", worktreePath, branch)
-	wtCmd.Dir = originPath
-	if out, err := wtCmd.CombinedOutput(); err != nil {
+	log.logf("Creating worktree %s...", worktreeName)
+	if err := runGit(ctx, originPath, timeout, "git worktree add", "worktree", "add", "--no-checkout", worktreePath, branch); err != nil {
 		CleanupFailedAdd(originPath, worktreePath, branch)
-		return fmt.Errorf("git worktree add: %w: %s", err, string(out))
+		return err
+	}
+
+	if err := runGit(ctx, worktreePath, timeout, "git checkout in worktree", "checkout"); err != nil {
+		CleanupFailedAdd(originPath, worktreePath, branch)
+		return err
 	}
 
 	EnsureNestedExcluded(originPath, worktreePath)
-
-	checkoutCmd := exec.Command("git", "checkout")
-	checkoutCmd.Dir = worktreePath
-	if out, err := checkoutCmd.CombinedOutput(); err != nil {
-		CleanupFailedAdd(originPath, worktreePath, branch)
-		return fmt.Errorf("git checkout in worktree: %w: %s", err, string(out))
-	}
 
 	return nil
 }
