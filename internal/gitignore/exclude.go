@@ -31,20 +31,56 @@ func IsIgnored(dir, ref string) bool {
 	return cmd.Run() == nil
 }
 
-// EnsureExcluded adds ref to the repository's info/exclude unless git
-// already ignores it, and reports whether ref is ignored afterwards.
+// Result reports what EnsureExcluded had to do.
+type Result int
+
+const (
+	// AlreadyIgnored means git ignored the path before zen touched
+	// anything, so no repository was modified. A user-level ignore
+	// (~/.config/git/ignore, which git reads with no configuration) puts
+	// every repo in this state at once, and is the preferred arrangement
+	// for a path that reflects how the user works rather than anything
+	// about a particular project.
+	AlreadyIgnored Result = iota
+	// Written means the entry was added to this clone's info/exclude.
+	Written
+	// Failed means the path is still not ignored afterwards.
+	Failed
+)
+
+func (r Result) String() string {
+	switch r {
+	case AlreadyIgnored:
+		return "already-ignored"
+	case Written:
+		return "written"
+	default:
+		return "failed"
+	}
+}
+
+// Ignored reports whether git ignores the path now, however that came about.
+func (r Result) Ignored() bool { return r != Failed }
+
+// EnsureExcluded makes git ignore ref within dir's repository, preferring to
+// do nothing.
 //
-// A false return is the only outcome a user has to resolve by hand — an
-// unwritable exclude file, or a negation pattern in .gitignore that
-// overrides the entry. Callers decide how loudly to say so.
-func EnsureExcluded(dir, ref string) bool {
+// If ref is already ignored — by a user-level ignore, a committed
+// .gitignore, or an earlier call — no repository is modified and the result
+// is AlreadyIgnored. Only otherwise is an entry appended to this clone's
+// info/exclude. Failed is the one outcome a user has to resolve by hand: an
+// unwritable exclude file, or a negation pattern overriding the entry.
+func EnsureExcluded(dir, ref string) Result {
 	if IsIgnored(dir, ref) {
-		return true
+		return AlreadyIgnored
 	}
 	if err := appendExclude(dir, ref); err != nil {
-		return false
+		return Failed
 	}
-	return IsIgnored(dir, ref)
+	if IsIgnored(dir, ref) {
+		return Written
+	}
+	return Failed
 }
 
 // appendExclude writes ref as a new line in the repo's info/exclude,

@@ -47,6 +47,16 @@ func initTestRepo(t *testing.T) string {
 	run(repoPath, "config", "user.name", "Test")
 	run(repoPath, "config", "commit.gpgsign", "false")
 
+	// Neutralize any user-level ignore. Without this the fixture inherits
+	// the developer's ~/.config/git/ignore, so a machine that follows zen's
+	// own advice ("put _worktrees/ in your global ignore") would see these
+	// tests pass or fail for reasons unrelated to the code.
+	empty := filepath.Join(dir, ".empty-excludes")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(repoPath, "config", "core.excludesFile", empty)
+
 	return repoPath
 }
 
@@ -324,5 +334,41 @@ func TestEnsureNestedExcludedIgnoresSiblings(t *testing.T) {
 	// that zen added nothing -- not that the file is empty.
 	if strings.Contains(string(data), "repo-feature") {
 		t.Errorf("info/exclude was written for a sibling worktree: %q", data)
+	}
+}
+
+// End to end: with a user-level ignore covering _worktrees/, creating a
+// nested worktree leaves the clone's git status clean *and* writes nothing
+// into the repository -- which is the whole argument for setting one.
+func TestCreateFromMainNestedWritesNothingWhenUserIgnoreCovers(t *testing.T) {
+	repoPath := initTestRepo(t)
+	userIgnore := filepath.Join(t.TempDir(), "ignore")
+	if err := os.WriteFile(userIgnore, []byte("_worktrees/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := exec.Command("git", "config", "core.excludesFile", userIgnore)
+	cfg.Dir = repoPath
+	if out, err := cfg.CombinedOutput(); err != nil {
+		t.Fatalf("git config: %v: %s", err, out)
+	}
+	before, _ := os.ReadFile(filepath.Join(repoPath, ".git", "info", "exclude"))
+
+	worktreePath := filepath.Join(repoPath, NestedDir, "repo-feature")
+	if err := CreateFromMain(repoPath, worktreePath, "repo-feature", "mgreau/feature"); err != nil {
+		t.Fatalf("CreateFromMain() error: %v", err)
+	}
+
+	after, _ := os.ReadFile(filepath.Join(repoPath, ".git", "info", "exclude"))
+	if string(before) != string(after) {
+		t.Errorf("info/exclude changed despite a user-level ignore:\nbefore %q\nafter  %q", before, after)
+	}
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "" {
+		t.Errorf("git status = %q, want clean", got)
 	}
 }

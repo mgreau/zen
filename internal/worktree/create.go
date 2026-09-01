@@ -59,9 +59,17 @@ func EnsureNestedExcluded(originPath, worktreePath string) {
 		return // beside the clone: nothing inside the repo to hide
 	}
 	top := strings.Split(rel, string(filepath.Separator))[0] + "/"
-	if !gitignore.EnsureExcluded(originPath, top) {
+	switch gitignore.EnsureExcluded(originPath, top) {
+	case gitignore.Written:
+		// Fires at most once per repo: subsequent creates see it ignored.
+		// Point at the user-level file, which covers every repo at once and
+		// leaves zen writing into none of them.
+		ui.LogInfo(fmt.Sprintf(
+			"Excluded %s in %s. To keep zen out of each repo, add %s to your user-level gitignore instead: echo '%s' >> ~/.config/git/ignore",
+			top, originPath, top, top))
+	case gitignore.Failed:
 		ui.LogWarn(fmt.Sprintf(
-			"%s is inside %s but git does not ignore it -- add %s to .gitignore, or it will show as untracked",
+			"%s is inside %s but git does not ignore it -- add %s to your user-level gitignore (~/.config/git/ignore), or it will show as untracked",
 			top, originPath, top))
 	}
 }

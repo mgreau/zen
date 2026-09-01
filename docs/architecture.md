@@ -32,7 +32,11 @@ That asymmetry is what makes the setting safe to change. Deriving the path from 
 
 `Resolve` returns the configured spelling of a path whenever it names the same location as the registration (compared through `filepath.EvalSymlinks`, since git reports resolved paths and `base_path` may not be one). Callers use the worktree path as an agent-session key — Claude encodes it into a directory name under `~/.claude/projects/` — so handing back a different string for an unchanged worktree would orphan its history.
 
-**Keeping git quiet.** A nested worktree would otherwise show as untracked in the main checkout. `worktree.EnsureNestedExcluded` adds the top-level directory to the clone's `.git/info/exclude` after a successful `git worktree add`, via `internal/gitignore`. The committed `.gitignore` is never touched — zen manages repos the user may not own, and excluding a zen-owned path there would mean a commit to someone else's project. Exclusion is verified with `git check-ignore` rather than by reading `.gitignore`, because a negated pattern or a `core.excludesFile` entry both change the answer invisibly; zen warns only when that verification fails, which is the only case a user has to fix by hand.
+**Keeping git quiet.** A nested worktree would otherwise show as untracked in the main checkout. `worktree.EnsureNestedExcluded` runs after a successful `git worktree add` and delegates to `gitignore.EnsureExcluded`, which prefers to do nothing: if `git check-ignore` says the path is already ignored — by a user-level ignore, a committed `.gitignore`, or an earlier call — it returns `AlreadyIgnored` and no repository is modified. Only otherwise does it append to that clone's `.git/info/exclude` and log a note pointing at the user-level file.
+
+That ordering matters because `_worktrees/` describes how the user works, not anything about a given project, so the user-level ignore is the right scope for it; a single line in `~/.config/git/ignore` (which git reads with no `core.excludesFile` setting) puts every repo in the `AlreadyIgnored` state at once. The per-clone fallback exists so `nested` works without setup. The committed `.gitignore` is never touched in either case — zen manages repos the user may not own.
+
+Exclusion is checked with `git check-ignore` rather than by reading `.gitignore`, because a negated pattern or a `core.excludesFile` entry both change the answer invisibly. `Failed` — still not ignored after the attempt — is the only outcome that warns, and the only one a user has to fix by hand.
 
 ## Daemon architecture
 

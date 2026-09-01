@@ -112,7 +112,7 @@ func (a *codexAgent) InjectContext(worktreePath, rendered string) (string, error
 		_ = os.WriteFile(sentinel, []byte(ref), 0o644)
 	}
 
-	gitignore.EnsureExcluded(worktreePath, ".zen/")
+	_ = gitignore.EnsureExcluded(worktreePath, ".zen/")
 	return ref, nil
 }
 

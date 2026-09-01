@@ -161,15 +161,29 @@ operates on repositories the user does not own.
 A global `core.excludesFile` is wrong: it is the user's, not zen's, and
 changing it reaches beyond the repos zen manages.
 
-`.git/info/exclude` is right. It is per-clone, needs no commit, and zen
-already used it — `addToGitExclude` in `internal/agent/codex.go` added
+A **user-level ignore** is the best fit, and was underweighted in the first
+draft of this proposal. `~/.config/git/ignore` — which git reads with no
+`core.excludesFile` setting at all — covers every repo with one line, and
+leaves zen writing into none of them. `_worktrees/` describes how the user
+works rather than anything about a given project, so the scope of the
+mechanism should match: user-level for `_worktrees/`, per-repo for `.zen/`
+(which really is content injected into one specific worktree). Its costs are
+real but small: it applies to every repo the user ever clones, and it does
+not travel to other machines — irrelevant here, since worktrees are local
+anyway. zen never writes it automatically; that file belongs to the user and
+is shared with every tool they run.
+
+`.git/info/exclude` is the right *fallback*. It is per-clone, needs no commit,
+and zen already used it — `addToGitExclude` in `internal/agent/codex.go` added
 `.zen/` there, with a policy comment stating that only zen-owned names
 belong in a file shared by every worktree of the repo. `_worktrees/` is such
 a name.
 
-The approach is therefore to **fix rather than warn**: `EnsureExcluded`
-writes the entry, then verifies with `git check-ignore -q`, and a warning is
-emitted only when that verification fails — an unwritable exclude file, or a
+The approach is therefore to **prefer doing nothing, then fix, then warn**:
+`EnsureExcluded` returns `AlreadyIgnored` without touching the repository
+when `git check-ignore` already says yes — which is what a user-level ignore
+produces everywhere — writes to `info/exclude` only otherwise, and warns
+only when the path is still not ignored afterwards — an unwritable exclude file, or a
 negation pattern overriding it — because that is the only case the user has
 to resolve by hand.
 

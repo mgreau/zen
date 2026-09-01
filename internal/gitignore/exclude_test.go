@@ -25,6 +25,15 @@ func initRepo(t *testing.T) string {
 	run(t, dir, "init", "-b", "main")
 	run(t, dir, "config", "user.email", "test@example.com")
 	run(t, dir, "config", "user.name", "Test")
+	// Neutralize any user-level ignore. Without this the fixture inherits
+	// the developer's ~/.config/git/ignore, so a machine that follows zen's
+	// own advice ("put _worktrees/ in your global ignore") would see these
+	// tests pass or fail for reasons unrelated to the code.
+	empty := filepath.Join(dir, ".empty-excludes")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, dir, "config", "core.excludesFile", empty)
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +60,7 @@ func TestEnsureExcluded(t *testing.T) {
 	if IsIgnored(repo, "_worktrees/") {
 		t.Fatal("_worktrees/ ignored before anything was written")
 	}
-	if !EnsureExcluded(repo, "_worktrees/") {
+	if !EnsureExcluded(repo, "_worktrees/").Ignored() {
 		t.Fatal("EnsureExcluded() = false, want the path ignored afterwards")
 	}
 	if !IsIgnored(repo, "_worktrees/") {
@@ -64,7 +73,7 @@ func TestEnsureExcluded(t *testing.T) {
 func TestEnsureExcludedBeforeDirectoryExists(t *testing.T) {
 	repo := initRepo(t)
 
-	if !EnsureExcluded(repo, "_worktrees/") {
+	if !EnsureExcluded(repo, "_worktrees/").Ignored() {
 		t.Fatal("EnsureExcluded() = false for a path that does not exist yet")
 	}
 	if _, err := os.Stat(filepath.Join(repo, "_worktrees")); !os.IsNotExist(err) {
@@ -79,7 +88,7 @@ func TestEnsureExcludedIsIdempotent(t *testing.T) {
 	repo := initRepo(t)
 
 	for i := 0; i < 3; i++ {
-		if !EnsureExcluded(repo, "_worktrees/") {
+		if !EnsureExcluded(repo, "_worktrees/").Ignored() {
 			t.Fatalf("EnsureExcluded() = false on call %d", i+1)
 		}
 	}
@@ -96,7 +105,7 @@ func TestEnsureExcludedSkipsWhenGitignoreAlreadyCovers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !EnsureExcluded(repo, "_worktrees/") {
+	if !EnsureExcluded(repo, "_worktrees/").Ignored() {
 		t.Fatal("EnsureExcluded() = false when .gitignore already covers the path")
 	}
 	if got := excludeContents(t, repo); strings.Contains(got, "_worktrees/") {
@@ -113,8 +122,8 @@ func TestEnsureExcludedReportsNegationOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if EnsureExcluded(repo, "_worktrees/") {
-		t.Error("EnsureExcluded() = true, want false when .gitignore negates the pattern")
+	if got := EnsureExcluded(repo, "_worktrees/"); got != Failed {
+		t.Errorf("EnsureExcluded() = %v, want Failed when .gitignore negates the pattern", got)
 	}
 }
 
@@ -125,7 +134,7 @@ func TestEnsureExcludedFromLinkedWorktree(t *testing.T) {
 	worktreePath := filepath.Join(t.TempDir(), "wt")
 	run(t, repo, "worktree", "add", "-b", "feature", worktreePath)
 
-	if !EnsureExcluded(worktreePath, ".zen/") {
+	if !EnsureExcluded(worktreePath, ".zen/").Ignored() {
 		t.Fatal("EnsureExcluded() = false from a linked worktree")
 	}
 	if got := excludeContents(t, repo); !strings.Contains(got, ".zen/") {
@@ -142,7 +151,7 @@ func TestEnsureExcludedPreservesExistingEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !EnsureExcluded(repo, "_worktrees/") {
+	if !EnsureExcluded(repo, "_worktrees/").Ignored() {
 		t.Fatal("EnsureExcluded() = false")
 	}
 	if !IsIgnored(repo, "debug.log") {
@@ -161,7 +170,53 @@ func TestEnsureExcludedOutsideRepo(t *testing.T) {
 	if IsIgnored(dir, "_worktrees/") {
 		t.Error("IsIgnored() = true outside a repo")
 	}
-	if EnsureExcluded(dir, "_worktrees/") {
-		t.Error("EnsureExcluded() = true outside a repo, want false")
+	if got := EnsureExcluded(dir, "_worktrees/"); got != Failed {
+		t.Errorf("EnsureExcluded() = %v outside a repo, want Failed", got)
+	}
+}
+
+// The point of a user-level ignore (~/.config/git/ignore, or wherever
+// core.excludesFile points) is that zen then modifies no repository at all.
+// A repo-scoped core.excludesFile exercises the same resolution git uses for
+// the global one, without touching process environment.
+func TestEnsureExcludedSkipsWhenUserLevelIgnoreCovers(t *testing.T) {
+	repo := initRepo(t)
+	userIgnore := filepath.Join(t.TempDir(), "ignore")
+	if err := os.WriteFile(userIgnore, []byte("_worktrees/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, repo, "config", "core.excludesFile", userIgnore)
+
+	if got := EnsureExcluded(repo, "_worktrees/"); got != AlreadyIgnored {
+		t.Errorf("EnsureExcluded() = %v, want AlreadyIgnored", got)
+	}
+	if strings.Contains(excludeContents(t, repo), "_worktrees/") {
+		t.Error("info/exclude was written despite a user-level ignore covering the path")
+	}
+}
+
+// Without any ignore in place, zen falls back to the per-clone file.
+func TestEnsureExcludedFallsBackToInfoExclude(t *testing.T) {
+	repo := initRepo(t)
+	if got := EnsureExcluded(repo, "_worktrees/"); got != Written {
+		t.Errorf("EnsureExcluded() = %v, want Written", got)
+	}
+	if !strings.Contains(excludeContents(t, repo), "_worktrees/") {
+		t.Error("info/exclude was not written")
+	}
+	// Second call must be a no-op now that the first one took effect.
+	if got := EnsureExcluded(repo, "_worktrees/"); got != AlreadyIgnored {
+		t.Errorf("second EnsureExcluded() = %v, want AlreadyIgnored", got)
+	}
+}
+
+func TestResultString(t *testing.T) {
+	for r, want := range map[Result]string{AlreadyIgnored: "already-ignored", Written: "written", Failed: "failed"} {
+		if got := r.String(); got != want {
+			t.Errorf("Result(%d).String() = %q, want %q", r, got, want)
+		}
+		if got := r.Ignored(); got != (r != Failed) {
+			t.Errorf("Result(%d).Ignored() = %v", r, got)
+		}
 	}
 }
