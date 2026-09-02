@@ -23,6 +23,7 @@ func TestParseRemote(t *testing.T) {
 		{url: "https://github.com/", wantErr: true},
 		{url: "https://github.com/zen", wantErr: true},
 		{url: "/local/path/repo.git", wantErr: true},
+		{url: "file:///local/repo.git", wantErr: true},
 		{url: "", wantErr: true},
 	}
 
@@ -171,4 +172,17 @@ func TestDetectErrors(t *testing.T) {
 			t.Error("Detect in a linked worktree should fail")
 		}
 	})
+}
+
+func TestDetectUnparseableRemote(t *testing.T) {
+	base := tempDir(t)
+	clone := filepath.Join(base, "zen")
+	if err := exec.Command("mkdir", clone).Run(); err != nil {
+		t.Fatal(err)
+	}
+	initRepo(t, clone, map[string]string{"origin": "/local/path/repo.git"})
+
+	if _, err := Detect(clone); err == nil {
+		t.Error("Detect with an unparseable remote URL should fail")
+	}
 }
