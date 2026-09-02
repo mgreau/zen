@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/mgreau/zen/internal/gitrepo"
 	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
 	wt "github.com/mgreau/zen/internal/worktree"
@@ -140,10 +141,16 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		context = args[2]
 	}
 
-	// Validate repo exists in config
+	// Validate repo exists in config. On first use from inside an
+	// unregistered clone whose name matches, offer to register it.
 	basePath := cfg.RepoBasePath(repo)
 	if basePath == "" {
-		return fmt.Errorf("unknown repo %q — check ~/.zen/config.yaml", repo)
+		if info, err := gitrepo.Detect("."); err == nil && info.Short == repo && offerRegisterRepo(info) {
+			basePath = cfg.RepoBasePath(repo)
+		}
+	}
+	if basePath == "" {
+		return fmt.Errorf("unknown repo %q — run 'zen repo add' from its clone, or check ~/.zen/config.yaml", repo)
 	}
 
 	// Construct paths
