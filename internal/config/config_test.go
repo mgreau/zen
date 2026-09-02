@@ -602,3 +602,73 @@ func TestAddRepoNoReposSection(t *testing.T) {
 		t.Errorf("authors should survive the edit, got %v", cfg.Authors)
 	}
 }
+
+func TestAddRepoNullReposSection(t *testing.T) {
+	writeTestConfig(t, `# top comment
+repos:
+authors:
+  - testuser
+`)
+
+	added, err := AddRepo("zen", RepoConfig{FullName: "mgreau/zen", BasePath: "~/src"})
+	if err != nil {
+		t.Fatalf("AddRepo: %v", err)
+	}
+	if !added {
+		t.Fatal("AddRepo should add to a config with an empty repos: key")
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.RepoFullName("zen"); got != "mgreau/zen" {
+		t.Errorf("RepoFullName(zen) = %q, want mgreau/zen", got)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".zen", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "# top comment") {
+		t.Error("comment should survive the edit")
+	}
+}
+
+func TestAddRepoPreservesFileMode(t *testing.T) {
+	path := writeTestConfig(t, "repos:\n")
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := AddRepo("zen", RepoConfig{FullName: "mgreau/zen", BasePath: "~/src"}); err != nil {
+		t.Fatalf("AddRepo: %v", err)
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("config mode = %o, want 600 preserved", fi.Mode().Perm())
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Error("temp file should not be left behind")
+	}
+}
+
+func TestAddRepoIdempotentAbsolutePath(t *testing.T) {
+	writeTestConfig(t, `repos:
+  zen:
+    full_name: mgreau/zen
+    base_path: /opt/src
+`)
+
+	added, err := AddRepo("zen", RepoConfig{FullName: "mgreau/zen", BasePath: "/opt/src"})
+	if err != nil {
+		t.Fatalf("AddRepo: %v", err)
+	}
+	if added {
+		t.Error("re-adding an identical repo with absolute paths should be a no-op")
+	}
+}

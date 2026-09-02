@@ -393,8 +393,20 @@ func AddRepo(short string, rc RepoConfig) (bool, error) {
 	if err := enc.Close(); err != nil {
 		return false, fmt.Errorf("marshalling config: %w", err)
 	}
-	if err := os.WriteFile(yamlPath, []byte(buf.String()), 0o644); err != nil {
-		return false, fmt.Errorf("writing %s: %w", yamlPath, err)
+
+	// Write via a temp file + rename so an interrupted write can never
+	// truncate the config, keeping the file's original permissions.
+	fi, err := os.Stat(yamlPath)
+	if err != nil {
+		return false, fmt.Errorf("stat %s: %w", yamlPath, err)
+	}
+	tmpPath := yamlPath + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(buf.String()), fi.Mode().Perm()); err != nil {
+		return false, fmt.Errorf("writing %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, yamlPath); err != nil {
+		os.Remove(tmpPath)
+		return false, fmt.Errorf("replacing %s: %w", yamlPath, err)
 	}
 	return true, nil
 }
