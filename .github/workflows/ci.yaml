@@ -26,3 +26,30 @@ jobs:
 
       - name: Lint
         run: go vet ./...
+
+  flox-build:
+    # Builds .flox/pkgs/zen.nix from scratch on every PR via the same
+    # `flox build zen` the README's quickstart tells contributors to run.
+    # The `go build`/`go test` job above never touches vendorHash or the
+    # Nix sandbox's checkPhase PATH, so a stale hash or a check-only PATH
+    # dependency (both bit us once already, see d286182) can merge silently
+    # otherwise. flox/install-flox-action bundles its own Nix when the
+    # runner doesn't have one, so no separate Nix installer is needed.
+    #
+    # macos-latest (arm64) is included, not just ubuntu-latest: nixpkgs
+    # package availability and the Nix fixupPhase (patchelf on Linux vs.
+    # install_name_tool/codesigning on Darwin) genuinely diverge by
+    # platform, and zen ships nix-darwin support — see the go_1_25 darwin
+    # availability gap noted in .flox/env/manifest.toml for a precedent.
+    # Both are free/unmetered on GitHub-hosted runners for public repos.
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: flox/install-flox-action@v2
+
+      - name: flox build zen
+        run: flox build zen
