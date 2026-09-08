@@ -18,7 +18,7 @@
 
   # Keep in sync with go.sum. `flox build` / `nix build` prints the correct
   # hash when this is empty or wrong.
-  vendorHash = "sha256-A1JmmPLT0ys5we8CXu4ade+dGuJLG4rTIKW2rOmQ5wo=";
+  vendorHash = "sha256-d0muw8O2bIftdNNXZBxrpgjsZM/NjBL09icanyVTA6Q=";
 
   env.CGO_ENABLED = "0";
 
@@ -30,6 +30,11 @@
   ];
 
   nativeBuildInputs = [ makeWrapper ];
+
+  # TestCreateFromMain shells out to `git`; the sandboxed checkPhase has no
+  # PATH beyond nativeCheckInputs, so `git` must be listed here too (it's
+  # otherwise only reachable at runtime via postInstall's wrapProgram).
+  nativeCheckInputs = [ git ];
 
   # zen execs git and gh; wrap them so the binary works without a project env.
   postInstall = ''
