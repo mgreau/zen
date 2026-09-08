@@ -1,11 +1,9 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
 	"io/fs"
 	"os"
-	"strings"
 
 	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/config"
@@ -19,19 +17,12 @@ func homeDir() string {
 	return os.Getenv("HOME")
 }
 
-// stdinIsTerminal reports whether stdin is an interactive terminal, so
-// prompts are only shown to a human and never block scripted invocations.
-func stdinIsTerminal() bool {
-	fi, err := os.Stdin.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
-}
-
 // offerRegisterRepo interactively offers to add a detected clone to the
 // config on first use. On acceptance it persists the entry and updates the
 // in-memory cfg so the current command can proceed. Returns true if the
 // repo was registered.
 func offerRegisterRepo(info gitrepo.Info) bool {
-	if !stdinIsTerminal() {
+	if !ui.Interactive() {
 		return false
 	}
 	// Already registered under some short name — nothing to offer.
@@ -43,11 +34,8 @@ func offerRegisterRepo(info gitrepo.Info) bool {
 
 	home := homeDir()
 	fmt.Printf("%s is not registered with zen yet.\n", info.FullName)
-	fmt.Printf("Register it as %q (worktrees in %s)? [Y/n]: ", info.Short, ui.ShortenHome(info.BasePath, home))
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Scan()
-	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
-	if answer != "" && answer != "y" && answer != "yes" {
+	if !ui.ConfirmYesDefault(fmt.Sprintf("Register it as %q (worktrees in %s)? [Y/n]: ",
+		info.Short, ui.ShortenHome(info.BasePath, home))) {
 		return false
 	}
 
