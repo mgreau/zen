@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 // Prompt I/O, swapped in tests. A nil promptIn means os.Stdin, read at call
@@ -32,15 +34,13 @@ func promptInput() *bufio.Reader {
 	return promptReader
 }
 
-// defaultStdinIsTTY reports whether stdin is a character device. A pipe, a
-// redirected file and /dev/null are all false, so `yes | zen ...` cannot
-// answer a prompt on the user's behalf.
+// defaultStdinIsTTY reports whether stdin is a real terminal. A character
+// device check is not enough: /dev/null is a character device, so
+// `zen ... < /dev/null` would look interactive and its immediate EOF would be
+// read as an answer. A pipe, a redirected file and /dev/null are all false
+// here, so `yes | zen ...` cannot answer a prompt on the user's behalf.
 func defaultStdinIsTTY() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
 // Interactive reports whether there is a human on the other end of stdin who
