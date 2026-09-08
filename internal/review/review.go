@@ -40,9 +40,12 @@ func noop(string) {}
 // creates the git worktree, injects CLAUDE.local.md context, and caches
 // PR metadata. Returns the result or an error.
 //
-// If the worktree already exists, returns a Result with the existing path.
-// The caller is responsible for detecting the repo if repoShort is empty.
-func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, repoShort string, prNumber int, log Logger) (*Result, error) {
+// If the worktree already exists, it fetches pull/N/head and fast-forwards
+// unless the tree is dirty or an agent is running, then returns the existing
+// path. confirmReset is required to git reset --hard on a rewritten GitHub
+// head; nil never resets (daemon/MCP). The caller is responsible for detecting
+// the repo if repoShort is empty.
+func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, repoShort string, prNumber int, log Logger, confirmReset ConfirmReset) (*Result, error) {
 	if log == nil {
 		log = noop
 	}
@@ -54,23 +57,11 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 	fullRepo := cfg.RepoFullName(repoShort)
 
 	originPath := filepath.Join(basePath, repoShort)
-	worktreeName := fmt.Sprintf("%s-pr-%d", repoShort, prNumber)
+	worktreeName := wt.PRName(repoShort, prNumber)
 	worktreePath := filepath.Join(basePath, worktreeName)
 
-	// If worktree already exists, return it
 	if _, err := os.Stat(worktreePath); err == nil {
-		meta, ok := prcache.Get(repoShort, prNumber)
-		title, author := "", ""
-		if ok {
-			title = meta.Title
-			author = meta.Author
-		}
-		return &Result{
-			WorktreePath: worktreePath,
-			PRNumber:     prNumber,
-			Title:        title,
-			Author:       author,
-		}, nil
+		return refreshExisting(ctx, ag, repoShort, fullRepo, originPath, worktreePath, prNumber, log, confirmReset)
 	}
 
 	// Fetch PR details from GitHub
@@ -142,17 +133,7 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 
 	wt.GitMu.Unlock()
 
-	// Inject PR context into the agent's context file (e.g. CLAUDE.local.md, AGENTS.md).
-	log(fmt.Sprintf("Injecting PR context into %s...", ag.ContextFile()))
-	if rendered, rerr := ctxpkg.RenderPRContext(ctx, fullRepo, prNumber); rerr != nil {
-		log(fmt.Sprintf("Warning: failed to render context: %v", rerr))
-	} else if ref, ierr := ag.InjectContext(worktreePath, rendered); ierr != nil {
-		log(fmt.Sprintf("Warning: failed to inject context: %v", ierr))
-	} else {
-		log(fmt.Sprintf("Wrote PR context to %s", ref))
-	}
-
-	// Cache PR metadata
+	injectContext(ctx, ag, worktreePath, fullRepo, prNumber, log)
 	prcache.Set(repoShort, prNumber, details.Title, details.Author)
 
 	return &Result{
@@ -161,6 +142,55 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 		Title:        details.Title,
 		Author:       details.Author,
 	}, nil
+}
+
+func refreshExisting(ctx context.Context, ag agent.Agent, repoShort, fullRepo, originPath, worktreePath string, prNumber int, log Logger, confirmReset ConfirmReset) (*Result, error) {
+	title, author := "", ""
+	if meta, ok := prcache.Get(repoShort, prNumber); ok {
+		title = meta.Title
+		author = meta.Author
+	}
+
+	wantSHA := ""
+	client, err := github.NewClient(ctx)
+	if err != nil {
+		log(fmt.Sprintf("Warning: GitHub client: %v", err))
+	} else if details, derr := client.GetPRDetails(ctx, fullRepo, prNumber); derr != nil {
+		log(fmt.Sprintf("Warning: fetching PR details: %v", derr))
+	} else {
+		wantSHA = details.HeadSHA
+		title = details.Title
+		author = details.Author
+		prcache.Set(repoShort, prNumber, details.Title, details.Author)
+	}
+
+	log(fmt.Sprintf("Refreshing PR #%d worktree...", prNumber))
+	outcome, err := SyncExisting(ctx, originPath, worktreePath, prNumber, wantSHA, log, confirmReset)
+	if err != nil {
+		log(fmt.Sprintf("Warning: failed to refresh PR #%d: %v", prNumber, err))
+	} else if outcome == SyncUpdated {
+		injectContext(ctx, ag, worktreePath, fullRepo, prNumber, log)
+	} else if outcome == SyncSkippedReset {
+		log(fmt.Sprintf("PR #%d cannot be fast-forwarded onto GitHub's head; worktree left as-is", prNumber))
+	}
+
+	return &Result{
+		WorktreePath: worktreePath,
+		PRNumber:     prNumber,
+		Title:        title,
+		Author:       author,
+	}, nil
+}
+
+func injectContext(ctx context.Context, ag agent.Agent, worktreePath, fullRepo string, prNumber int, log Logger) {
+	log(fmt.Sprintf("Injecting PR context into %s...", ag.ContextFile()))
+	if rendered, rerr := ctxpkg.RenderPRContext(ctx, fullRepo, prNumber); rerr != nil {
+		log(fmt.Sprintf("Warning: failed to render context: %v", rerr))
+	} else if ref, ierr := ag.InjectContext(worktreePath, rendered); ierr != nil {
+		log(fmt.Sprintf("Warning: failed to inject context: %v", ierr))
+	} else {
+		log(fmt.Sprintf("Wrote PR context to %s", ref))
+	}
 }
 
 // DetectRepo tries each configured repo to find which one contains the

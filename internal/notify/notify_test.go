@@ -23,6 +23,11 @@ func TestLinuxNotifyArgs(t *testing.T) {
 			"New PR Review Request", "PR #7: add feature", "by alice in app",
 			[]string{"--app-name=zen", "New PR Review Request", "PR #7: add feature\nby alice in app"},
 		},
+		{
+			"pr updated",
+			"PR #18 updated", "keep worktrees current", "zen",
+			[]string{"--app-name=zen", "PR #18 updated", "keep worktrees current\nzen"},
+		},
 	}
 
 	for _, tt := range tests {

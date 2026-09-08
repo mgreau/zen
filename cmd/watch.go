@@ -23,6 +23,7 @@ import (
 	"github.com/mgreau/zen/internal/reconciler"
 	slackpkg "github.com/mgreau/zen/internal/slack"
 	"github.com/mgreau/zen/internal/ui"
+	wt "github.com/mgreau/zen/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
@@ -281,7 +282,7 @@ func watchDaemon() error {
 	setupRec := reconciler.NewSetupReconciler(cfg)
 	cleanupRec := reconciler.NewCleanupReconciler(cfg)
 
-	seenPRs := loadSeenPRs()
+	st := loadCheckState()
 
 	// Slack task watcher (opt-in): polls for the user's own emoji reactions
 	// and spins up a feature worktree + live agent session per flagged
@@ -342,7 +343,7 @@ func watchDaemon() error {
 	}
 
 	// Initial poll and session scan
-	pollOnce(ctx, seenPRs, setupQueue, setupRec)
+	pollOnce(ctx, st, setupQueue, setupRec)
 	if slackEnabled {
 		pollSlackOnce(ctx, slackClient, slackSeen, slackQueue)
 		if err := slackRec.PruneDone(ctx); err != nil {
@@ -363,7 +364,7 @@ func watchDaemon() error {
 
 		case <-pollTicker.C:
 			reloadConfig(setupRec, cleanupRec, slackRec, pollTicker)
-			pollOnce(ctx, seenPRs, setupQueue, setupRec)
+			pollOnce(ctx, st, setupQueue, setupRec)
 
 		case <-slackC:
 			pollSlackOnce(ctx, slackClient, slackSeen, slackQueue)
@@ -436,75 +437,116 @@ func reloadConfig(setupRec *reconciler.SetupReconciler, cleanupRec *reconciler.C
 	}
 }
 
-type checkState struct {
-	Timestamp string   `json:"timestamp"`
-	PRCount   int      `json:"pr_count"`
-	SeenPRs   []string `json:"seen_prs"`
-}
-
-func loadSeenPRs() map[string]bool {
+func loadCheckState() *reconciler.PollMemory {
 	data, err := os.ReadFile(lastCheckFile())
 	if err != nil {
-		return make(map[string]bool)
+		m := reconciler.DecodePollMemory(nil)
+		return &m
 	}
-	var state checkState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return make(map[string]bool)
-	}
-	m := make(map[string]bool)
-	for _, pr := range state.SeenPRs {
-		m[pr] = true
-	}
-	return m
+	m := reconciler.DecodePollMemory(data)
+	return &m
 }
 
-func saveState(seenPRs map[string]bool, prCount int) {
-	prs := make([]string, 0, len(seenPRs))
-	for pr := range seenPRs {
-		prs = append(prs, pr)
+func saveState(st *reconciler.PollMemory, prCount int) {
+	data, err := reconciler.EncodeCheckFile(*st, time.Now().UTC().Format(time.RFC3339), prCount)
+	if err != nil {
+		return
 	}
-	state := checkState{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		PRCount:   prCount,
-		SeenPRs:   prs,
-	}
-	data, _ := json.MarshalIndent(state, "", "  ")
 	os.WriteFile(lastCheckFile(), data, 0o644)
 }
 
-func pollOnce(ctx context.Context, seenPRs map[string]bool, queue workqueue.Interface, rec *reconciler.SetupReconciler) {
-	reviews, err := ghpkg.GetReviewRequests(ctx, "chainguard-dev/mono", cfg.IgnoreDrafts)
-	if err != nil {
-		fmt.Printf("[%s] Error fetching reviews: %v\n", time.Now().Format(time.RFC3339), err)
+func pollOnce(ctx context.Context, st *reconciler.PollMemory, queue workqueue.Interface, rec *reconciler.SetupReconciler) {
+	// Scoped per repository rather than one global search: a global search
+	// fills its page on GitHub's terms, so review requests in unconfigured
+	// repositories can crowd out a configured repository's PR and leave it
+	// with neither a worktree nor a refresh.
+	repos := cfg.RepoFullNames()
+	if len(repos) == 0 {
 		return
 	}
+	reviews, err := ghpkg.GetReviewRequestsForRepos(ctx, repos, cfg.IgnoreDrafts)
+	if err != nil {
+		fmt.Printf("[%s] Error fetching reviews: %v\n", time.Now().Format(time.RFC3339), err)
+		// A partial failure still carries the repos that answered; only a total
+		// failure aborts the poll, so state is not rewritten from nothing.
+		if len(reviews) == 0 {
+			return
+		}
+	}
 
+	kept := 0
 	for _, pr := range reviews {
-		prKey := fmt.Sprintf("%d", pr.Number)
-		if seenPRs[prKey] {
+		short, ok := cfg.ConfiguredRepo(pr.Repository.NameWithOwner)
+		if !ok {
 			continue
 		}
-
-		fmt.Printf("[%s] New PR review request: #%d - %s (by %s)\n",
-			time.Now().Format(time.RFC3339), pr.Number, pr.Title, pr.Author.Login)
-
-		notify.PRReview(pr.Number, pr.Title, pr.Author.Login, pr.Repository.Name)
-
-		if cfg.IsAuthor(pr.Author.Login) {
-			key := reconciler.MakePRKey(pr.Repository.Name, pr.Number)
-			rec.StorePRData(key, pr)
-			if err := queue.Queue(ctx, key, workqueue.Options{Priority: 1}); err != nil {
-				fmt.Printf("[%s] Error queuing PR #%d: %v\n", time.Now().Format(time.RFC3339), pr.Number, err)
-			} else {
-				fmt.Printf("[%s] Queued PR #%d for setup (author: %s)\n",
-					time.Now().Format(time.RFC3339), pr.Number, pr.Author.Login)
+		kept++
+		key := reconciler.MakePRKey(short, pr.Number)
+		if st.LegacySeen {
+			// Absorb pre-#18 seen_prs: do not re-notify "new" for the current
+			// inbox. SHA refresh still runs.
+			st.NotifiedNew[key] = true
+		}
+		basePath := cfg.RepoBasePath(short)
+		worktreePath := wt.PRPath(basePath, short, pr.Number)
+		exists := false
+		head := ""
+		if _, err := os.Stat(worktreePath); err == nil {
+			exists = true
+			if h, herr := wt.HEAD(worktreePath); herr == nil {
+				head = h
+				st.AppliedSHAs[key] = h
 			}
 		}
 
-		seenPRs[prKey] = true
+		if reconciler.ShouldNotifyNew(st.NotifiedNew[key], exists) {
+			fmt.Printf("[%s] New PR review request: #%d - %s (by %s)\n",
+				time.Now().Format(time.RFC3339), pr.Number, pr.Title, pr.Author.Login)
+			notify.PRReview(pr.Number, pr.Title, pr.Author.Login, short)
+		}
+		if !st.NotifiedNew[key] {
+			st.NotifiedNew[key] = true
+		}
+
+		action := reconciler.DecideDaemon(reconciler.PollInput{
+			InReviewSearch: true,
+			IgnoreDrafts:   cfg.IgnoreDrafts,
+			IsDraft:        pr.IsDraft,
+			Closed:         pr.Closed,
+			WorktreeExists: exists,
+			AuthorInList:   cfg.IsAuthor(pr.Author.Login),
+			WorktreeHEAD:   head,
+			HeadOID:        pr.HeadRefOid,
+		})
+		switch action {
+		case reconciler.PollSkip:
+			continue
+		case reconciler.PollRefresh:
+			fmt.Printf("[%s] PR #%d head moved (%s → %s), queuing refresh\n",
+				time.Now().Format(time.RFC3339), pr.Number, shortSHA(head), shortSHA(pr.HeadRefOid))
+		}
+
+		rec.StorePRData(key, pr)
+		if err := queue.Queue(ctx, key, workqueue.Options{Priority: 1}); err != nil {
+			fmt.Printf("[%s] Error queuing PR #%d: %v\n", time.Now().Format(time.RFC3339), pr.Number, err)
+		} else {
+			fmt.Printf("[%s] Queued PR #%d for %s (author: %s)\n",
+				time.Now().Format(time.RFC3339), pr.Number, action, pr.Author.Login)
+		}
 	}
 
-	saveState(seenPRs, len(reviews))
+	st.LegacySeen = false
+	saveState(st, kept)
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	if sha == "" {
+		return "?"
+	}
+	return sha
 }
 
 func slackSeenFile() string {

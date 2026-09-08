@@ -1,0 +1,70 @@
+package ui
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"golang.org/x/term"
+)
+
+// Prompt I/O, swapped in tests. A nil promptIn means os.Stdin, read at call
+// time rather than bound at init so a reassigned os.Stdin is honoured.
+var (
+	promptIn     io.Reader
+	promptOut    io.Writer = os.Stdout
+	promptReader *bufio.Reader
+	promptSource io.Reader
+	stdinIsTTY   = defaultStdinIsTTY
+)
+
+// promptInput is the reader prompts consume, buffered across calls so typed
+// input is not lost between two prompts.
+func promptInput() *bufio.Reader {
+	src := promptIn
+	if src == nil {
+		src = os.Stdin
+	}
+	if promptReader == nil || promptSource != src {
+		promptReader = bufio.NewReader(src)
+		promptSource = src
+	}
+	return promptReader
+}
+
+// defaultStdinIsTTY reports whether stdin is a real terminal. A character
+// device check is not enough: /dev/null is a character device, so
+// `zen ... < /dev/null` would look interactive and its immediate EOF would be
+// read as an answer. A pipe, a redirected file and /dev/null are all false
+// here, so `yes | zen ...` cannot answer a prompt on the user's behalf.
+func defaultStdinIsTTY() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
+// Interactive reports whether there is a human on the other end of stdin who
+// can answer a prompt. Callers guarding a destructive action must check this
+// before asking: a non-interactive run has to decline, not read the pipe.
+func Interactive() bool { return stdinIsTTY() }
+
+// ConfirmYN writes prompt and returns true only for an explicit y/yes typed
+// on an interactive terminal. Non-interactive stdin, EOF, a read error and
+// every other answer are a declined confirmation.
+func ConfirmYN(prompt string) bool {
+	if !Interactive() {
+		return false
+	}
+	fmt.Fprint(promptOut, prompt)
+	line, err := promptInput().ReadString('\n')
+	if err != nil && line == "" {
+		// EOF with nothing typed, or a broken stdin: decline.
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	default:
+		return false
+	}
+}

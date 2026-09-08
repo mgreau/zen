@@ -60,6 +60,13 @@ func TestRepoShortName(t *testing.T) {
 			}
 		})
 	}
+
+	if _, ok := cfg.ConfiguredRepo("unknown/repo"); ok {
+		t.Error("ConfiguredRepo should not match unconfigured repos")
+	}
+	if got, ok := cfg.ConfiguredRepo("chainguard-dev/mono"); !ok || got != "mono" {
+		t.Errorf("ConfiguredRepo(chainguard-dev/mono) = %q, %v", got, ok)
+	}
 }
 
 func TestIsAuthor(t *testing.T) {
@@ -221,6 +228,7 @@ func TestLoadTerminal(t *testing.T) {
 func TestLoadMissingConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
+	t.Setenv("ZEN_HOME", "")
 
 	_, err := Load()
 	if err == nil {
@@ -228,9 +236,40 @@ func TestLoadMissingConfig(t *testing.T) {
 	}
 }
 
+func TestDir_ZEN_HOME(t *testing.T) {
+	home := t.TempDir()
+	zenHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ZEN_HOME", zenHome)
+
+	if got := Dir(); got != zenHome {
+		t.Fatalf("Dir() = %q, want ZEN_HOME %q", got, zenHome)
+	}
+
+	yamlContent := `repos:
+  mono:
+    full_name: chainguard-dev/mono
+    base_path: /tmp/mono
+`
+	if err := os.WriteFile(filepath.Join(zenHome, "config.yaml"), []byte(yamlContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RepoFullName("mono") != "chainguard-dev/mono" {
+		t.Fatal("Load() should read $ZEN_HOME/config.yaml")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".zen")); !os.IsNotExist(err) {
+		t.Fatal("ZEN_HOME must not create ~/.zen")
+	}
+}
+
 func TestEnsureDirs(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
+	t.Setenv("ZEN_HOME", "")
 
 	err := EnsureDirs()
 	if err != nil {
@@ -397,5 +436,34 @@ func TestSlackConfigCustom(t *testing.T) {
 	}
 	if d := s.PollIntervalDuration(); d.String() != "1m30s" {
 		t.Errorf("PollIntervalDuration = %v, want 1m30s", d)
+	}
+}
+
+func TestRepoFullNames(t *testing.T) {
+	cfg := &Config{
+		Repos: map[string]RepoConfig{
+			"tools":   {FullName: "owner/tools"},
+			"mono":    {FullName: "chainguard-dev/mono"},
+			"nofull":  {},
+			"another": {FullName: "owner/another"},
+		},
+	}
+
+	got := cfg.RepoFullNames()
+	want := []string{"chainguard-dev/mono", "owner/another", "owner/tools"}
+	if len(got) != len(want) {
+		t.Fatalf("RepoFullNames() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("RepoFullNames() = %v, want %v (sorted, no empty full_name)", got, want)
+		}
+	}
+}
+
+func TestRepoFullNames_empty(t *testing.T) {
+	cfg := &Config{}
+	if got := cfg.RepoFullNames(); len(got) != 0 {
+		t.Fatalf("RepoFullNames() = %v, want empty", got)
 	}
 }

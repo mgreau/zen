@@ -33,7 +33,7 @@ func init() {
 func runSetup(cmd *cobra.Command, args []string) error {
 	scanner := bufio.NewScanner(os.Stdin)
 
-	configPath := filepath.Join(os.Getenv("HOME"), ".zen", "config.yaml")
+	configPath := filepath.Join(config.Dir(), "config.yaml")
 
 	fmt.Println()
 	fmt.Println(ui.BoldText("Zen Setup"))

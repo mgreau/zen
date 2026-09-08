@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -165,9 +166,18 @@ type RepoConfig struct {
 	BasePath string `yaml:"base_path"`
 }
 
-// zenHome returns the path to ~/.zen.
-func zenHome() string {
+// Dir is the zen config and state directory. ZEN_HOME overrides the default
+// ~/.zen so a test harness (or a second install) does not share last_check.json
+// or config.yaml with a day-to-day daemon.
+func Dir() string {
+	if d := strings.TrimSpace(os.Getenv("ZEN_HOME")); d != "" {
+		return d
+	}
 	return filepath.Join(os.Getenv("HOME"), ".zen")
+}
+
+func zenHome() string {
+	return Dir()
 }
 
 // Load reads the YAML config from ~/.zen/config.yaml.
@@ -280,6 +290,21 @@ func (c *Config) RepoNames() []string {
 	return names
 }
 
+// RepoFullNames lists every configured repository as owner/repo, sorted so a
+// poll queries them in a stable order. Repos with no full_name are skipped:
+// they cannot be scoped in a GitHub search.
+func (c *Config) RepoFullNames() []string {
+	full := make([]string, 0, len(c.Repos))
+	for _, repo := range c.Repos {
+		if repo.FullName == "" {
+			continue
+		}
+		full = append(full, repo.FullName)
+	}
+	sort.Strings(full)
+	return full
+}
+
 // RepoFullName maps a short name to full GitHub owner/repo.
 func (c *Config) RepoFullName(short string) string {
 	if repo, ok := c.Repos[short]; ok {
@@ -298,6 +323,19 @@ func (c *Config) RepoShortName(full string) string {
 	// Fallback: return last path component
 	parts := strings.Split(full, "/")
 	return parts[len(parts)-1]
+}
+
+// ConfiguredRepo returns the config short name for a GitHub owner/repo.
+// Unlike RepoShortName, it does not fall back to the last path component, so
+// an unconfigured repo is not mistaken for a configured one that happens to
+// share a name.
+func (c *Config) ConfiguredRepo(full string) (string, bool) {
+	for name, repo := range c.Repos {
+		if repo.FullName == full {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 // RepoBasePath returns the local base path for a repo (the parent dir

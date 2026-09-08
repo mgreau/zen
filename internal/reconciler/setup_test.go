@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"chainguard.dev/driftlessaf/workqueue"
@@ -134,5 +135,183 @@ func TestDispatcherIntegration(t *testing.T) {
 
 	if !called {
 		t.Error("callback was not called")
+	}
+}
+
+func testSetupCfg(t *testing.T) *config.Config {
+	t.Helper()
+	return &config.Config{
+		Repos: map[string]config.RepoConfig{
+			"mono": {FullName: "chainguard-dev/mono", BasePath: t.TempDir()},
+		},
+	}
+}
+
+func TestReconcile_closedDoesNotTouchGit(t *testing.T) {
+	cfg := testSetupCfg(t)
+	rec := NewSetupReconciler(cfg)
+	rec.prDetails = func(context.Context, string, int) (*ghpkg.PRDetails, error) {
+		t.Fatal("closed snapshot must not call GitHub")
+		return nil, nil
+	}
+	rec.StorePRData("mono:99", ghpkg.ReviewRequest{
+		Number:     99,
+		Title:      "closed after queue",
+		Closed:     true,
+		HeadRefOid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	})
+	if err := rec.Reconcile(context.Background(), "mono:99", workqueue.Options{}); err != nil {
+		t.Fatalf("closed PR must skip, not fail git: %v", err)
+	}
+}
+
+func TestReconcile_silencedDraftDoesNotTouchGit(t *testing.T) {
+	cfg := testSetupCfg(t)
+	cfg.IgnoreDrafts = true
+	rec := NewSetupReconciler(cfg)
+	rec.prDetails = func(context.Context, string, int) (*ghpkg.PRDetails, error) {
+		t.Fatal("silenced draft snapshot must not call GitHub")
+		return nil, nil
+	}
+	rec.StorePRData("mono:7", ghpkg.ReviewRequest{
+		Number:     7,
+		Title:      "back to draft",
+		IsDraft:    true,
+		HeadRefOid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	})
+	if err := rec.Reconcile(context.Background(), "mono:7", workqueue.Options{}); err != nil {
+		t.Fatalf("silenced draft must skip, not fail git: %v", err)
+	}
+}
+
+func TestSkipIfPRInactive_liveDraftRace(t *testing.T) {
+	cfg := testSetupCfg(t)
+	cfg.IgnoreDrafts = true
+	rec := NewSetupReconciler(cfg)
+	called := false
+	rec.prDetails = func(_ context.Context, fullRepo string, n int) (*ghpkg.PRDetails, error) {
+		called = true
+		if fullRepo != "chainguard-dev/mono" || n != 7 {
+			t.Fatalf("lookup %s #%d", fullRepo, n)
+		}
+		return &ghpkg.PRDetails{Draft: true, State: "open", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, nil
+	}
+	pr := ghpkg.ReviewRequest{
+		Number:     7,
+		Title:      "queued while ready",
+		IsDraft:    false,
+		HeadRefOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	skip, err := rec.skipIfPRInactive(context.Background(), "chainguard-dev/mono", "mono", 7, &pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || !skip {
+		t.Fatalf("called=%v skip=%v; want skip after live draft", called, skip)
+	}
+}
+
+func TestSkipIfPRInactive_liveClosedRace(t *testing.T) {
+	cfg := testSetupCfg(t)
+	rec := NewSetupReconciler(cfg)
+	rec.prDetails = func(context.Context, string, int) (*ghpkg.PRDetails, error) {
+		return &ghpkg.PRDetails{State: "closed", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, nil
+	}
+	pr := ghpkg.ReviewRequest{Number: 1, Title: "queued then closed"}
+	skip, err := rec.skipIfPRInactive(context.Background(), "chainguard-dev/mono", "mono", 1, &pr)
+	if err != nil || !skip {
+		t.Fatalf("skip=%v err=%v", skip, err)
+	}
+}
+
+func TestSkipIfPRInactive_liveMerged(t *testing.T) {
+	cfg := testSetupCfg(t)
+	rec := NewSetupReconciler(cfg)
+	rec.prDetails = func(context.Context, string, int) (*ghpkg.PRDetails, error) {
+		return &ghpkg.PRDetails{State: "MERGED"}, nil
+	}
+	pr := ghpkg.ReviewRequest{Number: 1, Title: "merged"}
+	skip, err := rec.skipIfPRInactive(context.Background(), "chainguard-dev/mono", "mono", 1, &pr)
+	if err != nil || !skip {
+		t.Fatalf("skip=%v err=%v", skip, err)
+	}
+}
+
+func TestSkipIfPRInactive_deletedPR(t *testing.T) {
+	cfg := testSetupCfg(t)
+	rec := NewSetupReconciler(cfg)
+	rec.prDetails = func(context.Context, string, int) (*ghpkg.PRDetails, error) {
+		return nil, fmt.Errorf("fetching PR #1: GET https://api.github.com/repos/o/r/pulls/1: 404 Not Found []")
+	}
+	pr := ghpkg.ReviewRequest{Number: 1, Title: "deleted"}
+	skip, err := rec.skipIfPRInactive(context.Background(), "chainguard-dev/mono", "mono", 1, &pr)
+	if err != nil || !skip {
+		t.Fatalf("404 must skip not retry: skip=%v err=%v", skip, err)
+	}
+}
+
+func TestSkipIfPRInactive_networkRetries(t *testing.T) {
+	cfg := testSetupCfg(t)
+	rec := NewSetupReconciler(cfg)
+	rec.prDetails = func(context.Context, string, int) (*ghpkg.PRDetails, error) {
+		return nil, fmt.Errorf("Get \"https://api.github.com/repos/o/r/pulls/1\": connection reset")
+	}
+	pr := ghpkg.ReviewRequest{Number: 1, Title: "flaky"}
+	skip, err := rec.skipIfPRInactive(context.Background(), "chainguard-dev/mono", "mono", 1, &pr)
+	if skip || err == nil {
+		t.Fatalf("network error must retry: skip=%v err=%v", skip, err)
+	}
+}
+
+func TestSkipIfPRInactive_refreshesHeadSHA(t *testing.T) {
+	cfg := testSetupCfg(t)
+	rec := NewSetupReconciler(cfg)
+	want := "cccccccccccccccccccccccccccccccccccccccc"
+	rec.prDetails = func(context.Context, string, int) (*ghpkg.PRDetails, error) {
+		return &ghpkg.PRDetails{State: "open", HeadSHA: want}, nil
+	}
+	pr := ghpkg.ReviewRequest{Number: 3, Title: "moved", HeadRefOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	skip, err := rec.skipIfPRInactive(context.Background(), "chainguard-dev/mono", "mono", 3, &pr)
+	if err != nil || skip {
+		t.Fatalf("skip=%v err=%v", skip, err)
+	}
+	if pr.HeadRefOid != want {
+		t.Fatalf("HeadRefOid=%s want live SHA", pr.HeadRefOid)
+	}
+	stored, ok := rec.getPRData("mono:3")
+	if !ok || stored.HeadRefOid != want {
+		t.Fatalf("stored SHA not updated: %+v", stored)
+	}
+}
+
+func TestSkipIfPRInactive_draftStillSyncedWhenShown(t *testing.T) {
+	cfg := testSetupCfg(t)
+	cfg.IgnoreDrafts = false
+	rec := NewSetupReconciler(cfg)
+	rec.prDetails = func(context.Context, string, int) (*ghpkg.PRDetails, error) {
+		return &ghpkg.PRDetails{Draft: true, State: "open", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, nil
+	}
+	pr := ghpkg.ReviewRequest{Number: 4, Title: "visible draft", IsDraft: true}
+	skip, err := rec.skipIfPRInactive(context.Background(), "chainguard-dev/mono", "mono", 4, &pr)
+	if err != nil || skip {
+		t.Fatalf("shown drafts must still sync: skip=%v err=%v", skip, err)
+	}
+}
+
+func TestReconcile_liveDraftRaceDoesNotTouchGit(t *testing.T) {
+	cfg := testSetupCfg(t)
+	cfg.IgnoreDrafts = true
+	rec := NewSetupReconciler(cfg)
+	rec.prDetails = func(context.Context, string, int) (*ghpkg.PRDetails, error) {
+		return &ghpkg.PRDetails{Draft: true, State: "open"}, nil
+	}
+	rec.StorePRData("mono:8", ghpkg.ReviewRequest{
+		Number:     8,
+		Title:      "ready when queued",
+		IsDraft:    false,
+		HeadRefOid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	})
+	if err := rec.Reconcile(context.Background(), "mono:8", workqueue.Options{}); err != nil {
+		t.Fatalf("open→draft race must skip, not fail git: %v", err)
 	}
 }

@@ -83,7 +83,14 @@ const (
 // CLAUDE.local.md.
 func (a *codexAgent) InjectContext(worktreePath, rendered string) (string, error) {
 	ref := a.ContextFile()
-	if _, err := os.Stat(filepath.Join(worktreePath, ref)); err == nil {
+	sidePath := filepath.Join(worktreePath, codexSideContextFile)
+	if a.ContextPresent(worktreePath) {
+		// Refresh: keep writing where we already put context so we do not
+		// abandon an injected AGENTS.md for the side file.
+		if _, err := os.Stat(sidePath); err == nil {
+			ref = codexSideContextFile
+		}
+	} else if _, err := os.Stat(filepath.Join(worktreePath, ref)); err == nil {
 		ref = codexSideContextFile
 	}
 

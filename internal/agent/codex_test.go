@@ -165,6 +165,18 @@ func TestCodexInjectContextFallsBackToSideFile(t *testing.T) {
 	if !ag.ContextPresent(wt2) {
 		t.Error("ContextPresent should be true after side-file injection")
 	}
+
+	// Re-inject updates AGENTS.md, not the side file, when that is where we wrote.
+	ref, err = ag.InjectContext(wt1, "# ctx-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref != "AGENTS.md" {
+		t.Errorf("refresh ref = %q, want AGENTS.md", ref)
+	}
+	if data, _ := os.ReadFile(filepath.Join(wt1, "AGENTS.md")); string(data) != "# ctx-v2" {
+		t.Errorf("AGENTS.md not rewritten on refresh: %s", data)
+	}
 }
 
 func TestCodexShortenModel(t *testing.T) {

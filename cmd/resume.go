@@ -11,6 +11,7 @@ import (
 
 	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/migrate"
+	"github.com/mgreau/zen/internal/review"
 	"github.com/mgreau/zen/internal/session"
 	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
@@ -336,6 +337,13 @@ func runReviewResume(cmd *cobra.Command, args []string) error {
 	term, err := terminal.NewTerminal(cfg.GetTerminal())
 	if err != nil {
 		return err
+	}
+	ag, aerr := resolveAgent()
+	if aerr != nil {
+		return aerr
+	}
+	if _, rerr := review.CreateWorktree(context.Background(), cfg, ag, wt.Repo, wt.PRNumber, ui.LogInfo, confirmResetWorktree); rerr != nil {
+		ui.LogWarn(fmt.Sprintf("refresh before resume: %v", rerr))
 	}
 	return resumeWorktree(*wt, fmt.Sprintf("zen review resume %d", prNumber), term)
 }
