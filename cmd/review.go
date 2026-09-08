@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mgreau/zen/internal/github"
+	"github.com/mgreau/zen/internal/gitrepo"
 	"github.com/mgreau/zen/internal/review"
 	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
@@ -74,8 +75,12 @@ func runReview(cmd *cobra.Command, args []string) error {
 
 	ctx := context.Background()
 
-	// Auto-detect repo if not specified
+	// Auto-detect repo if not specified. First use from inside an
+	// unregistered clone: offer to register it so detection can find it.
 	if reviewRepo == "" {
+		if info, derr := gitrepo.Detect("."); derr == nil {
+			offerRegisterRepo(info)
+		}
 		detected, err := detectRepoForPR(ctx, prNumber)
 		if err != nil {
 			return err

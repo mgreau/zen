@@ -85,6 +85,31 @@ repos:
 
 All repos and authors must be configured — there are no hardcoded defaults.
 
+### Adding a repo without editing YAML
+
+`zen repo add` registers a clone in one shot. Run it with no arguments from inside the clone (or pass the clone's path):
+
+```bash
+git clone git@github.com:octo-sts/app.git && cd app
+zen repo add
+```
+
+Everything is inferred: the short name is the clone's directory name, `base_path` is its parent directory, and `full_name` comes from the `upstream` remote when one exists (for forks, PRs live on the upstream repo), falling back to `origin`. Adding the same repo twice is a no-op, and the daemon picks up the new repo on its next poll. Comments and formatting in `config.yaml` are preserved.
+
+You also don't have to remember the command: the first time you run `zen work new` or `zen review` from inside an unregistered clone, zen offers to register it.
+
+To register at clone time, wrap `git clone` in your shell:
+
+```bash
+# ~/.zshrc — clone and register with zen in one step
+zclone() {
+  git clone "$@" || return
+  local dir=${@: -1}
+  [[ -d $dir ]] || { dir=${dir##*/}; dir=${dir%.git}; }
+  zen repo add "$dir"
+}
+```
+
 ## Agent
 
 `agent: claude` (default) or `agent: codex` selects the coding agent zen launches in each worktree. Override per command with `--agent`:

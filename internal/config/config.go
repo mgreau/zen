@@ -300,6 +300,119 @@ func (c *Config) RepoShortName(full string) string {
 	return parts[len(parts)-1]
 }
 
+// AddRepo registers short → rc in ~/.zen/config.yaml, editing the YAML
+// document in place so comments and formatting the user added survive.
+// It reports whether the file was modified: false means an identical entry
+// already exists. A short name or full name that is already configured with
+// different values is an error rather than a silent overwrite.
+func AddRepo(short string, rc RepoConfig) (bool, error) {
+	yamlPath := filepath.Join(zenHome(), "config.yaml")
+	data, err := os.ReadFile(yamlPath)
+	if err != nil {
+		return false, fmt.Errorf("config file not found: %s\nRun 'zen setup' to create it", yamlPath)
+	}
+
+	existing := &Config{}
+	if err := yaml.Unmarshal(data, existing); err != nil {
+		return false, fmt.Errorf("parsing %s: %w", yamlPath, err)
+	}
+
+	rc.BasePath = collapseHome(rc.BasePath)
+	if prev, ok := existing.Repos[short]; ok {
+		if prev.FullName == rc.FullName && expandHome(prev.BasePath) == expandHome(rc.BasePath) {
+			return false, nil
+		}
+		return false, fmt.Errorf("repo %q is already configured (full_name: %s, base_path: %s) — edit %s to change it",
+			short, prev.FullName, prev.BasePath, yamlPath)
+	}
+	for name, prev := range existing.Repos {
+		if prev.FullName == rc.FullName {
+			return false, fmt.Errorf("%s is already configured as %q (base_path: %s) — a repo can only be registered once",
+				rc.FullName, name, prev.BasePath)
+		}
+	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return false, fmt.Errorf("parsing %s: %w", yamlPath, err)
+	}
+	if len(doc.Content) == 0 {
+		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode}}}
+	}
+	repos := findOrCreateMapping(doc.Content[0], "repos")
+	repos.Content = append(repos.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: short},
+		&yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{
+			{Kind: yaml.ScalarNode, Value: "full_name"},
+			{Kind: yaml.ScalarNode, Value: rc.FullName},
+			{Kind: yaml.ScalarNode, Value: "base_path"},
+			{Kind: yaml.ScalarNode, Value: rc.BasePath},
+		}},
+	)
+
+	var buf strings.Builder
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return false, fmt.Errorf("marshalling config: %w", err)
+	}
+	if err := enc.Close(); err != nil {
+		return false, fmt.Errorf("marshalling config: %w", err)
+	}
+
+	// Write via a temp file + rename so an interrupted write can never
+	// truncate the config, keeping the file's original permissions.
+	fi, err := os.Stat(yamlPath)
+	if err != nil {
+		return false, fmt.Errorf("stat %s: %w", yamlPath, err)
+	}
+	tmpPath := yamlPath + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(buf.String()), fi.Mode().Perm()); err != nil {
+		return false, fmt.Errorf("writing %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, yamlPath); err != nil {
+		os.Remove(tmpPath)
+		return false, fmt.Errorf("replacing %s: %w", yamlPath, err)
+	}
+	return true, nil
+}
+
+// findOrCreateMapping returns the value node for key in the mapping root,
+// creating an empty mapping (or converting a null `key:` entry) as needed.
+func findOrCreateMapping(root *yaml.Node, key string) *yaml.Node {
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == key {
+			val := root.Content[i+1]
+			if val.Kind != yaml.MappingNode {
+				*val = yaml.Node{Kind: yaml.MappingNode}
+			}
+			return val
+		}
+	}
+	val := &yaml.Node{Kind: yaml.MappingNode}
+	root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: key}, val)
+	return val
+}
+
+// collapseHome rewrites an absolute path under $HOME to the ~/ form, which
+// is how base paths are conventionally written in the config file.
+func collapseHome(p string) string {
+	home := os.Getenv("HOME")
+	if home != "" && strings.HasPrefix(p, home+"/") {
+		return "~" + strings.TrimPrefix(p, home)
+	}
+	return p
+}
+
+// expandHome is the inverse of collapseHome, for comparing paths that may
+// be written in either form.
+func expandHome(p string) string {
+	if strings.HasPrefix(p, "~/") {
+		return filepath.Join(os.Getenv("HOME"), p[2:])
+	}
+	return p
+}
+
 // RepoBasePath returns the local base path for a repo (the parent dir
 // that contains the main clone directory).
 func (c *Config) RepoBasePath(short string) string {

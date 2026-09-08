@@ -222,6 +222,8 @@ authors:
 
 `zen setup` walks you through this interactively. The daemon hot-reloads config on every poll tick — no restart needed.
 
+To register a repo later, run `zen repo add` from inside its clone — the short name, base path, and GitHub full name are inferred from the clone and its remotes (preferring `upstream` over `origin`, so forks resolve to the repo the PRs live on). Running `zen work new` or `zen review` from inside an unregistered clone offers to register it on the spot. See [docs/configuration.md](docs/configuration.md#adding-a-repo-without-editing-yaml) for a `git clone` shell wrapper that registers at clone time.
+
 ### Claude or Codex
 
 By default zen drives [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Set `agent: codex` in config (or pass `--agent codex` to `zen review`/`zen work`) to use OpenAI's [Codex CLI](https://developers.openai.com/codex/cli) instead. zen adapts the launch/resume commands, the injected context file (`CLAUDE.local.md` vs `AGENTS.md`), where slash-command prompts are installed, and how it discovers sessions and token usage. See [docs/configuration.md](docs/configuration.md#agent).
