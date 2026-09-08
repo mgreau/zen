@@ -144,11 +144,10 @@ func runInboxForRepo(repo string, authors []string, currentUser string, ignoreDr
 			return false, fmt.Errorf("fetching review requests for %s: %w", repo, reviewsErr)
 		}
 
-		filtered := filterByAuthors(reviews, authors)
-
-		if len(filtered) > 0 {
+		toShow := reviewsForInbox(reviews)
+		if len(toShow) > 0 {
 			hasResults = true
-			displayReviewResults(filtered, localPRs, repo)
+			displayReviewResults(toShow, localPRs, repo)
 		}
 
 		if approvedErr == nil && len(approved) > 0 {
@@ -194,6 +193,16 @@ func getLocalPRNumbers(repo string) map[int]bool {
 		}
 	}
 	return m
+}
+
+// reviewsForInbox selects which review-request PRs the inbox displays.
+// GetReviewRequests already scopes reviews to PRs where the current user is
+// a requested reviewer, which is a stronger signal than PR authorship — so,
+// unlike the other inbox sections, this list is never run through
+// filterByAuthors. Explicit review requests always surface, regardless of
+// the authors allowlist (see README's "explicit review requests" note).
+func reviewsForInbox(reviews []ghpkg.ReviewRequest) []ghpkg.ReviewRequest {
+	return reviews
 }
 
 func filterByAuthors(prs []ghpkg.ReviewRequest, authors []string) []ghpkg.ReviewRequest {
@@ -401,12 +410,9 @@ func displayReviewResults(prs []ghpkg.ReviewRequest, localPRs map[int]bool, repo
 	}
 
 	fmt.Println()
-	if inboxAll {
-		fmt.Printf("%s %s\n", ui.BoldText(fmt.Sprintf("%d Pending PR Reviews — %s", len(prs), ui.YellowText(repo))), ui.DimText("(all authors)"))
-	} else {
-		fmt.Println(ui.BoldText(fmt.Sprintf("%d Pending PR Reviews — %s", len(prs), ui.YellowText(repo))))
-		ui.Hint(fmt.Sprintf("Authors: %s", strings.Join(cfg.Authors, " ")))
-	}
+	// Explicit review requests always show, regardless of the authors
+	// allowlist — see the comment at the call site in runInboxForRepo.
+	fmt.Printf("%s %s\n", ui.BoldText(fmt.Sprintf("%d Pending PR Reviews — %s", len(prs), ui.YellowText(repo))), ui.DimText("(explicit review requests)"))
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
 
