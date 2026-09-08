@@ -475,6 +475,9 @@ func writeTestConfig(t *testing.T, content string) string {
 	t.Helper()
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
+	// Dir() prefers ZEN_HOME; clear it so an ambient value in the developer's
+	// shell cannot point these tests at a real config.
+	t.Setenv("ZEN_HOME", "")
 	zenDir := filepath.Join(tmpDir, ".zen")
 	if err := os.MkdirAll(zenDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -670,5 +673,38 @@ func TestAddRepoIdempotentAbsolutePath(t *testing.T) {
 	}
 	if added {
 		t.Error("re-adding an identical repo with absolute paths should be a no-op")
+	}
+}
+
+func TestAddRepo_honoursZenHome(t *testing.T) {
+	// AddRepo must write through Dir(), not a hardcoded ~/.zen, so a
+	// ZEN_HOME-isolated install (or test harness) is not bypassed.
+	writeTestConfig(t, "repos: {}\n")
+
+	zenHome := t.TempDir()
+	t.Setenv("ZEN_HOME", zenHome)
+	target := filepath.Join(zenHome, "config.yaml")
+	if err := os.WriteFile(target, []byte("repos: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := AddRepo("zen", RepoConfig{FullName: "mgreau/zen", BasePath: "/src"}); err != nil {
+		t.Fatalf("AddRepo: %v", err)
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading ZEN_HOME config: %v", err)
+	}
+	if !strings.Contains(string(data), "mgreau/zen") {
+		t.Fatalf("repo not written to ZEN_HOME config, got:\n%s", data)
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		if _, err := os.Stat(filepath.Join(home, ".zen", "config.yaml")); err == nil {
+			d, _ := os.ReadFile(filepath.Join(home, ".zen", "config.yaml"))
+			if strings.Contains(string(d), "mgreau/zen") {
+				t.Fatal("AddRepo wrote to ~/.zen despite ZEN_HOME being set")
+			}
+		}
 	}
 }

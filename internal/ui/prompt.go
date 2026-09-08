@@ -68,3 +68,30 @@ func ConfirmYN(prompt string) bool {
 		return false
 	}
 }
+
+// ConfirmYesDefault writes prompt and treats a bare Enter as yes, for an
+// additive action where that is the expected answer. It is deliberately not
+// ConfirmYN: the two differ only in what an empty line means, and conflating
+// them would default a destructive prompt to yes.
+//
+// A submitted empty line is yes; EOF is not. They look identical once read
+// (both yield ""), so the read error is what separates them — without that
+// check `zen ... < /dev/null` answers the prompt on the user's behalf.
+// Non-interactive stdin never reaches the read at all.
+func ConfirmYesDefault(prompt string) bool {
+	if !Interactive() {
+		return false
+	}
+	fmt.Fprint(promptOut, prompt)
+	line, err := promptInput().ReadString('\n')
+	if err != nil && line == "" {
+		// EOF with nothing typed, or a broken stdin: nobody answered.
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "", "y", "yes":
+		return true
+	default:
+		return false
+	}
+}
