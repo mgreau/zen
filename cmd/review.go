@@ -86,7 +86,7 @@ func runReview(cmd *cobra.Command, args []string) error {
 	// Check if worktree already exists: refresh then resume the session.
 	basePath := cfg.RepoBasePath(reviewRepo)
 	if basePath != "" {
-		worktreeName := fmt.Sprintf("%s-pr-%d", reviewRepo, prNumber)
+		worktreeName := wt.PRName(reviewRepo, prNumber)
 		worktreePath := filepath.Join(basePath, worktreeName)
 		if _, err := os.Stat(worktreePath); err == nil {
 			ag, aerr := resolveAgent()
@@ -182,13 +182,12 @@ func runReviewDelete(cmd *cobra.Command, args []string) error {
 	shortPath := ui.ShortenHome(match.Path, home)
 
 	if !reviewDeleteForce {
+		if !ui.Interactive() {
+			return fmt.Errorf("deleting %s needs a confirmation; run this from a terminal or pass --force", match.Name)
+		}
 		fmt.Printf("Delete worktree %s?\n", ui.CyanText(match.Name))
 		fmt.Printf("  Path: %s\n", shortPath)
-		fmt.Print("  Confirm [y/N]: ")
-
-		var resp string
-		fmt.Scanln(&resp)
-		if resp != "y" && resp != "Y" {
+		if !ui.ConfirmYN("  Confirm [y/N]: ") {
 			fmt.Println("Cancelled.")
 			return nil
 		}
@@ -221,22 +220,29 @@ func openReviewTab(worktreePath, worktreeName string) error {
 	return resumeWorktree(w, fmt.Sprintf("zen review resume %s", worktreeName), term)
 }
 
-// confirmResetWorktree asks before git reset --hard onto a rewritten GitHub
-// head. --json never resets (no TTY). Default is no.
+// confirmResetWorktree asks before git reset --hard onto a GitHub head the
+// worktree cannot fast-forward onto. Default is no. --json never resets, and
+// neither does a run without a terminal: reading a pipe here would let
+// `yes | zen review N` discard commits nobody agreed to discard.
 func confirmResetWorktree(req review.ResetRequest) bool {
 	if jsonFlag {
 		return false
 	}
-	fmt.Printf("PR #%d was rewritten on GitHub (force-push).\n", req.PRNumber)
-	fmt.Println("  Reset this worktree onto the new head? Untracked files (CLAUDE.local.md, .zen/) are kept.")
+	if !ui.Interactive() {
+		ui.LogInfo(fmt.Sprintf("PR #%d needs a reset to match GitHub; run zen review %d from a terminal to confirm it.",
+			req.PRNumber, req.PRNumber))
+		return false
+	}
+	if req.Kind == review.ResetBehind {
+		fmt.Printf("PR #%d's GitHub head is behind this worktree (force-pushed backward, or committed to locally).\n", req.PRNumber)
+	} else {
+		fmt.Printf("PR #%d was rewritten on GitHub (force-push).\n", req.PRNumber)
+	}
+	fmt.Println("  Reset this worktree onto the GitHub head? Untracked files (CLAUDE.local.md, .zen/) are kept.")
 	if req.UniqueCommits > 0 {
 		fmt.Printf("  %d local commit(s) on pr-%d will leave the branch (reflog keeps them).\n", req.UniqueCommits, req.PRNumber)
 	}
-	fmt.Print("  Reset? [y/N]: ")
-	var resp string
-	fmt.Scanln(&resp)
-	resp = strings.TrimSpace(resp)
-	return resp == "y" || resp == "Y" || resp == "yes"
+	return ui.ConfirmYN("  Reset? [y/N]: ")
 }
 
 // detectRepoForPR tries each configured repo to find which one contains the

@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -15,6 +16,12 @@ func withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, apiTimeout)
+}
+
+// runGH executes gh and returns its stdout. A package var so tests can drive
+// the query builders and pagination without a network or a gh binary.
+var runGH = func(ctx context.Context, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, "gh", args...).Output()
 }
 
 // ghError extracts stderr from an exec.ExitError for better error messages.
@@ -138,19 +145,25 @@ func mergeReviewRequests(requested, rereview []ReviewRequest) []ReviewRequest {
 	kinds := []string{ReviewKindNew, ReviewKindRereview}
 	for i, lists := range [][]ReviewRequest{requested, rereview} {
 		for _, rr := range lists {
-			if rr.Number == 0 {
-				continue
-			}
-			key := fmt.Sprintf("%s#%d", rr.Repository.NameWithOwner, rr.Number)
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
 			rr.Kind = kinds[i]
-			merged = append(merged, rr)
+			merged = appendUniqueReviewRequest(merged, seen, rr)
 		}
 	}
 	return merged
+}
+
+// appendUniqueReviewRequest adds rr unless its repository and number were
+// already seen. PR numbers repeat across repositories, so the key needs both.
+func appendUniqueReviewRequest(dst []ReviewRequest, seen map[string]bool, rr ReviewRequest) []ReviewRequest {
+	if rr.Number == 0 {
+		return dst
+	}
+	key := fmt.Sprintf("%s#%d", rr.Repository.NameWithOwner, rr.Number)
+	if seen[key] {
+		return dst
+	}
+	seen[key] = true
+	return append(dst, rr)
 }
 
 // buildReviewRequestQueries returns the two GitHub search query strings used
@@ -183,29 +196,20 @@ func buildApprovedUnmergedQuery(repoFilter string, ignoreDrafts bool) string {
 	return fmt.Sprintf("is:pr is:open author:@me review:approved%s%s", repoClause, draftClause)
 }
 
-// GetReviewRequests fetches PRs where the user is a requested reviewer,
-// including re-reviews. Uses GraphQL via `gh api graphql`. When ignoreDrafts
-// is true, draft PRs are filtered out at the GitHub search layer.
-func GetReviewRequests(ctx context.Context, repoFilter string, ignoreDrafts bool) ([]ReviewRequest, error) {
-	ctx, cancel := withTimeout(ctx)
-	defer cancel()
-	query := `query($q1: String!, $q2: String!) {
-  requested: search(query: $q1, type: ISSUE, first: 50) {
-    nodes {
-      ... on PullRequest {
-        number
-        title
-        author { login }
-        repository { name nameWithOwner }
-        createdAt
-        url
-        headRefOid
-        isDraft
-        closed
-      }
-    }
-  }
-  rereview: search(query: $q2, type: ISSUE, first: 50) {
+// searchPageSize is the page size for PR searches. GitHub caps search
+// connections at 100; 50 keeps each response small.
+const searchPageSize = 50
+
+// maxSearchPages bounds a paginated search so a pathological result set cannot
+// stall a poll forever. 20 pages is 1000 PRs.
+const maxSearchPages = 20
+
+// reviewRequestSearch is one page of a PR search. `first` is inlined because
+// gh sends -f values as strings and search(first:) needs an Int; `after` is a
+// nullable String, so omitting it on the first page is a valid query.
+const reviewRequestSearch = `query($q: String!, $after: String) {
+  search(query: $q, type: ISSUE, first: 50, after: $after) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       ... on PullRequest {
         number
@@ -222,36 +226,100 @@ func GetReviewRequests(ctx context.Context, repoFilter string, ignoreDrafts bool
   }
 }`
 
-	q1, q2 := buildReviewRequestQueries(repoFilter, ignoreDrafts)
-
-	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
-		"-f", "query="+query,
-		"-f", "q1="+q1,
-		"-f", "q2="+q2,
-	)
-	out, err := cmd.Output()
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("review requests query timed out after %s", apiTimeout)
+// searchReviewRequests runs one search query, following pagination to the end.
+// Without this a 50-result page silently truncates: review requests in other
+// repositories occupy slots and a configured repository's PR disappears from
+// the poll, so it is neither set up nor refreshed.
+func searchReviewRequests(ctx context.Context, query string) ([]ReviewRequest, error) {
+	var all []ReviewRequest
+	cursor := ""
+	for page := 0; page < maxSearchPages; page++ {
+		args := []string{"api", "graphql", "-f", "query=" + reviewRequestSearch, "-f", "q=" + query}
+		if cursor != "" {
+			args = append(args, "-f", "after="+cursor)
 		}
-		return nil, fmt.Errorf("GraphQL query failed: %s", ghError(err))
-	}
+		out, err := runGH(ctx, args...)
+		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				return nil, fmt.Errorf("review requests query timed out after %s", apiTimeout)
+			}
+			return nil, fmt.Errorf("GraphQL query failed: %s", ghError(err))
+		}
 
-	var result struct {
-		Data struct {
-			Requested struct {
-				Nodes []ReviewRequest `json:"nodes"`
-			} `json:"requested"`
-			Rereview struct {
-				Nodes []ReviewRequest `json:"nodes"`
-			} `json:"rereview"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		return nil, fmt.Errorf("parsing GraphQL response: %w", err)
-	}
+		var result struct {
+			Data struct {
+				Search struct {
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+					Nodes []ReviewRequest `json:"nodes"`
+				} `json:"search"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(out, &result); err != nil {
+			return nil, fmt.Errorf("parsing GraphQL response: %w", err)
+		}
 
-	return mergeReviewRequests(result.Data.Requested.Nodes, result.Data.Rereview.Nodes), nil
+		all = append(all, result.Data.Search.Nodes...)
+		info := result.Data.Search.PageInfo
+		if !info.HasNextPage || info.EndCursor == "" || info.EndCursor == cursor {
+			return all, nil
+		}
+		cursor = info.EndCursor
+	}
+	return all, nil
+}
+
+// GetReviewRequests fetches PRs where the user is a requested reviewer,
+// including re-reviews. Uses GraphQL via `gh api graphql`. When ignoreDrafts
+// is true, draft PRs are filtered out at the GitHub search layer. An empty
+// repoFilter searches every repository the user can see, which is only safe
+// for callers that show what they get; the daemon uses
+// GetReviewRequestsForRepos instead.
+func GetReviewRequests(ctx context.Context, repoFilter string, ignoreDrafts bool) ([]ReviewRequest, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
+	q1, q2 := buildReviewRequestQueries(repoFilter, ignoreDrafts)
+	requested, err := searchReviewRequests(ctx, q1)
+	if err != nil {
+		return nil, err
+	}
+	rereview, err := searchReviewRequests(ctx, q2)
+	if err != nil {
+		return nil, err
+	}
+	return mergeReviewRequests(requested, rereview), nil
+}
+
+// GetReviewRequestsForRepos searches each configured repository separately and
+// merges the results. One global search cannot serve the daemon: its page is
+// filled on GitHub's terms, so requests in unconfigured repositories can crowd
+// out a configured repository's PR. Scoping per repository also keeps every
+// query well under GitHub's 256-character search limit, which a combined
+// `repo:a repo:b ...` query would eventually cross.
+//
+// A repository that fails is reported but does not hide the others: the
+// returned slice holds every repository that answered, alongside the error.
+func GetReviewRequestsForRepos(ctx context.Context, repoFullNames []string, ignoreDrafts bool) ([]ReviewRequest, error) {
+	seen := make(map[string]bool)
+	var all []ReviewRequest
+	var errs []error
+	for _, full := range repoFullNames {
+		if full == "" {
+			continue
+		}
+		reqs, err := GetReviewRequests(ctx, full, ignoreDrafts)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", full, err))
+			continue
+		}
+		for _, rr := range reqs {
+			all = appendUniqueReviewRequest(all, seen, rr)
+		}
+	}
+	return all, errors.Join(errs...)
 }
 
 // GetApprovedUnmerged fetches the user's own PRs that are approved but not yet merged.

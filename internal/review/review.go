@@ -57,7 +57,7 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 	fullRepo := cfg.RepoFullName(repoShort)
 
 	originPath := filepath.Join(basePath, repoShort)
-	worktreeName := fmt.Sprintf("%s-pr-%d", repoShort, prNumber)
+	worktreeName := wt.PRName(repoShort, prNumber)
 	worktreePath := filepath.Join(basePath, worktreeName)
 
 	if _, err := os.Stat(worktreePath); err == nil {
@@ -171,7 +171,7 @@ func refreshExisting(ctx context.Context, ag agent.Agent, repoShort, fullRepo, o
 	} else if outcome == SyncUpdated {
 		injectContext(ctx, ag, worktreePath, fullRepo, prNumber, log)
 	} else if outcome == SyncSkippedReset {
-		log(fmt.Sprintf("PR #%d was rewritten on GitHub; worktree left as-is", prNumber))
+		log(fmt.Sprintf("PR #%d cannot be fast-forwarded onto GitHub's head; worktree left as-is", prNumber))
 	}
 
 	return &Result{

@@ -438,3 +438,32 @@ func TestSlackConfigCustom(t *testing.T) {
 		t.Errorf("PollIntervalDuration = %v, want 1m30s", d)
 	}
 }
+
+func TestRepoFullNames(t *testing.T) {
+	cfg := &Config{
+		Repos: map[string]RepoConfig{
+			"tools":   {FullName: "owner/tools"},
+			"mono":    {FullName: "chainguard-dev/mono"},
+			"nofull":  {},
+			"another": {FullName: "owner/another"},
+		},
+	}
+
+	got := cfg.RepoFullNames()
+	want := []string{"chainguard-dev/mono", "owner/another", "owner/tools"}
+	if len(got) != len(want) {
+		t.Fatalf("RepoFullNames() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("RepoFullNames() = %v, want %v (sorted, no empty full_name)", got, want)
+		}
+	}
+}
+
+func TestRepoFullNames_empty(t *testing.T) {
+	cfg := &Config{}
+	if got := cfg.RepoFullNames(); len(got) != 0 {
+		t.Fatalf("RepoFullNames() = %v, want empty", got)
+	}
+}

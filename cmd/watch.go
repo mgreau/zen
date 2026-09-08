@@ -456,10 +456,22 @@ func saveState(st *reconciler.PollMemory, prCount int) {
 }
 
 func pollOnce(ctx context.Context, st *reconciler.PollMemory, queue workqueue.Interface, rec *reconciler.SetupReconciler) {
-	reviews, err := ghpkg.GetReviewRequests(ctx, "", cfg.IgnoreDrafts)
+	// Scoped per repository rather than one global search: a global search
+	// fills its page on GitHub's terms, so review requests in unconfigured
+	// repositories can crowd out a configured repository's PR and leave it
+	// with neither a worktree nor a refresh.
+	repos := cfg.RepoFullNames()
+	if len(repos) == 0 {
+		return
+	}
+	reviews, err := ghpkg.GetReviewRequestsForRepos(ctx, repos, cfg.IgnoreDrafts)
 	if err != nil {
 		fmt.Printf("[%s] Error fetching reviews: %v\n", time.Now().Format(time.RFC3339), err)
-		return
+		// A partial failure still carries the repos that answered; only a total
+		// failure aborts the poll, so state is not rewritten from nothing.
+		if len(reviews) == 0 {
+			return
+		}
 	}
 
 	kept := 0
@@ -476,7 +488,7 @@ func pollOnce(ctx context.Context, st *reconciler.PollMemory, queue workqueue.In
 			st.NotifiedNew[key] = true
 		}
 		basePath := cfg.RepoBasePath(short)
-		worktreePath := filepath.Join(basePath, fmt.Sprintf("%s-pr-%d", short, pr.Number))
+		worktreePath := wt.PRPath(basePath, short, pr.Number)
 		exists := false
 		head := ""
 		if _, err := os.Stat(worktreePath); err == nil {

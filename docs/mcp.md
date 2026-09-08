@@ -28,6 +28,6 @@ claude mcp add --scope user zen -- zen mcp serve
 | `zen_review` | Create a PR worktree, or fast-forward an existing one, and inject context |
 | `zen_review_resume` | Fast-forward an existing PR worktree, then return its path and sessions |
 
-`zen_review` and `zen_review_resume` use the same catch-up rules as the CLI (`git merge --ff-only`, skip if dirty or an agent is live). They never `git reset --hard` on a rewritten head — confirm that from a TTY with `zen review <n>`.
+`zen_review` and `zen_review_resume` use the same catch-up rules as the CLI (`git merge --ff-only`, skip if dirty or an agent is live). They never `git reset --hard` on a rewritten head, or on one that is behind the worktree — confirm that from a TTY with `zen review <n>`.
 
 > **Note:** `zen_inbox` uses the `ignore_drafts` setting from your config. Unlike the `zen inbox` CLI, there is no per-call override. Change the config (see [docs/configuration.md](configuration.md)) to toggle draft filtering for MCP callers.

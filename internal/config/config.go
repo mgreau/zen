@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -287,6 +288,21 @@ func (c *Config) RepoNames() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// RepoFullNames lists every configured repository as owner/repo, sorted so a
+// poll queries them in a stable order. Repos with no full_name are skipped:
+// they cannot be scoped in a GitHub search.
+func (c *Config) RepoFullNames() []string {
+	full := make([]string, 0, len(c.Repos))
+	for _, repo := range c.Repos {
+		if repo.FullName == "" {
+			continue
+		}
+		full = append(full, repo.FullName)
+	}
+	sort.Strings(full)
+	return full
 }
 
 // RepoFullName maps a short name to full GitHub owner/repo.

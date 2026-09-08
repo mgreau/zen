@@ -93,11 +93,15 @@ The daemon uses [driftlessaf](https://github.com/driftlessaf) workqueues with tw
 
 Each step is **idempotent** — safe to re-run if interrupted.
 
+**Which PRs a poll sees.** The daemon runs the review-request search once per configured repository, scoped with `repo:`, and follows GitHub's pagination to the end of each. One unscoped search would not do: its page is filled on GitHub's terms, so review requests in repositories zen knows nothing about can crowd out a configured repository's PR, which then gets neither a worktree nor a refresh. Per-repository queries also stay well inside GitHub's 256-character search limit that a combined `repo:a repo:b …` query would eventually cross.
+
 **Create vs refresh.** Skip-if-exists is the wrong idempotency for worktrees. Each poll compares GitHub `headRefOid` to worktree `HEAD` and queues the same setup key when they differ. Linear updates are `git merge --ff-only` onto `refs/remotes/origin/pr-N` (git refuses to fetch into the local `pr-N` branch while it is checked out). Refresh does not require the author to be in `authors:` — `zen review` can create those worktrees and the daemon still keeps them current. Create (no worktree yet) still requires the author to be in `authors:`.
 
 **When zen will not move a worktree.** Tracked local edits, a live agent, a closed PR, and a draft hidden by `ignore_drafts` are left alone. Untracked context (`CLAUDE.local.md`, `.zen/`) does not count as dirty. An agent is live if a session UUID is on a process argv, or if `claude` / `codex` (or a node/python wrapper) has cwd in the worktree — that covers a first-pass `claude /review-pr` that has no UUID on argv yet. A live REST check at reconcile covers the race where a PR is queued while ready then closed or converted to draft. A missing `pull/N/head` is skip, not a git retry. `zen review` still opens a draft the user asked for.
 
-**Rewritten history.** The daemon never `git reset --hard` (no TTY). `zen review` and `zen review resume` prompt `[y/N]` first (default no). Untracked files stay; the previous tip stays in the reflog. `--json` and MCP never reset.
+**Rewritten history.** A worktree that cannot be fast-forwarded needs `git reset --hard`, and nothing resets it unattended. The daemon and MCP never do. `zen review` and `zen review resume` prompt `[y/N]` (default no) **only when stdin is a terminal**: a piped or redirected run declines, so `yes | zen review <n>` cannot answer for you. `--json` never resets. Untracked files stay; the previous tip stays in the reflog.
+
+Two shapes reach that prompt. History **diverged** — git refuses the fast-forward outright. Or GitHub's head is an **ancestor** of the worktree: a force-push backward, or a commit made locally in the checkout. `git merge --ff-only` reports "Already up to date" for the second case without moving anything, so zen re-reads `HEAD` after the merge and treats "did not reach the target" the same as a refused fast-forward. Only a `HEAD` that actually landed on the fetched head counts as an update, which is what keeps context rewrites and “PR #N updated” notifications from repeating every poll.
 
 **Errors.** Git failures retry with exponential backoff (30s..10m, max 5 attempts). Context injection and PR cache writes are non-blocking — failures are logged but do not prevent the worktree from being created.
 
