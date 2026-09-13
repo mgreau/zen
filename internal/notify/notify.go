@@ -79,7 +79,17 @@ func PRReview(prNumber int, prTitle, author, repo string) error {
 	)
 }
 
-// WorktreeReady notifies that a worktree is ready for review.
+// PRUpdated notifies that an existing review worktree was fast-forwarded to a
+// new GitHub head. Quieter than PRReview; sent once per SHA after a successful
+// refresh, not every poll.
+func PRUpdated(prNumber int, prTitle, repo string) error {
+	return Send(
+		fmt.Sprintf("PR #%d updated", prNumber),
+		prTitle,
+		repo,
+	)
+}
+
 // Clicking opens a terminal tab in the worktree (requires terminal-notifier).
 func WorktreeReady(prNumber int, worktreePath string) error {
 	return SendWithAction(

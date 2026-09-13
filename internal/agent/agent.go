@@ -24,6 +24,11 @@ const (
 	Codex Kind = "codex"
 )
 
+// AllKinds is every recognised agent, in display order.
+func AllKinds() []Kind {
+	return []Kind{Claude, Codex}
+}
+
 // Valid reports whether k is a recognised agent kind.
 func (k Kind) Valid() bool {
 	return k == Claude || k == Codex

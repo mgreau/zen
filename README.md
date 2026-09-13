@@ -4,7 +4,7 @@
 
 You're reviewing more PRs and starting more features than ever, because [Claude Code](https://docs.anthropic.com/en/docs/claude-code) makes each one faster. But your IDE and your shell still want one branch at a time. Zen fixes that mismatch.
 
-For every PR in your review queue and every feature you're working on, zen creates a dedicated git worktree with Claude pre-armed: PR context injected as `CLAUDE.local.md` (never touching the repo's own `CLAUDE.md`), the right slash command installed, terminal tab opened on demand. A background daemon watches GitHub, prepares review worktrees silently as PRs come in, and removes them a few days after merge. Open a tab when you're ready — everything is already set up.
+For every PR in your review queue and every feature you're working on, zen creates a dedicated git worktree with Claude pre-armed: PR context injected as `CLAUDE.local.md` (never touching the repo's own `CLAUDE.md`), the right slash command installed, terminal tab opened on demand. A background daemon watches GitHub, prepares review worktrees silently as PRs come in, fast-forwards them when the PR head moves, and removes them a few days after merge. Open a tab when you're ready — everything is already set up.
 
 ![zen dashboard](docs/zen-dashboard.png)
 
@@ -91,7 +91,7 @@ zen review resume 42 --session 2 # resume specific session
 zen review delete 42             # remove a PR review worktree (with confirmation)
 ```
 
-If the worktree already exists, `zen review` resumes it; otherwise `zen review resume` offers to create one.
+If the worktree already exists, zen catches it up to the current PR head and then resumes. It will not merge over local edits or a live agent. If the author force-pushed, you are asked before the checkout is reset. `zen review resume` offers to create the worktree if it is missing.
 
 ## Work on a feature
 
@@ -179,7 +179,7 @@ Session ID, model, token usage, and last activity per worktree.
 
 Two loops keep zen useful.
 
-The **automated loop** is the daemon. It polls GitHub for PRs from configured authors, creates a worktree per PR with context pre-loaded, sends a desktop notification when ready, and removes worktrees a few days after merge. Each step is idempotent and retries on failure. The daemon does **not** open terminal tabs — worktrees are prepared silently.
+The **automated loop** is the daemon. It polls GitHub and notifies you of new review requests. Worktrees for `authors:` are created silently, with context already injected, and existing review checkouts fast-forward when the PR head moves. Local edits and live agents are left alone; a force-push waits for `zen review`, which asks before resetting. After a successful catch-up you get a quieter “PR #N updated”. Merged worktrees are removed a few days later. The daemon never opens terminal tabs.
 
 The **manual loop** is yours: check what needs your attention, open a worktree in a new tab with Claude, do the work.
 
@@ -203,7 +203,7 @@ zen cleanup --days 14            # custom age threshold
 zen cleanup --delete             # interactive deletion
 ```
 
-For the internal design (workqueues, reconcilers, retry behaviour) see [docs/architecture.md](docs/architecture.md).
+Daemon internals are in [docs/architecture.md](docs/architecture.md). After installing a new zen, restart `zen watch` so the new binary is what polls GitHub — existing worktrees are not rebuilt. See [docs/configuration.md](docs/configuration.md#upgrading).
 
 ## Configuration
 
@@ -260,7 +260,7 @@ Tool inventory and usage in [docs/mcp.md](docs/mcp.md).
 
 ## Context injection
 
-The daemon writes a `CLAUDE.local.md` file into each PR worktree with the PR title, author, changed files, and review instructions. The repo's own `CLAUDE.md` is never touched — there's no risk of accidental commits. To refresh manually:
+The daemon writes a `CLAUDE.local.md` file into each PR worktree with the PR title, author, changed files, and review instructions. The repo's own `CLAUDE.md` is never touched — there's no risk of accidental commits. When the PR head moves, the daemon (and `zen review` on an existing directory) rewrite that context automatically. `zen context inject` remains the manual escape hatch:
 
 ```
 zen context inject <path> --pr 42 --repo app

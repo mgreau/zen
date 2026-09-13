@@ -245,7 +245,7 @@ func (s *Server) handleReview(ctx context.Context, req mcpgo.CallToolRequest) (*
 	}
 
 	// Pass nil logger -- MCP must not write to stdout
-	result, err := review.CreateWorktree(ctx, s.cfg, s.cfg.NewAgent(""), repoShort, prNumber, nil)
+	result, err := review.CreateWorktree(ctx, s.cfg, s.cfg.NewAgent(""), repoShort, prNumber, nil, nil)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
@@ -275,6 +275,7 @@ func (s *Server) handleReviewResume(ctx context.Context, req mcpgo.CallToolReque
 	ag := s.cfg.NewAgent("")
 	for _, wt := range wts {
 		if wt.Type == worktree.TypePRReview && wt.PRNumber == prNumber {
+			_, _ = review.CreateWorktree(ctx, s.cfg, ag, wt.Repo, prNumber, nil, nil)
 			sessions, _ := ag.FindSessions(wt.Path)
 			if sessions == nil {
 				sessions = []session.Session{}

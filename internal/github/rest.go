@@ -15,11 +15,13 @@ type PRDetails struct {
 	Author      string `json:"author"`
 	State       string `json:"state"`
 	HeadRefName string `json:"head_ref_name"`
+	HeadSHA     string `json:"head_sha"`
 	BaseRefName string `json:"base_ref_name"`
 	Body        string `json:"body"`
 	CreatedAt   string `json:"created_at"`
 	URL         string `json:"url"`
 	IsFork      bool   `json:"is_fork"`
+	Draft       bool   `json:"draft"`
 }
 
 // GetPRDetails fetches details for a specific PR.
@@ -30,18 +32,37 @@ func (c *Client) GetPRDetails(ctx context.Context, fullRepo string, prNumber int
 		return nil, fmt.Errorf("fetching PR #%d: %w", prNumber, err)
 	}
 
-	return &PRDetails{
-		Number:      pr.GetNumber(),
-		Title:       pr.GetTitle(),
-		Author:      pr.GetUser().GetLogin(),
-		State:       pr.GetState(),
-		HeadRefName: pr.GetHead().GetRef(),
-		BaseRefName: pr.GetBase().GetRef(),
-		Body:        pr.GetBody(),
-		CreatedAt:   pr.GetCreatedAt().Format("2006-01-02T15:04:05Z"),
-		URL:         pr.GetHTMLURL(),
-		IsFork:      pr.GetHead().GetRepo().GetFork(),
-	}, nil
+	return prDetailsFrom(pr), nil
+}
+
+// prDetailsFrom copies a go-github PR. Head/Base/User can be nil when the
+// author deletes the fork or GitHub omits them; callers must not panic.
+func prDetailsFrom(pr *gh.PullRequest) *PRDetails {
+	d := &PRDetails{
+		Number: pr.GetNumber(),
+		Title:  pr.GetTitle(),
+		State:  pr.GetState(),
+		Body:   pr.GetBody(),
+		URL:    pr.GetHTMLURL(),
+		Draft:  pr.GetDraft(),
+	}
+	if ts := pr.GetCreatedAt(); !ts.Time.IsZero() {
+		d.CreatedAt = ts.Format("2006-01-02T15:04:05Z")
+	}
+	if pr != nil && pr.User != nil {
+		d.Author = pr.User.GetLogin()
+	}
+	if pr != nil && pr.Head != nil {
+		d.HeadRefName = pr.Head.GetRef()
+		d.HeadSHA = pr.Head.GetSHA()
+		if pr.Head.Repo != nil {
+			d.IsFork = pr.Head.Repo.GetFork()
+		}
+	}
+	if pr != nil && pr.Base != nil {
+		d.BaseRefName = pr.Base.GetRef()
+	}
+	return d
 }
 
 // GetPRState returns the state of a PR: OPEN, CLOSED, or MERGED.
@@ -167,4 +188,15 @@ func splitRepo(fullRepo string) (string, string) {
 		return fullRepo, ""
 	}
 	return parts[0], parts[1]
+}
+
+// IsNotFound reports whether err is a GitHub 404 (deleted PR or repo).
+func IsNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, " 404 ") ||
+		strings.Contains(s, "status: 404") ||
+		strings.Contains(s, "not found")
 }

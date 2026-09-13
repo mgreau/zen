@@ -15,7 +15,7 @@ authors:
   - wlynch
 ```
 
-That's enough to start the daemon (`zen watch start`) and check your inbox (`zen inbox`).
+That's enough to start the daemon (`zen watch start`) and check your inbox (`zen inbox`). `authors` is who the daemon auto-creates worktrees for. You still get notified for other review requests; `zen review` can open those by hand.
 
 ## Full example
 
@@ -45,7 +45,9 @@ branch_prefix: mgreau
 # Skip draft PRs in `zen inbox`, watch notifications, and the MCP inbox tool.
 # Defaults to false (drafts are shown). Set to true to skip drafts so you don't
 # review something that isn't ready. Override on a single run with
-# `--ignore-drafts=false`.
+# `--ignore-drafts=false`. Watch does not refresh a hidden draft (or a closed
+# PR); when the PR is ready again, SHA comparison catches up. A live check at
+# reconcile time covers the race where a PR is queued while ready then drafted.
 ignore_drafts: true
 
 watch:
@@ -67,9 +69,11 @@ slack:
 
 The daemon re-reads `config.yaml` on every poll tick. Changes to `poll_interval`, `authors`, `repos`, and other settings take effect without restarting.
 
+On each poll, setup re-runs if GitHub's head SHA differs from the worktree. Linear updates fast-forward. Local edits and a live agent are left alone. A head that cannot be fast-forwarded onto — rewritten, or behind the worktree — waits for `zen review`, which asks before `reset --hard` and only from a terminal.
+
 ## Repos
 
-Each repo key (e.g. `app`) is a short name you choose — it doesn't have to match the GitHub repo name. It's used for worktree naming (`app-pr-42`), queue keys (`app:42`), and display. The `full_name` is the actual `owner/repo` used for GitHub API calls.
+Each repo key (e.g. `app`) is a short name you choose — it doesn't have to match the GitHub repo name. It's used for worktree naming (`app-pr-42`), queue keys (`app:42`), and display. The `full_name` is the actual `owner/repo` used for GitHub API calls. The daemon polls review requests across every repo in this file.
 
 If two orgs have a repo with the same name, pick different keys:
 
@@ -151,16 +155,34 @@ Setup:
 
 If `slack.enabled` is true but `ZEN_SLACK_TOKEN` is unset, or `auth.test` fails at startup, the daemon logs a warning and runs with the Slack watcher disabled rather than failing to start.
 
+## Environment
+
+`ZEN_HOME` overrides the config/state directory (default `~/.zen`). Functional tests and a second daemon use this so they do not share `config.yaml` or `last_check.json` with a day-to-day install.
+
 ## State files
 
-All state lives in `~/.zen/state/`:
+All state lives in `~/.zen/state/` (or `$ZEN_HOME/state/`):
 
 | File | Purpose |
 |------|---------|
 | `watch.pid` | Daemon PID |
 | `watch.log` | Daemon logs (rotated at 10MB; previous log kept as `watch.log.1`) |
-| `last_check.json` | Timestamp of last GitHub poll |
+| `last_check.json` | Last GitHub poll: timestamp, inbox count, `notified_new` (`repo:n` keys already announced), `applied_shas` (last-seen worktree HEAD) |
 | `pr_cache.json` | PR titles/authors for display |
 | `sessions.json` | Cached agent session states (updated every 10s by daemon) |
 | `slack_seen.json` | Message keys already processed by the Slack task watcher |
 | `slack_origins.json` | Worktree path → originating Slack thread, for the completion DM |
+
+## Upgrading
+
+Install the new binary and restart the daemon so it is the process that actually polls GitHub. There is no migrate command and `config.yaml` does not need to change.
+
+```bash
+make build                 # or however you install zen
+zen watch stop
+zen watch start
+```
+
+Existing review worktrees stay in place. On the next poll they fast-forward if GitHub has moved and the tree is idle. In-flight reviews (local edits or a live agent) are left alone. You will not get a second “new review request” for PRs that were already in the inbox. If an author force-pushed while you were away, run `zen review <n>` — it asks before resetting.
+
+Older zen wrote `seen_prs` (PR numbers only) in `last_check.json`. The first poll after upgrade absorbs that list into `notified_new` and never writes `seen_prs` again.

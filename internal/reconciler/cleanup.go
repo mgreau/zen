@@ -45,7 +45,7 @@ func (r *CleanupReconciler) Reconcile(ctx context.Context, key string, _ workque
 		)
 	}
 
-	worktreeName := fmt.Sprintf("%s-pr-%d", repo, prNumber)
+	worktreeName := wt.PRName(repo, prNumber)
 	worktreePath := filepath.Join(basePath, worktreeName)
 	originPath := filepath.Join(basePath, repo)
 

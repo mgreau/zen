@@ -18,7 +18,7 @@
 
   # Keep in sync with go.sum. `flox build` / `nix build` prints the correct
   # hash when this is empty or wrong.
-  vendorHash = "sha256-d0muw8O2bIftdNNXZBxrpgjsZM/NjBL09icanyVTA6Q=";
+  vendorHash = "sha256-LnVqLMctRlcWOZFLfxxeoFwnewlCJ+MdgPEn6yJrirk=";
 
   env.CGO_ENABLED = "0";
 
