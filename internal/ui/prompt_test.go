@@ -164,3 +164,85 @@ func TestConfirmYN_devNullStdinIsDeclined(t *testing.T) {
 		t.Fatalf("prompt written to a non-interactive run: %q", out.String())
 	}
 }
+
+func TestConfirmYesDefault_pipedInputIsDeclined(t *testing.T) {
+	for _, input := range []string{"y\n", "yes\n", "\n", ""} {
+		out := setPromptIO(t, false, input)
+		if ConfirmYesDefault("Register? [Y/n]: ") {
+			t.Fatalf("piped %q confirmed; want declined", input)
+		}
+		if out.Len() != 0 {
+			t.Fatalf("non-interactive run wrote a prompt: %q", out.String())
+		}
+	}
+}
+
+func TestConfirmYesDefault_interactiveAnswers(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"bare Enter is the default", "\n", true},
+		{"y", "y\n", true},
+		{"Y", "Y\n", true},
+		{"yes", "yes\n", true},
+		{"padded yes", "  yes  \n", true},
+		{"no trailing newline", "y", true},
+		{"n", "n\n", false},
+		{"no", "no\n", false},
+		{"junk", "maybe\n", false},
+		// The regression: `zen work new ... < /dev/null` reaches the read
+		// and gets an immediate EOF. That is nobody answering, not the
+		// Enter keypress above, and must not register the repo.
+		{"immediate EOF is not a bare Enter", "", false},
+	}
+	for _, tt := range tests {
+		setPromptIO(t, true, tt.input)
+		if got := ConfirmYesDefault("Register? [Y/n]: "); got != tt.want {
+			t.Errorf("%s: ConfirmYesDefault(%q) = %v, want %v", tt.name, tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestConfirmYesDefault_interactiveWritesPrompt(t *testing.T) {
+	out := setPromptIO(t, true, "n\n")
+	ConfirmYesDefault("Register? [Y/n]: ")
+	if !strings.Contains(out.String(), "Register? [Y/n]: ") {
+		t.Fatalf("prompt not written, got %q", out.String())
+	}
+}
+
+func TestConfirmYesDefault_readErrorIsDeclined(t *testing.T) {
+	setPromptIO(t, true, "")
+	promptIn = errReader{}
+	promptReader, promptSource = nil, nil
+	if ConfirmYesDefault("Register? [Y/n]: ") {
+		t.Fatal("read error confirmed; want declined")
+	}
+}
+
+func TestConfirmYesDefault_devNullStdinIsDeclined(t *testing.T) {
+	// End to end through the real TTY check, mirroring
+	// `zen work new demo test --no-terminal < /dev/null`.
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open %s: %v", os.DevNull, err)
+	}
+	t.Cleanup(func() { devNull.Close() })
+	withStdin(t, devNull)
+
+	var out bytes.Buffer
+	oldOut, oldIn, oldReader, oldSrc := promptOut, promptIn, promptReader, promptSource
+	promptOut, promptIn, promptReader, promptSource = &out, nil, nil, nil
+	t.Cleanup(func() {
+		promptOut, promptIn, promptReader, promptSource = oldOut, oldIn, oldReader, oldSrc
+	})
+
+	if ConfirmYesDefault("Register? [Y/n]: ") {
+		t.Fatal("/dev/null stdin confirmed; want declined")
+	}
+	if out.Len() != 0 {
+		t.Fatalf("prompt written to a non-interactive run: %q", out.String())
+	}
+}
