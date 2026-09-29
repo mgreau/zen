@@ -39,6 +39,7 @@ func setupPRWorktree(t *testing.T) (clone, wtDir, shaA string) {
 	git(t, orig, "init", "-b", "main")
 	git(t, orig, "config", "user.email", "test@example.com")
 	git(t, orig, "config", "user.name", "test")
+	git(t, orig, "config", "commit.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(orig, "file.txt"), []byte("A\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -52,6 +53,7 @@ func setupPRWorktree(t *testing.T) (clone, wtDir, shaA string) {
 	git(t, orig, "clone", orig, clone)
 	git(t, clone, "config", "user.email", "test@example.com")
 	git(t, clone, "config", "user.name", "test")
+	git(t, clone, "config", "commit.gpgsign", "false")
 	git(t, clone, "fetch", "origin", "pr-1:pr-1")
 
 	wtDir = filepath.Join(t.TempDir(), "repo-pr-1")

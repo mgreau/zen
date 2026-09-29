@@ -30,6 +30,7 @@ func initTestRepo(t *testing.T) string {
 	run(upstreamPath, "init", "-b", "main")
 	run(upstreamPath, "config", "user.email", "test@example.com")
 	run(upstreamPath, "config", "user.name", "Test")
+	run(upstreamPath, "config", "commit.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(upstreamPath, "README.md"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +41,7 @@ func initTestRepo(t *testing.T) string {
 	run(dir, "clone", upstreamPath, repoPath)
 	run(repoPath, "config", "user.email", "test@example.com")
 	run(repoPath, "config", "user.name", "Test")
+	run(repoPath, "config", "commit.gpgsign", "false")
 
 	return repoPath
 }
