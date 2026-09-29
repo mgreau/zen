@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -465,5 +466,245 @@ func TestRepoFullNames_empty(t *testing.T) {
 	cfg := &Config{}
 	if got := cfg.RepoFullNames(); len(got) != 0 {
 		t.Fatalf("RepoFullNames() = %v, want empty", got)
+	}
+}
+
+// writeTestConfig sets HOME to a temp dir and writes the given config.yaml.
+// It returns the path to the written file.
+func writeTestConfig(t *testing.T, content string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+	// Dir() prefers ZEN_HOME; clear it so an ambient value in the developer's
+	// shell cannot point these tests at a real config.
+	t.Setenv("ZEN_HOME", "")
+	zenDir := filepath.Join(tmpDir, ".zen")
+	if err := os.MkdirAll(zenDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(zenDir, "config.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestAddRepo(t *testing.T) {
+	writeTestConfig(t, `# my zen config
+repos:
+  mono:
+    full_name: chainguard-dev/mono
+    base_path: ~/git/mono-base
+authors:
+  - testuser
+agent: claude
+`)
+
+	home := os.Getenv("HOME")
+	added, err := AddRepo("zen", RepoConfig{FullName: "mgreau/zen", BasePath: filepath.Join(home, "src")})
+	if err != nil {
+		t.Fatalf("AddRepo: %v", err)
+	}
+	if !added {
+		t.Fatal("AddRepo should report the entry as added")
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load after AddRepo: %v", err)
+	}
+	if got := cfg.RepoFullName("zen"); got != "mgreau/zen" {
+		t.Errorf("RepoFullName(zen) = %q, want mgreau/zen", got)
+	}
+	if got := cfg.RepoBasePath("zen"); got != filepath.Join(home, "src") {
+		t.Errorf("RepoBasePath(zen) = %q, want %q", got, filepath.Join(home, "src"))
+	}
+	if got := cfg.RepoFullName("mono"); got != "chainguard-dev/mono" {
+		t.Errorf("existing repo lost: RepoFullName(mono) = %q", got)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(home, ".zen", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "# my zen config") {
+		t.Error("AddRepo should preserve comments in config.yaml")
+	}
+	if !strings.Contains(string(raw), "base_path: ~/src") {
+		t.Errorf("AddRepo should write base_path in ~/ form, got:\n%s", raw)
+	}
+}
+
+func TestAddRepoIdempotent(t *testing.T) {
+	writeTestConfig(t, `repos:
+  zen:
+    full_name: mgreau/zen
+    base_path: ~/src
+`)
+
+	// Same repo again, with the base path in absolute form.
+	added, err := AddRepo("zen", RepoConfig{FullName: "mgreau/zen", BasePath: filepath.Join(os.Getenv("HOME"), "src")})
+	if err != nil {
+		t.Fatalf("AddRepo: %v", err)
+	}
+	if added {
+		t.Error("re-adding an identical repo should be a no-op")
+	}
+}
+
+func TestAddRepoConflicts(t *testing.T) {
+	content := `repos:
+  zen:
+    full_name: mgreau/zen
+    base_path: ~/src
+`
+
+	t.Run("same short name, different repo", func(t *testing.T) {
+		writeTestConfig(t, content)
+		if _, err := AddRepo("zen", RepoConfig{FullName: "other/zen", BasePath: "~/git"}); err == nil {
+			t.Error("conflicting short name should be an error")
+		}
+	})
+
+	t.Run("same full name, different short name", func(t *testing.T) {
+		writeTestConfig(t, content)
+		if _, err := AddRepo("zen2", RepoConfig{FullName: "mgreau/zen", BasePath: "~/git"}); err == nil {
+			t.Error("duplicate full name should be an error")
+		}
+	})
+
+	t.Run("missing config file", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		if _, err := AddRepo("zen", RepoConfig{FullName: "mgreau/zen", BasePath: "~/src"}); err == nil {
+			t.Error("AddRepo without a config file should fail")
+		}
+	})
+}
+
+func TestAddRepoNoReposSection(t *testing.T) {
+	writeTestConfig(t, `authors:
+  - testuser
+`)
+
+	added, err := AddRepo("zen", RepoConfig{FullName: "mgreau/zen", BasePath: "~/src"})
+	if err != nil {
+		t.Fatalf("AddRepo: %v", err)
+	}
+	if !added {
+		t.Fatal("AddRepo should add to a config with no repos section")
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.RepoFullName("zen"); got != "mgreau/zen" {
+		t.Errorf("RepoFullName(zen) = %q, want mgreau/zen", got)
+	}
+	if len(cfg.Authors) != 1 || cfg.Authors[0] != "testuser" {
+		t.Errorf("authors should survive the edit, got %v", cfg.Authors)
+	}
+}
+
+func TestAddRepoNullReposSection(t *testing.T) {
+	writeTestConfig(t, `# top comment
+repos:
+authors:
+  - testuser
+`)
+
+	added, err := AddRepo("zen", RepoConfig{FullName: "mgreau/zen", BasePath: "~/src"})
+	if err != nil {
+		t.Fatalf("AddRepo: %v", err)
+	}
+	if !added {
+		t.Fatal("AddRepo should add to a config with an empty repos: key")
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.RepoFullName("zen"); got != "mgreau/zen" {
+		t.Errorf("RepoFullName(zen) = %q, want mgreau/zen", got)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".zen", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "# top comment") {
+		t.Error("comment should survive the edit")
+	}
+}
+
+func TestAddRepoPreservesFileMode(t *testing.T) {
+	path := writeTestConfig(t, "repos:\n")
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := AddRepo("zen", RepoConfig{FullName: "mgreau/zen", BasePath: "~/src"}); err != nil {
+		t.Fatalf("AddRepo: %v", err)
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("config mode = %o, want 600 preserved", fi.Mode().Perm())
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Error("temp file should not be left behind")
+	}
+}
+
+func TestAddRepoIdempotentAbsolutePath(t *testing.T) {
+	writeTestConfig(t, `repos:
+  zen:
+    full_name: mgreau/zen
+    base_path: /opt/src
+`)
+
+	added, err := AddRepo("zen", RepoConfig{FullName: "mgreau/zen", BasePath: "/opt/src"})
+	if err != nil {
+		t.Fatalf("AddRepo: %v", err)
+	}
+	if added {
+		t.Error("re-adding an identical repo with absolute paths should be a no-op")
+	}
+}
+
+func TestAddRepo_honoursZenHome(t *testing.T) {
+	// AddRepo must write through Dir(), not a hardcoded ~/.zen, so a
+	// ZEN_HOME-isolated install (or test harness) is not bypassed.
+	writeTestConfig(t, "repos: {}\n")
+
+	zenHome := t.TempDir()
+	t.Setenv("ZEN_HOME", zenHome)
+	target := filepath.Join(zenHome, "config.yaml")
+	if err := os.WriteFile(target, []byte("repos: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := AddRepo("zen", RepoConfig{FullName: "mgreau/zen", BasePath: "/src"}); err != nil {
+		t.Fatalf("AddRepo: %v", err)
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading ZEN_HOME config: %v", err)
+	}
+	if !strings.Contains(string(data), "mgreau/zen") {
+		t.Fatalf("repo not written to ZEN_HOME config, got:\n%s", data)
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		if _, err := os.Stat(filepath.Join(home, ".zen", "config.yaml")); err == nil {
+			d, _ := os.ReadFile(filepath.Join(home, ".zen", "config.yaml"))
+			if strings.Contains(string(d), "mgreau/zen") {
+				t.Fatal("AddRepo wrote to ~/.zen despite ZEN_HOME being set")
+			}
+		}
 	}
 }
