@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"unicode"
 
 	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
@@ -22,7 +24,8 @@ var workNewCmd = &cobra.Command{
 	Short: "Create a new feature worktree and open in iTerm2",
 	Long: `Create a new feature worktree from origin/main and open it in a new iTerm2 tab.
 
-The branch will be prefixed with mgreau/ per naming convention.
+The branch will be prefixed with mgreau/ per naming convention. The branch
+name must be a single path segment: no "/", whitespace, or leading "-".
 Optionally provide a context string to use as the initial Claude prompt.`,
 	Args: cobra.RangeArgs(2, 3),
 	RunE: runWorkNew,
@@ -131,9 +134,23 @@ func runWork(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// validateWorkBranch rejects names that would not map to one sibling
+// worktree directory. The directory is "<repo>-<branch>", so a "/" would
+// create a nested directory that discovery then lists under its last path
+// element.
+func validateWorkBranch(branch string) error {
+	if branch == "" || strings.HasPrefix(branch, "-") || strings.Contains(branch, "/") || strings.ContainsFunc(branch, unicode.IsSpace) {
+		return fmt.Errorf("invalid branch name %q: use a single path segment without \"/\", whitespace, or a leading \"-\"", branch)
+	}
+	return nil
+}
+
 func runWorkNew(cmd *cobra.Command, args []string) error {
 	repo := args[0]
 	branch := args[1]
+	if err := validateWorkBranch(branch); err != nil {
+		return err
+	}
 	context := ""
 	if len(args) == 3 {
 		context = args[2]
