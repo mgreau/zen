@@ -15,3 +15,10 @@ func PRName(repoShort string, prNumber int) string {
 func PRPath(basePath, repoShort string, prNumber int) string {
 	return filepath.Join(basePath, PRName(repoShort, prNumber))
 }
+
+// PRBranch is the local branch a PR review worktree checks out: pr-<number>,
+// fetched from GitHub's pull/<number>/head. Classify relies on it to tell a
+// review apart from a work stream whose name also ends in -pr-<number>.
+func PRBranch(prNumber int) string {
+	return fmt.Sprintf("pr-%d", prNumber)
+}

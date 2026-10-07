@@ -1,10 +1,12 @@
 package worktree
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mgreau/zen/internal/agent"
@@ -91,7 +93,7 @@ func TestRemove(t *testing.T) {
 			if test.prepare != nil {
 				test.prepare(t, path)
 			}
-			err := remove(origin, path, func(string) bool { return false })
+			err := remove(origin, path, func(string) bool { return false }, nil)
 			if !errors.Is(err, test.wantErr) {
 				t.Fatalf("Remove() error = %v, want %v", err, test.wantErr)
 			}
@@ -117,7 +119,7 @@ func TestRemoveGitFailurePreservesWorktree(t *testing.T) {
 	if _, err := agent.New(agent.Claude, "").InjectContext(path, "generated"); err != nil {
 		t.Fatal(err)
 	}
-	err := remove(filepath.Join(t.TempDir(), "not-a-repository"), path, func(string) bool { return false })
+	err := remove(filepath.Join(t.TempDir(), "not-a-repository"), path, func(string) bool { return false }, nil)
 	if err == nil || RemovalBlocked(err) {
 		t.Fatalf("Remove() error = %v, want Git failure", err)
 	}
@@ -139,13 +141,150 @@ func TestRemoveMissingIsIdempotent(t *testing.T) {
 
 func TestRemoveRefusesRunningAgent(t *testing.T) {
 	origin, path := removalFixture(t)
-	err := remove(origin, path, func(string) bool { return true })
+	err := remove(origin, path, func(string) bool { return true }, nil)
 	if !errors.Is(err, ErrWorktreeActive) {
 		t.Fatalf("Remove() error = %v, want %v", err, ErrWorktreeActive)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal("active-agent refusal removed the worktree")
 	}
+}
+
+// reviewFixture lays out a PR review the way CreateFromPR does: an upstream
+// with refs/pull/123/head, a clone that fetched it into pr-123, and the
+// review worktree repo-pr-123 checked out on that branch. Returns the
+// upstream, the clone, the worktree path, and the PR head commit.
+func reviewFixture(t *testing.T) (upstream, origin, path, prHead string) {
+	t.Helper()
+	root := t.TempDir()
+	upstream = filepath.Join(root, "upstream")
+	origin = filepath.Join(root, "repo")
+	path = filepath.Join(root, "repo-pr-123")
+	runRemovalGit(t, root, "init", "-b", "main", upstream)
+	runRemovalGit(t, upstream, "config", "user.email", "test@example.com")
+	runRemovalGit(t, upstream, "config", "user.name", "Test")
+	runRemovalGit(t, upstream, "config", "commit.gpgsign", "false")
+	writeRemovalFile(t, upstream, "tracked", "base")
+	runRemovalGit(t, upstream, "add", "tracked")
+	runRemovalGit(t, upstream, "commit", "-m", "initial")
+	runRemovalGit(t, upstream, "checkout", "-b", "author")
+	prHead = commitRemovalFile(t, upstream, "tracked", "author change")
+	runRemovalGit(t, upstream, "update-ref", "refs/pull/123/head", prHead)
+	runRemovalGit(t, upstream, "checkout", "main")
+
+	runRemovalGit(t, root, "clone", upstream, origin)
+	runRemovalGit(t, origin, "config", "user.email", "test@example.com")
+	runRemovalGit(t, origin, "config", "user.name", "Test")
+	runRemovalGit(t, origin, "config", "commit.gpgsign", "false")
+	runRemovalGit(t, origin, "fetch", "origin", "+pull/123/head:pr-123")
+	runRemovalGit(t, origin, "worktree", "add", path, "pr-123")
+	return upstream, origin, path, prHead
+}
+
+// pushPRHead adds a commit to the PR on upstream only, so the clone does not
+// have it until something fetches pull/123/head.
+func pushPRHead(t *testing.T, upstream string) string {
+	t.Helper()
+	runRemovalGit(t, upstream, "checkout", "author")
+	sha := commitRemovalFile(t, upstream, "tracked", "author follow-up")
+	runRemovalGit(t, upstream, "update-ref", "refs/pull/123/head", sha)
+	runRemovalGit(t, upstream, "checkout", "main")
+	return sha
+}
+
+func TestRemoveReview(t *testing.T) {
+	const missingSHA = "0123456789abcdef0123456789abcdef01234567"
+	tests := []struct {
+		name string
+		// prepare returns the PR head GitHub reports; empty keeps the fixture's.
+		prepare  func(t *testing.T, upstream, origin, path string) string
+		noPRHead bool
+		wantErr  error
+	}{
+		{name: "at PR head with only zen context", prepare: func(t *testing.T, _, _, path string) string {
+			if _, err := agent.New(agent.Claude, "").InjectContext(path, "generated"); err != nil {
+				t.Fatal(err)
+			}
+			return ""
+		}},
+		{name: "behind a PR head that is not fetched yet", prepare: func(t *testing.T, upstream, _, _ string) string {
+			return pushPRHead(t, upstream)
+		}},
+		{name: "detached at PR head", prepare: func(t *testing.T, _, _, path string) string {
+			runRemovalGit(t, path, "checkout", "--detach")
+			return ""
+		}},
+		{name: "local commit beyond PR head", prepare: func(t *testing.T, _, _, path string) string {
+			commitRemovalFile(t, path, "tracked", "reviewer fix")
+			return ""
+		}, wantErr: ErrWorktreeLocalCommits},
+		{name: "local commit after PR head moved", prepare: func(t *testing.T, upstream, _, path string) string {
+			commitRemovalFile(t, path, "local", "reviewer fix")
+			return pushPRHead(t, upstream)
+		}, wantErr: ErrWorktreeLocalCommits},
+		{name: "PR head missing after fetch", prepare: func(t *testing.T, _, _, _ string) string {
+			return missingSHA
+		}, wantErr: ErrWorktreeLocalCommits},
+		{name: "PR head not local and fetch fails", prepare: func(t *testing.T, upstream, origin, _ string) string {
+			sha := pushPRHead(t, upstream)
+			runRemovalGit(t, origin, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone"))
+			return sha
+		}, wantErr: ErrWorktreeLocalCommits},
+		{name: "no PR head from GitHub", noPRHead: true, wantErr: ErrWorktreeLocalCommits},
+		{name: "work branch at review path", prepare: func(t *testing.T, _, _, path string) string {
+			runRemovalGit(t, path, "checkout", "-b", "mgreau/pr-123")
+			return ""
+		}, wantErr: ErrNotPRReview},
+		{name: "untracked file still blocks", prepare: func(t *testing.T, _, _, path string) string {
+			writeRemovalFile(t, path, "notes.txt", "keep me")
+			return ""
+		}, wantErr: ErrWorktreeDirty},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			upstream, origin, path, prHead := reviewFixture(t)
+			if test.prepare != nil {
+				if head := test.prepare(t, upstream, origin, path); head != "" {
+					prHead = head
+				}
+			}
+			if test.noPRHead {
+				prHead = ""
+			}
+			err := removeReview(context.Background(), origin, path, 123, prHead, func(string) bool { return false })
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("RemoveReview() error = %v, want %v", err, test.wantErr)
+			}
+			_, statErr := os.Stat(path)
+			if test.wantErr != nil {
+				if !RemovalBlocked(err) {
+					t.Errorf("RemovalBlocked(%v) = false, want a safety refusal", err)
+				}
+				if statErr != nil {
+					t.Fatal("refused removal removed the worktree")
+				}
+				return
+			}
+			if !os.IsNotExist(statErr) {
+				t.Fatal("successful removal left the worktree")
+			}
+		})
+	}
+}
+
+func commitRemovalFile(t *testing.T, dir, name, message string) string {
+	t.Helper()
+	writeRemovalFile(t, dir, name, message)
+	runRemovalGit(t, dir, "add", name)
+	runRemovalGit(t, dir, "commit", "-m", message)
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD: %v", err)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func writeRemovalFile(t *testing.T, root, name, content string) {

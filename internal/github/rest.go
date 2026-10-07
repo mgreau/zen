@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	gh "github.com/google/go-github/v75/github"
 )
@@ -77,6 +78,39 @@ func (c *Client) GetPRState(ctx context.Context, fullRepo string, prNumber int) 
 		return "MERGED", nil
 	}
 	return strings.ToUpper(pr.GetState()), nil
+}
+
+// PRMergeInfo is what merged-review cleanup needs to know about a PR.
+type PRMergeInfo struct {
+	State    string    // OPEN, CLOSED, or MERGED
+	HeadSHA  string    // the PR's last head commit
+	MergedAt time.Time // zero unless the PR is merged
+}
+
+// GetPRMergeInfo returns a PR's state, head commit, and merge time.
+func (c *Client) GetPRMergeInfo(ctx context.Context, fullRepo string, prNumber int) (*PRMergeInfo, error) {
+	owner, repo := splitRepo(fullRepo)
+	pr, _, err := c.gh.PullRequests.Get(ctx, owner, repo, prNumber)
+	if err != nil {
+		return nil, fmt.Errorf("fetching PR #%d: %w", prNumber, err)
+	}
+	return prMergeInfoFrom(pr), nil
+}
+
+// prMergeInfoFrom copies the merge fields of a go-github PR. Head can be nil
+// when the author deletes the fork; callers must not panic.
+func prMergeInfoFrom(pr *gh.PullRequest) *PRMergeInfo {
+	info := &PRMergeInfo{
+		State:   strings.ToUpper(pr.GetState()),
+		HeadSHA: pr.GetHead().GetSHA(),
+	}
+	if pr.GetMerged() {
+		info.State = "MERGED"
+	}
+	if ts := pr.GetMergedAt(); !ts.Time.IsZero() {
+		info.MergedAt = ts.Time
+	}
+	return info
 }
 
 // GetPRAuthor returns the login of the PR author.

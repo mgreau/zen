@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestRepoFullName(t *testing.T) {
@@ -366,6 +367,9 @@ func TestWatchConfigDefaults(t *testing.T) {
 	if n := w.GetCleanupAfterDays(); n != 5 {
 		t.Errorf("GetCleanupAfterDays default = %d, want 5", n)
 	}
+	if d := w.CleanupAfterMergeDuration(); d != time.Hour {
+		t.Errorf("CleanupAfterMergeDuration default = %v, want 1h0m0s", d)
+	}
 	if n := w.GetConcurrency(); n != 2 {
 		t.Errorf("GetConcurrency default = %d, want 2", n)
 	}
@@ -465,5 +469,61 @@ func TestRepoFullNames_empty(t *testing.T) {
 	cfg := &Config{}
 	if got := cfg.RepoFullNames(); len(got) != 0 {
 		t.Fatalf("RepoFullNames() = %v, want empty", got)
+	}
+}
+
+func TestCleanupAfterMergeDuration(t *testing.T) {
+	tests := []struct {
+		value string
+		want  time.Duration
+	}{
+		{"", time.Hour},
+		{"30m", 30 * time.Minute},
+		{"2h", 2 * time.Hour},
+		{"0s", 0},
+		{"-1h", time.Hour},
+		{"soon", time.Hour},
+		{"5", time.Hour},
+	}
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			w := WatchConfig{CleanupAfterMerge: tt.value}
+			if got := w.CleanupAfterMergeDuration(); got != tt.want {
+				t.Errorf("CleanupAfterMergeDuration(%q) = %v, want %v", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadCleanupAfterMerge(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("ZEN_HOME", "")
+	zenDir := filepath.Join(tmpDir, ".zen")
+	if err := os.MkdirAll(zenDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// cleanup_after_days is deprecated but must keep loading.
+	yaml := `repos:
+  mono:
+    full_name: chainguard-dev/mono
+    base_path: /tmp/test
+watch:
+  cleanup_after_merge: "90m"
+  cleanup_after_days: 7
+`
+	if err := os.WriteFile(filepath.Join(zenDir, "config.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if d := cfg.Watch.CleanupAfterMergeDuration(); d != 90*time.Minute {
+		t.Errorf("CleanupAfterMergeDuration = %v, want 1h30m0s", d)
+	}
+	if cfg.Watch.CleanupAfterDays != 7 {
+		t.Errorf("CleanupAfterDays = %d, want 7", cfg.Watch.CleanupAfterDays)
 	}
 }

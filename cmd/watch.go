@@ -247,6 +247,7 @@ func watchDaemon() error {
 	watchCfg := cfg.Watch
 	dispatchInterval := watchCfg.DispatchIntervalDuration()
 	cleanupInterval := watchCfg.CleanupIntervalDuration()
+	cleanupAfterMerge := watchCfg.CleanupAfterMergeDuration()
 	sessionScanInterval := watchCfg.SessionScanIntervalDuration()
 	digestInterval, digestEnabled := watchCfg.DigestIntervalDuration()
 	concurrency := watchCfg.GetConcurrency()
@@ -256,8 +257,8 @@ func watchDaemon() error {
 	if digestEnabled {
 		digestStr = digestInterval.String()
 	}
-	fmt.Printf("[%s] Watch daemon started (poll=%s, dispatch=%s, cleanup=%s, session_scan=%s, digest=%s, concurrency=%d, maxRetries=%d)\n",
-		time.Now().Format(time.RFC3339), pollInterval, dispatchInterval, cleanupInterval, sessionScanInterval, digestStr, concurrency, maxRetries)
+	fmt.Printf("[%s] Watch daemon started (poll=%s, dispatch=%s, cleanup=%s, cleanup_after_merge=%s, session_scan=%s, digest=%s, concurrency=%d, maxRetries=%d)\n",
+		time.Now().Format(time.RFC3339), pollInterval, dispatchInterval, cleanupInterval, cleanupAfterMerge, sessionScanInterval, digestStr, concurrency, maxRetries)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -386,7 +387,7 @@ func watchDaemon() error {
 			reconciler.ScanSessions(cfg, 10*time.Second)
 
 		case <-cleanupTicker.C:
-			reconciler.ScanMergedPRs(ctx, cfg, cleanupQueue, cfg.Watch.GetCleanupAfterDays())
+			reconciler.ScanMergedPRs(ctx, cfg, cleanupQueue, cfg.Watch.CleanupAfterMergeDuration())
 			if slackEnabled {
 				if err := slackRec.PruneDone(ctx); err != nil {
 					fmt.Printf("[%s] Slack prune error: %v\n", time.Now().Format(time.RFC3339), err)

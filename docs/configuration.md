@@ -53,8 +53,8 @@ ignore_drafts: true
 watch:
   dispatch_interval: "10s"      # How often to process queued work
   cleanup_interval: "1h"        # How often to scan for merged PRs
+  cleanup_after_merge: "1h"     # Time after a PR merges before its review worktree is removed
   session_scan_interval: "10s"  # How often to scan Claude session states
-  cleanup_after_days: 5         # Days after merge before removing worktree
   concurrency: 2                # Parallel worktree setups
   max_retries: 5                # Max retry attempts for git failures
 
@@ -70,6 +70,21 @@ slack:
 The daemon re-reads `config.yaml` on every poll tick. Changes to `poll_interval`, `authors`, `repos`, and other settings take effect without restarting.
 
 On each poll, setup re-runs if GitHub's head SHA differs from the worktree. Linear updates fast-forward. Local edits and a live agent are left alone. A head that cannot be fast-forwarded onto — rewritten, or behind the worktree — waits for `zen review`, which asks before `reset --hard` and only from a terminal.
+
+## Merged-review cleanup
+
+Every `cleanup_interval`, the daemon removes the review worktree of each PR that merged at least `cleanup_after_merge` ago. The delay is a Go duration such as `30m` or `6h`, measured from GitHub's merge time; it defaults to `1h`, and `0s` removes the worktree on the next scan.
+
+Only PR reviews are removed: worktrees named `<repo>-pr-<N>` that are checked out on the `pr-<N>` branch zen created, or on a detached HEAD. Work streams are never removed by the daemon, even when their name ends in `-pr-<N>`; `zen cleanup` is the manual command for those. PRs closed without merging are left alone too.
+
+A merged review is kept, and the skip is logged, when any of these is true:
+
+- It has local changes, or untracked files other than zen's generated context.
+- An agent is running in it.
+- `HEAD` has commits that the PR's last head on GitHub does not contain. Zen never pushes from a review worktree, so those commits exist only there.
+- The comparison can't be made, for example because `pull/<N>/head` can't be fetched.
+
+`cleanup_after_days` is deprecated and ignored. It delayed removal until a merged review had no new commits for that many days, which let merged reviews pile up.
 
 ## Repos
 
@@ -184,5 +199,7 @@ zen watch start
 ```
 
 Existing review worktrees stay in place. On the next poll they fast-forward if GitHub has moved and the tree is idle. In-flight reviews (local edits or a live agent) are left alone. You will not get a second “new review request” for PRs that were already in the inbox. If an author force-pushed while you were away, run `zen review <n>` — it asks before resetting.
+
+`cleanup_after_days` can stay in `config.yaml`; it is ignored. After the restart, the first cleanup scan (one `cleanup_interval` later) removes every review whose PR merged more than `cleanup_after_merge` ago and passes the checks in [Merged-review cleanup](#merged-review-cleanup).
 
 Older zen wrote `seen_prs` (PR numbers only) in `last_check.json`. The first poll after upgrade absorbs that list into `notified_new` and never writes `seen_prs` again.

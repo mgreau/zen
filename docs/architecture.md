@@ -12,10 +12,12 @@ PR metadata (titles, authors) is cached in a lightweight JSON file (`~/.zen/stat
 
 | Type | Worktree pattern | Branch pattern | Example |
 |------|------------------|----------------|---------|
-| PR review | `<repo>-pr-<number>` | (fetched from remote) | `app-pr-42` |
+| PR review | `<repo>-pr-<number>` | `pr-<number>` (fetched from `pull/<number>/head`) | `app-pr-42` → `pr-42` |
 | Feature | `<repo>-<branch>` | `<branch_prefix>/<branch>` | `app-add-oidc-claims` → `mgreau/add-oidc-claims` |
 
 The git branch for feature worktrees uses `branch_prefix` from config (falling back to `git config user.name`, then no prefix). The worktree directory name itself is always `<repo>-<branch>` regardless of prefix.
+
+A worktree is classified as a PR review only when both columns match: the name ends in `-pr-<number>` and the checked-out branch is `pr-<number>` for the same number, or HEAD is detached (`worktree.Classify`). The name alone is not enough, because `zen work new app fix-pr-42` creates `app-fix-pr-42` on `mgreau/fix-pr-42`. That worktree is feature work, and the daemon never removes it when PR 42 merges.
 
 ## Daemon architecture
 
@@ -56,18 +58,18 @@ The daemon uses [driftlessaf](https://github.com/driftlessaf) workqueues with tw
     │  key ──→ ParsePRKey("app:42")    │    │  key ──→ ParsePRKey("app:35") │
     │          repo=app, pr=42         │    │          repo=app, pr=35      │
     │                                      │    │                                   │
-    │  Step 1: ensureWorktree             │    │  Step 1: removeWorktree           │
+    │  Step 1: ensureWorktree             │    │  Step 1: RemoveReview             │
     │  ┌─────────────────────────────┐    │    │  ┌─────────────────────────────┐  │
-    │  │ missing: fetch pull/N/head │    │    │  │ if missing? skip            │  │
-    │  │   into pr-N, worktree add   │    │    │  │ dirty/untracked/active? skip│  │
-    │  │ exists: fetch into          │    │    │  │ git worktree remove         │  │
-    │  │   origin/pr-N, ff-only      │    │    │  └─────────────────────────────┘  │
-    │  │ skip: dirty or live agent    │    │    │         │ safety refusal: SKIP    │
-    │  │ rewritten: skip (CLI       │    │    │         v Git/fs error: RETRY     │
-    │  │   prompts before reset)     │    │    └───────────────────────────────────┘
-    │  └─────────────────────────────┘    │
-    │         │                           │
-    │         v on error: RETRY           │
+    │  │ missing: fetch pull/N/head │    │    │  │ missing? skip               │  │
+    │  │   into pr-N, worktree add   │    │    │  │ unmerged / too recent? skip │  │
+    │  │ exists: fetch into          │    │    │  │ not on pr-N branch? skip    │  │
+    │  │   origin/pr-N, ff-only      │    │    │  │ dirty/untracked/active? skip│  │
+    │  │ skip: dirty or live agent    │    │    │  │ commits beyond PR head? skip│  │
+    │  │ rewritten: skip (CLI       │    │    │  │ git worktree remove         │  │
+    │  │   prompts before reset)     │    │    │  └─────────────────────────────┘  │
+    │  └─────────────────────────────┘    │    │         │ safety refusal: SKIP    │
+    │         │                           │    │         v Git/fs error: RETRY     │
+    │         v on error: RETRY           │    └───────────────────────────────────┘
     │                                      │
     │  Step 2: ensureContextInjected      │
     │  ┌─────────────────────────────┐    │     ┌──────────────────────────────────┐
@@ -102,6 +104,8 @@ Each step is **idempotent** — safe to re-run if interrupted.
 **Rewritten history.** A worktree that cannot be fast-forwarded needs `git reset --hard`, and nothing resets it unattended. The daemon and MCP never do. `zen review` and `zen review resume` prompt `[y/N]` (default no) **only when stdin is a terminal**: a piped or redirected run declines, so `yes | zen review <n>` cannot answer for you. `--json` never resets. Untracked files stay; the previous tip stays in the reflog.
 
 Two shapes reach that prompt. History **diverged** — git refuses the fast-forward outright. Or GitHub's head is an **ancestor** of the worktree: a force-push backward, or a commit made locally in the checkout. `git merge --ff-only` reports "Already up to date" for the second case without moving anything, so zen re-reads `HEAD` after the merge and treats "did not reach the target" the same as a refused fast-forward. Only a `HEAD` that actually landed on the fetched head counts as an update, which is what keeps context rewrites and “PR #N updated” notifications from repeating every poll.
+
+**Merged-review cleanup.** Every `cleanup_interval`, `ScanMergedPRs` looks up each PR review worktree on GitHub and queues the ones whose PR merged at least `cleanup_after_merge` ago (default 1h). The clock starts at GitHub's `mergedAt`, not at the worktree's last commit. Work streams and PRs closed without merging are never queued. `CleanupReconciler` checks the merge again, then `worktree.RemoveReview` refuses, and the daemon logs a skip, when the worktree has a running agent or local changes, is no longer on its `pr-N` branch, or has commits beyond the PR's last head. Zen never pushes from a review worktree to the author's branch, so a `HEAD` that is neither the PR head nor one of its ancestors holds work that exists only there. When the PR head is not in the local object store (the PR moved after the last refresh, or was squash-merged), cleanup fetches `pull/N/head` first. If it still cannot compare the two, it keeps the worktree. `git worktree remove` leaves the `pr-N` branch behind, but the next `zen review N` force-fetches over it, so this check is what keeps local commits reachable. A review left on a head the author later force-pushed away also counts as having extra commits; it stays until `zen review N` resets it or you remove it with `zen cleanup`.
 
 **Errors.** Git failures retry with exponential backoff (30s..10m, max 5 attempts). Context injection and PR cache writes are non-blocking — failures are logged but do not prevent the worktree from being created.
 

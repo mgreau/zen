@@ -257,7 +257,7 @@ func enrichPRReviews(wts []worktree.Worktree, prCache map[string]prcache.PRMeta)
 	ctx := context.Background()
 	ghClient, _ := github.NewClient(ctx)
 
-	cleanupDays := cfg.Watch.GetCleanupAfterDays()
+	cleanupAfter := cfg.Watch.CleanupAfterMergeDuration()
 	reviews := make([]StatusPRReview, 0, len(wts))
 
 	for _, wt := range wts {
@@ -277,14 +277,14 @@ func enrichPRReviews(wts []worktree.Worktree, prCache map[string]prcache.PRMeta)
 		// Remote state
 		if ghClient != nil && wt.PRNumber > 0 {
 			fullRepo := cfg.RepoFullName(wt.Repo)
-			if state, err := ghClient.GetPRState(ctx, fullRepo, wt.PRNumber); err == nil {
-				r.State = state
-				if state == "MERGED" {
-					remaining := cleanupDays - r.AgeDays
-					if remaining < 0 {
-						remaining = 0
+			if info, err := ghClient.GetPRMergeInfo(ctx, fullRepo, wt.PRNumber); err == nil {
+				r.State = info.State
+				if info.State == "MERGED" && !info.MergedAt.IsZero() {
+					// The daemon removes merged reviews cleanup_after_merge
+					// after GitHub's mergedAt; whole days, rounded down.
+					if remaining := time.Until(info.MergedAt.Add(cleanupAfter)); remaining > 0 {
+						r.CleanupIn = int(remaining.Hours() / 24)
 					}
-					r.CleanupIn = remaining
 				}
 			}
 		}

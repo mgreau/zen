@@ -69,7 +69,7 @@ func CreateFromPR(originPath, worktreePath, worktreeName string, prNumber int) e
 		return nil
 	}
 
-	branch := fmt.Sprintf("pr-%d", prNumber)
+	branch := PRBranch(prNumber)
 	fetchRef := fmt.Sprintf("+pull/%d/head:%s", prNumber, branch)
 
 	fetchCmd := exec.Command("git", "fetch", "origin", fetchRef)
