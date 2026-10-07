@@ -70,7 +70,11 @@ func TestRemove(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, wantErr: ErrWorktreeDirty, preserveAgents: true},
-		{name: "legacy codex sentinel preserves user agents and side context", prepare: func(t *testing.T, path string) {
+		{name: "legacy codex sentinel with only side context", prepare: func(t *testing.T, path string) {
+			writeRemovalFile(t, path, ".zen/PR_CONTEXT.md", "generated")
+			writeRemovalFile(t, path, ".zen/.pr_context_injected", "")
+		}},
+		{name: "legacy codex sentinel claims side context but preserves user agents", prepare: func(t *testing.T, path string) {
 			writeRemovalFile(t, path, "AGENTS.md", "user owned")
 			writeRemovalFile(t, path, ".zen/PR_CONTEXT.md", "generated")
 			writeRemovalFile(t, path, ".zen/.pr_context_injected", "")
@@ -205,6 +209,13 @@ func TestRemoveReview(t *testing.T) {
 			if _, err := agent.New(agent.Claude, "").InjectContext(path, "generated"); err != nil {
 				t.Fatal(err)
 			}
+			return ""
+		}},
+		{name: "at PR head with only legacy codex context", prepare: func(t *testing.T, _, origin, path string) string {
+			// Legacy builds excluded .zen/ and wrote an empty sentinel.
+			writeRemovalFile(t, origin, ".git/info/exclude", ".zen/\n")
+			writeRemovalFile(t, path, ".zen/PR_CONTEXT.md", "generated")
+			writeRemovalFile(t, path, ".zen/.pr_context_injected", "")
 			return ""
 		}},
 		{name: "behind a PR head that is not fetched yet", prepare: func(t *testing.T, upstream, _, _ string) string {
