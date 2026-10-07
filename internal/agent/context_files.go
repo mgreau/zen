@@ -20,7 +20,7 @@ func OwnedContextFiles(worktreePath string) []string {
 		paths = append(paths, claudeContextFile, claudeContextSentinel)
 	}
 	if sentinel := filepath.Join(worktreePath, codexSentinel); pathExists(sentinel) {
-		if owned := codexOwnedContextFile(sentinel); owned != "" {
+		if owned := codexOwnedContextFile(worktreePath, sentinel); owned != "" {
 			paths = append(paths, owned)
 		}
 		paths = append(paths, codexSentinel)
@@ -28,18 +28,27 @@ func OwnedContextFiles(worktreePath string) []string {
 	return paths
 }
 
-func codexOwnedContextFile(sentinel string) string {
-	if data, err := os.ReadFile(sentinel); err == nil {
-		switch strings.TrimSpace(string(data)) {
-		case codexContextFile:
-			return codexContextFile
-		case codexSideContextFile:
+func codexOwnedContextFile(worktreePath, sentinel string) string {
+	data, err := os.ReadFile(sentinel)
+	if err != nil {
+		return ""
+	}
+	switch strings.TrimSpace(string(data)) {
+	case codexContextFile:
+		return codexContextFile
+	case codexSideContextFile:
+		return codexSideContextFile
+	case "":
+		// Sentinels written before Zen recorded the injected path are empty,
+		// so they cannot say whether Zen or the user created AGENTS.md; leave
+		// it unclaimed so cleanup keeps it. .zen/PR_CONTEXT.md is different:
+		// it lives in Zen's own excluded .zen/ directory and is not a file
+		// users author, so claim it. Otherwise every review worktree from
+		// those builds looks dirty and is never cleaned up.
+		if pathExists(filepath.Join(worktreePath, codexSideContextFile)) {
 			return codexSideContextFile
 		}
 	}
-
-	// Empty legacy sentinels did not record which context path Zen created.
-	// Claim neither possible file so cleanup preserves both conservatively.
 	return ""
 }
 
