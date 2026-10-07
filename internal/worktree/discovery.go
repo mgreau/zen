@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/mgreau/zen/internal/config"
@@ -33,12 +34,24 @@ type Worktree struct {
 
 var prPattern = regexp.MustCompile(`-pr-(\d+)$`)
 
-// Classify determines if a worktree name represents a PR review or feature work.
-func Classify(name string) (Type, int) {
+// Classify reports whether a worktree is a PR review and, if so, for which PR.
+//
+// The directory name alone is not proof: a work stream can end in -pr-<N> too
+// (zen work new mono fix-pr-123 creates mono-fix-pr-123 on branch
+// <branch_prefix>/fix-pr-123). A review must also be checked out on the
+// PRBranch zen creates for that same PR, or on a detached HEAD. branch is the
+// checked-out branch name, empty when detached. Anything else is feature work,
+// which the daemon's merged-review cleanup never touches.
+func Classify(name, branch string, detached bool) (Type, int) {
 	m := prPattern.FindStringSubmatch(name)
-	if m != nil {
-		var pr int
-		fmt.Sscanf(m[1], "%d", &pr)
+	if m == nil {
+		return TypeFeature, 0
+	}
+	pr, err := strconv.Atoi(m[1])
+	if err != nil || pr <= 0 {
+		return TypeFeature, 0
+	}
+	if branch == PRBranch(pr) || (branch == "" && detached) {
 		return TypePRReview, pr
 	}
 	return TypeFeature, 0
@@ -106,16 +119,18 @@ func ListForRepo(cfg *config.Config, repo string) ([]Worktree, error) {
 			continue
 		}
 
-		// Extract branch from [branch] notation
+		// Extract branch from [branch] notation. A detached HEAD has none and
+		// is printed as "(detached HEAD)" instead.
 		branch := ""
 		if idx := strings.Index(line, "["); idx >= 0 {
 			if end := strings.Index(line[idx:], "]"); end >= 0 {
 				branch = line[idx+1 : idx+end]
 			}
 		}
+		detached := branch == "" && strings.Contains(line, "(detached HEAD)")
 
 		name := filepath.Base(path)
-		wtype, pr := Classify(name)
+		wtype, pr := Classify(name, branch, detached)
 
 		wt := Worktree{
 			Path:   path,

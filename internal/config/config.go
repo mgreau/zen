@@ -84,10 +84,14 @@ type WatchConfig struct {
 	DispatchInterval    string `yaml:"dispatch_interval"`     // default "10s"
 	CleanupInterval     string `yaml:"cleanup_interval"`      // default "1h"
 	SessionScanInterval string `yaml:"session_scan_interval"` // default "10s"
-	CleanupAfterDays    int    `yaml:"cleanup_after_days"`    // default 5
+	CleanupAfterMerge   string `yaml:"cleanup_after_merge"`   // default "1h"
 	Concurrency         int    `yaml:"concurrency"`           // default 2
 	MaxRetries          int    `yaml:"max_retries"`           // default 5
 	DigestInterval      string `yaml:"digest_interval"`       // "" = disabled, e.g. "2h"
+
+	// Deprecated: merged-review cleanup is gated by CleanupAfterMerge. Still
+	// parsed so existing config files load; the daemon no longer reads it.
+	CleanupAfterDays int `yaml:"cleanup_after_days,omitempty"`
 }
 
 // DispatchIntervalDuration returns the dispatch interval as a time.Duration,
@@ -112,7 +116,22 @@ func (w WatchConfig) CleanupIntervalDuration() time.Duration {
 	return 1 * time.Hour
 }
 
+// CleanupAfterMergeDuration returns how long after a PR merges (GitHub's
+// mergedAt) the daemon waits before removing its review worktree, defaulting
+// to 1 hour. Zero removes it on the next cleanup scan. An unparsable or
+// negative value falls back to the default.
+func (w WatchConfig) CleanupAfterMergeDuration() time.Duration {
+	if w.CleanupAfterMerge != "" {
+		if d, err := time.ParseDuration(w.CleanupAfterMerge); err == nil && d >= 0 {
+			return d
+		}
+	}
+	return 1 * time.Hour
+}
+
 // GetCleanupAfterDays returns CleanupAfterDays with a default of 5.
+//
+// Deprecated: merged-review cleanup uses CleanupAfterMergeDuration.
 func (w WatchConfig) GetCleanupAfterDays() int {
 	if w.CleanupAfterDays > 0 {
 		return w.CleanupAfterDays

@@ -128,11 +128,11 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		CodexBin:     "codex",
 		Terminal:     terminalChoice,
 		Watch: config.WatchConfig{
-			DispatchInterval: "10s",
-			CleanupInterval:  "1h",
-			CleanupAfterDays: 5,
-			Concurrency:      2,
-			MaxRetries:       5,
+			DispatchInterval:  "10s",
+			CleanupInterval:   "1h",
+			CleanupAfterMerge: "1h",
+			Concurrency:       2,
+			MaxRetries:        5,
 		},
 	}
 

@@ -111,7 +111,8 @@ Feature branches are prefixed by `branch_prefix` from config — see [docs/confi
 
 Every delete and cleanup path retains worktrees with local changes or a running
 agent. The delete commands' `--force` flag skips confirmation; it does not
-override those safety checks.
+override those safety checks. The daemon's merged-review cleanup also keeps a
+review worktree that has commits its PR never had.
 
 ## Where am I?
 
@@ -183,7 +184,7 @@ Session ID, model, token usage, and last activity per worktree.
 
 Two loops keep zen useful.
 
-The **automated loop** is the daemon. It polls GitHub and notifies you of new review requests. Worktrees for `authors:` are created silently, with context already injected, and existing review checkouts fast-forward when the PR head moves. Local edits and live agents are left alone; a force-push waits for `zen review`, which asks before resetting. After a successful catch-up you get a quieter “PR #N updated”. Merged worktrees are removed a few days later. The daemon never opens terminal tabs.
+The **automated loop** is the daemon. It polls GitHub and notifies you of new review requests. Worktrees for `authors:` are created silently, with context already injected, and existing review checkouts fast-forward when the PR head moves. Local edits and live agents are left alone; a force-push waits for `zen review`, which asks before resetting. After a successful catch-up you get a quieter “PR #N updated”. A review worktree is removed once its PR has been merged for `cleanup_after_merge` (1h by default); work streams never are. The daemon never opens terminal tabs.
 
 The **manual loop** is yours: check what needs your attention, open a worktree in a new tab with Claude, do the work.
 
@@ -199,10 +200,10 @@ zen watch logs search 42         # search logs for a PR, worktree, or keyword
 
 React to a Slack message with `:claudecode:` (or whatever emoji you configure) and the daemon picks it up: acks in-thread, creates a feature worktree seeded with the discussion as the initial prompt, and opens it in a terminal tab right away — unlike the PR-review flow, which only prepares worktrees silently. When that session goes idle, you get a Slack DM back with a resume command and a link to the thread. Off by default; see [docs/configuration.md](docs/configuration.md#slack-task-watcher) for setup (a Slack token with a handful of scopes, via `ZEN_SLACK_TOKEN`).
 
-Manual cleanup, in case you want it (the daemon handles merged PRs automatically, 5+ days after merge):
+Manual cleanup, in case you want it. The daemon removes merged PR reviews on its own, an hour or so after merge by default. `zen cleanup` also covers work streams, and the daemon never runs it:
 
 ```bash
-zen cleanup                      # find stale worktrees
+zen cleanup                      # find stale worktrees, work streams included
 zen cleanup --days 14            # custom age threshold
 zen cleanup --delete             # interactive deletion
 ```

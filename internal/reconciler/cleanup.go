@@ -3,7 +3,9 @@ package reconciler
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"time"
 
 	"chainguard.dev/driftlessaf/workqueue"
 	"github.com/mgreau/zen/internal/config"
@@ -11,9 +13,20 @@ import (
 	wt "github.com/mgreau/zen/internal/worktree"
 )
 
-// CleanupReconciler removes worktrees for merged PRs.
+// cleanupGitTimeout bounds the pull/N/head fetch RemoveReview may need before
+// it can compare a worktree's HEAD with the PR head.
+const cleanupGitTimeout = 2 * time.Minute
+
+// prMergeInfoFunc is the GitHub REST lookup merged-review cleanup needs.
+// Tests replace it so cleanup runs without a network.
+type prMergeInfoFunc func(ctx context.Context, fullRepo string, prNumber int) (*ghpkg.PRMergeInfo, error)
+
+// CleanupReconciler removes the review worktrees of merged PRs. Work streams
+// (feature worktrees) are never touched; `zen cleanup` is the manual command
+// that covers those.
 type CleanupReconciler struct {
-	cfg *config.Config
+	cfg         *config.Config
+	prMergeInfo prMergeInfoFunc
 }
 
 // NewCleanupReconciler creates a new CleanupReconciler.
@@ -43,12 +56,40 @@ func (r *CleanupReconciler) Reconcile(ctx context.Context, key string, _ workque
 		)
 	}
 
-	worktreeName := wt.PRName(repo, prNumber)
-	worktreePath := filepath.Join(basePath, worktreeName)
+	worktreePath := wt.PRPath(basePath, repo, prNumber)
 	originPath := filepath.Join(basePath, repo)
+	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
+		return nil // already removed
+	}
 
-	// Safety refusals are expected skips; Git and filesystem failures retry.
-	if err := wt.Remove(originPath, worktreePath); err != nil {
+	lookup, err := r.lookup(ctx)
+	if err != nil {
+		return fmt.Errorf("GitHub client: %w", err)
+	}
+	info, err := lookup(ctx, r.cfg.RepoFullName(repo), prNumber)
+	if err != nil {
+		return fmt.Errorf("fetch PR merge state: %w", err)
+	}
+
+	// The scan that queued this key may be stale, and the daemon only ever
+	// removes merged reviews: check again before touching the worktree.
+	after := r.cfg.Watch.CleanupAfterMergeDuration()
+	if info.State != "MERGED" {
+		logf("Cleanup skipped for %s: PR is %s, not merged", label, info.State)
+		return nil
+	}
+	if !mergedFor(info, after, time.Now()) {
+		logf("Cleanup skipped for %s: merged less than cleanup_after_merge (%s) ago", label, after)
+		return nil
+	}
+
+	gitCtx, cancel := context.WithTimeout(ctx, cleanupGitTimeout)
+	defer cancel()
+
+	// Safety refusals (local changes or commits, a running agent, not a review
+	// checkout, or a HEAD that cannot be compared with the PR head) are
+	// expected skips; Git and filesystem failures retry.
+	if err := wt.RemoveReview(gitCtx, originPath, worktreePath, prNumber, info.HeadSHA); err != nil {
 		if wt.RemovalBlocked(err) {
 			logf("Cleanup skipped for %s: %v", label, err)
 			return nil
@@ -60,35 +101,53 @@ func (r *CleanupReconciler) Reconcile(ctx context.Context, key string, _ workque
 	return nil
 }
 
-// ScanMergedPRs finds worktrees for merged PRs older than the given age
-// and queues them for cleanup.
-func ScanMergedPRs(ctx context.Context, cfg *config.Config, queue workqueue.Interface, cleanupAfterDays int) {
+func (r *CleanupReconciler) lookup(ctx context.Context) (prMergeInfoFunc, error) {
+	if r.prMergeInfo != nil {
+		return r.prMergeInfo, nil
+	}
+	client, err := ghpkg.NewClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return client.GetPRMergeInfo, nil
+}
+
+// mergedFor reports whether info is a merged PR whose mergedAt is at least
+// after before now.
+func mergedFor(info *ghpkg.PRMergeInfo, after time.Duration, now time.Time) bool {
+	return info != nil && info.State == "MERGED" && !info.MergedAt.IsZero() && now.Sub(info.MergedAt) >= after
+}
+
+// ScanMergedPRs queues cleanup for PR review worktrees whose PR merged at
+// least cleanupAfterMerge ago, by GitHub's mergedAt. Closed-unmerged PRs and
+// work streams are left alone.
+func ScanMergedPRs(ctx context.Context, cfg *config.Config, queue workqueue.Interface, cleanupAfterMerge time.Duration) {
+	ghClient, err := ghpkg.NewClient(ctx)
+	if err != nil {
+		logf("Error creating GitHub client for cleanup scan: %v", err)
+		return
+	}
+	scanMergedPRs(ctx, cfg, queue, ghClient.GetPRMergeInfo, cleanupAfterMerge, time.Now())
+}
+
+func scanMergedPRs(ctx context.Context, cfg *config.Config, queue workqueue.Interface, lookup prMergeInfoFunc, cleanupAfterMerge time.Duration, now time.Time) {
 	wts, err := wt.ListAll(cfg)
 	if err != nil {
 		logf("Error listing worktrees for cleanup scan: %v", err)
 		return
 	}
 
-	ghClient, err := ghpkg.NewClient(ctx)
-	if err != nil {
-		logf("Error creating GitHub client for cleanup scan: %v", err)
-		return
-	}
-
 	for _, w := range wts {
-		if w.Type != wt.TypePRReview || w.PRNumber == 0 {
+		// Only PR reviews (see worktree.Classify), and only at the path
+		// Reconcile removes for that PR.
+		if w.Type != wt.TypePRReview || w.PRNumber == 0 || w.Name != wt.PRName(w.Repo, w.PRNumber) {
 			continue
 		}
-		fullRepo := cfg.RepoFullName(w.Repo)
-		state, err := ghClient.GetPRState(ctx, fullRepo, w.PRNumber)
+		info, err := lookup(ctx, cfg.RepoFullName(w.Repo), w.PRNumber)
 		if err != nil {
 			continue // skip on API error, try next cycle
 		}
-		if state != "MERGED" {
-			continue
-		}
-		age, err := wt.AgeDays(w.Path)
-		if err != nil || age < cleanupAfterDays {
+		if !mergedFor(info, cleanupAfterMerge, now) {
 			continue
 		}
 		key := MakePRKey(w.Repo, w.PRNumber)

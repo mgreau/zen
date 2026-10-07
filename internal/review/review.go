@@ -78,7 +78,7 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 	log(fmt.Sprintf("PR #%d: %s (by %s)", prNumber, details.Title, details.Author))
 
 	// Create worktree under lock
-	branchName := fmt.Sprintf("pr-%d", prNumber)
+	branchName := wt.PRBranch(prNumber)
 
 	wt.GitMu.Lock()
 
