@@ -89,9 +89,6 @@ func ListForRepo(cfg *config.Config, repo string) ([]Worktree, error) {
 		return nil, nil
 	}
 
-	// Clean stale locks before git operations
-	CleanStaleLocks(cfg, repo)
-
 	cmd := exec.Command("git", "worktree", "list")
 	cmd.Dir = originPath
 	out, err := cmd.Output()
