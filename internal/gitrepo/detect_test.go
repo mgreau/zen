@@ -164,7 +164,7 @@ func TestDetectErrors(t *testing.T) {
 			t.Fatal(err)
 		}
 		initRepo(t, clone, map[string]string{"origin": "git@github.com:mgreau/zen.git"})
-		run(t, clone, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "init")
+		run(t, clone, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-q", "-m", "init")
 		wtPath := filepath.Join(base, "zen-pr-1")
 		run(t, clone, "worktree", "add", "-q", wtPath)
 
