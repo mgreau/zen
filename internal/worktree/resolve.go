@@ -35,14 +35,37 @@ func OriginPath(cfg *config.Config, repo string) string {
 // under the configured layout. It says nothing about what exists on disk;
 // use Resolve to find a worktree that may already have been created.
 func NewPath(cfg *config.Config, repo, name string) string {
+	return layoutPath(cfg, repo, name, cfg.WorktreeLayoutFor(repo))
+}
+
+// layoutPath is where a worktree named name sits for repo under layout,
+// spelled from base_path as configured. Empty when the repo is not
+// configured.
+func layoutPath(cfg *config.Config, repo, name, layout string) string {
 	basePath := cfg.RepoBasePath(repo)
 	if basePath == "" {
 		return ""
 	}
-	if cfg.WorktreeLayoutFor(repo) == config.LayoutNested {
+	if layout == config.LayoutNested {
 		return filepath.Join(basePath, repo, NestedDir, name)
 	}
 	return filepath.Join(basePath, name)
+}
+
+// configuredSpellings lists every path a worktree named name could have
+// under base_path as configured: the current layout first, then the other.
+// A worktree created under the other layout has not moved when the setting
+// changes, so its configured spelling has to stay recognisable too.
+func configuredSpellings(cfg *config.Config, repo, name string) []string {
+	current := cfg.WorktreeLayoutFor(repo)
+	other := config.LayoutNested
+	if current == config.LayoutNested {
+		other = config.LayoutSibling
+	}
+	return []string{
+		layoutPath(cfg, repo, name, current),
+		layoutPath(cfg, repo, name, other),
+	}
 }
 
 // Resolve returns the on-disk path of the worktree named name in repo.
@@ -61,11 +84,11 @@ func NewPath(cfg *config.Config, repo, name string) string {
 // switching reversible in both directions, which is what lets existing
 // worktrees drain on their own rather than needing to be migrated.
 func Resolve(cfg *config.Config, repo, name string) string {
-	newPath := NewPath(cfg, repo, name)
-	if p := registeredPath(OriginPath(cfg, repo), name, newPath); p != "" {
+	spellings := configuredSpellings(cfg, repo, name)
+	if p := registeredPath(OriginPath(cfg, repo), name, spellings...); p != "" {
 		return p
 	}
-	return newPath
+	return spellings[0]
 }
 
 // samePath reports whether two paths name the same location, following
@@ -101,12 +124,14 @@ func samePath(a, b string) bool {
 // is gone -- are skipped, so a stale entry from the old layout cannot pin a
 // new worktree to it.
 //
-// When a registration is the same location as prefer, prefer is returned
-// rather than git's spelling of it. Callers use this path as a map key for
-// agent sessions (Claude encodes the worktree path into a directory name),
-// so handing back a different string for an unchanged worktree would orphan
-// its history.
-func registeredPath(originPath, name, prefer string) string {
+// When a registration is the same location as one of prefer, that entry is
+// returned rather than git's spelling of it. Callers use this path as a map
+// key for agent sessions (Claude encodes the worktree path into a directory
+// name), so handing back a different string for an unchanged worktree would
+// orphan its history. Resolve passes the configured spelling under both
+// layouts, so switching worktree_layout does not respell a worktree reached
+// through a symlinked base_path.
+func registeredPath(originPath, name string, prefer ...string) string {
 	if originPath == "" {
 		return ""
 	}
@@ -147,8 +172,10 @@ func registeredPath(originPath, name, prefer string) string {
 	flush()
 
 	for _, m := range matches {
-		if samePath(m, prefer) {
-			return prefer
+		for _, p := range prefer {
+			if samePath(m, p) {
+				return p
+			}
 		}
 	}
 	if len(matches) > 0 {

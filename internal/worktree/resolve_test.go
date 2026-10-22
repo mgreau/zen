@@ -290,7 +290,59 @@ func TestSamePathFollowsSymlinks(t *testing.T) {
 
 // registeredPath must not blow up when the directory is not a git repo.
 func TestRegisteredPathNonRepo(t *testing.T) {
-	if got := registeredPath(t.TempDir(), "anything", ""); got != "" {
+	if got := registeredPath(t.TempDir(), "anything"); got != "" {
 		t.Errorf("registeredPath() in a non-repo = %q, want empty", got)
+	}
+}
+
+// aliasedRepo is testRepo reached through a symlink: base_path names the
+// alias, while git records the resolved directory. It returns the clone's
+// resolved path and the alias that stands in for its parent.
+func aliasedRepo(t *testing.T) (repoPath, alias string) {
+	t.Helper()
+	repoPath = testRepo(t)
+	alias = filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(filepath.Dir(repoPath), alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	return repoPath, alias
+}
+
+// Switching worktree_layout must not respell a worktree that has not moved.
+// Callers key agent sessions on the returned string, so a base_path reached
+// through a symlink has to come back as the user wrote it under either
+// layout, not only the one that created the worktree -- otherwise the very
+// switch the layout setting promises to support orphans session history.
+func TestResolveKeepsConfiguredSpellingAcrossLayoutSwitch(t *testing.T) {
+	tests := []struct {
+		name  string
+		from  string
+		to    string
+		place func(alias string) string // where the worktree is, spelled via the alias
+	}{
+		{
+			name: "sibling worktree, switched to nested",
+			from: config.LayoutSibling, to: config.LayoutNested,
+			place: func(alias string) string { return filepath.Join(alias, "origin-pr-42") },
+		},
+		{
+			name: "nested worktree, switched to sibling",
+			from: config.LayoutNested, to: config.LayoutSibling,
+			place: func(alias string) string { return filepath.Join(alias, "origin", NestedDir, "origin-pr-42") },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repoPath, alias := aliasedRepo(t)
+			want := tt.place(alias)
+			gitIn(t, repoPath, "worktree", "add", "-b", "pr-42", want)
+
+			if got := Resolve(layoutCfg(alias, tt.from, ""), "origin", "origin-pr-42"); got != want {
+				t.Fatalf("before the switch: Resolve() = %q, want %q", got, want)
+			}
+			if got := Resolve(layoutCfg(alias, tt.to, ""), "origin", "origin-pr-42"); got != want {
+				t.Errorf("after the switch: Resolve() = %q, want the configured spelling %q", got, want)
+			}
+		})
 	}
 }
