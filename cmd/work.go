@@ -134,10 +134,10 @@ func runWork(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// validateWorkBranch rejects names that would not map to one sibling
-// worktree directory. The directory is "<repo>-<branch>", so a "/" would
-// create a nested directory that discovery then lists under its last path
-// element.
+// validateWorkBranch rejects names that would not map to one worktree
+// directory. The directory is "<repo>-<branch>" under either
+// worktree_layout, so a "/" would create a nested directory that discovery
+// then lists under its last path element.
 func validateWorkBranch(branch string) error {
 	if branch == "" || strings.HasPrefix(branch, "-") || strings.Contains(branch, "/") || strings.ContainsFunc(branch, unicode.IsSpace) {
 		return fmt.Errorf("invalid branch name %q: use a single path segment without \"/\", whitespace, or a leading \"-\"", branch)
