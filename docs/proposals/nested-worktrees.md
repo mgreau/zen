@@ -52,7 +52,7 @@ already layout-agnostic. Creation is centralised too —
 `worktree.CreateFromMain` and `worktree.CreateFromPR`
 (`internal/worktree/create.go`) are the only callers of `git worktree add`.
 
-What is *not* centralised is path computation. Six call sites build a
+What is *not* centralised is path computation. Seven call sites build a
 worktree path by string concatenation and assume the sibling layout:
 
 | Site | Purpose |
@@ -63,13 +63,14 @@ worktree path by string concatenation and assume the sibling layout:
 | `internal/reconciler/setup.go:84` | daemon create |
 | `internal/reconciler/cleanup.go:49` | daemon remove |
 | `internal/reconciler/slack.go:155` | Slack thread worktree create |
+| `cmd/watch.go` (`pollOnce`) | existence and HEAD check that decides create vs. refresh |
 
 `originPath := filepath.Join(basePath, repo)` is unaffected everywhere it
 appears — the clone does not move, only the worktrees do.
 
 ### The failure this creates, and the seam that prevents it
 
-Changing those six sites to build a nested path is not sufficient, and doing
+Changing those seven sites to build a nested path is not sufficient, and doing
 only that is actively harmful. An existing sibling worktree stays registered
 with git, so `git worktree list` keeps returning it and `zen status` keeps
 showing it — while every writer now computes a path that does not exist.
@@ -97,7 +98,7 @@ func Resolve(cfg *config.Config, repo, name string) string
 ```
 
 `Resolve` consults the registered worktrees first and falls back to the
-configured layout only when nothing is registered. Every one of the six
+configured layout only when nothing is registered. Every one of the seven
 sites goes through it. Mixed layouts then work by construction, in both
 directions, which is what makes the config key safe and the change
 reversible.
@@ -110,9 +111,12 @@ builds its own from `base_path` as the user wrote it — a symlink anywhere
 above the repo would otherwise make `Resolve` fail to match a worktree that
 is in fact the one it is looking for, or mistake the main worktree for a
 linked one. When a registration names the same location as the configured
-path, the configured spelling is what comes back: callers use this string as
-an agent-session key, so returning git's spelling for an unchanged worktree
-would orphan its history.
+path under *either* layout, that configured spelling is what comes back:
+callers use this string as an agent-session key, so returning git's spelling
+for an unchanged worktree would orphan its history. Checking only the current
+layout is not enough — a sibling worktree reached through a symlinked
+`base_path` would come back respelled the moment the setting switched to
+`nested`, which is the transition this change exists to support.
 
 ## Verified behaviour
 
@@ -241,7 +245,7 @@ Shipped together in this PR, since the seam is most of it and the config key
 is inert without it:
 
 1. **The seam.** `worktree.Resolve` / `NewPath` / `OriginPath`
-   (`internal/worktree/resolve.go`), with all six sites routed through it.
+   (`internal/worktree/resolve.go`), with all seven sites routed through it.
    The test that matters is `TestResolveFindsSiblingUnderNestedLayout`: with
    `worktree_layout: nested` configured and a sibling worktree on disk,
    `Resolve` still returns the sibling. Its mirror,
