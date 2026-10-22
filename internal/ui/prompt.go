@@ -84,11 +84,13 @@ func ConfirmYesDefault(prompt string) bool {
 	}
 	fmt.Fprint(promptOut, prompt)
 	line, err := promptInput().ReadString('\n')
-	if err != nil && line == "" {
-		// EOF with nothing typed, or a broken stdin: nobody answered.
+	answer := strings.ToLower(strings.TrimSpace(line))
+	if err != nil && answer == "" {
+		// EOF with nothing (or only whitespace) typed, or a broken stdin:
+		// no line was submitted, so nobody answered.
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(line)) {
+	switch answer {
 	case "", "y", "yes":
 		return true
 	default:

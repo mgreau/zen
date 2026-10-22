@@ -196,6 +196,9 @@ func TestConfirmYesDefault_interactiveAnswers(t *testing.T) {
 		// and gets an immediate EOF. That is nobody answering, not the
 		// Enter keypress above, and must not register the repo.
 		{"immediate EOF is not a bare Enter", "", false},
+		// Whitespace then EOF trims to the same "" as a bare Enter, but no
+		// line was submitted, so it is still nobody answering.
+		{"whitespace then EOF is not a bare Enter", "  \t", false},
 	}
 	for _, tt := range tests {
 		setPromptIO(t, true, tt.input)
