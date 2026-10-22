@@ -130,3 +130,26 @@ func TestParseBranchFromName(t *testing.T) {
 		})
 	}
 }
+
+// Git lists the main worktree by its resolved path, while zen spells the
+// clone from base_path as configured. When base_path goes through a symlink
+// the two differ, and a plain string comparison let the clone itself through
+// as a work stream: `zen work` listed it, and `zen cleanup` offered it for
+// deletion once its last commit was older than --days.
+func TestListForRepoSkipsMainWorktreeThroughSymlink(t *testing.T) {
+	repoPath, alias := aliasedRepo(t)
+	gitIn(t, repoPath, "worktree", "add", "-b", "pr-42", filepath.Join(alias, "origin-pr-42"))
+
+	wts, err := ListForRepo(layoutCfg(alias, "", ""), "origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wts) != 1 || wts[0].Name != "origin-pr-42" {
+		t.Fatalf("ListForRepo() = %+v, want only origin-pr-42", wts)
+	}
+	for _, w := range wts {
+		if samePath(w.Path, repoPath) {
+			t.Errorf("ListForRepo() listed the main clone %q as a worktree", w.Path)
+		}
+	}
+}

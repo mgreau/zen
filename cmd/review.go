@@ -86,7 +86,7 @@ func runReview(cmd *cobra.Command, args []string) error {
 	basePath := cfg.RepoBasePath(reviewRepo)
 	if basePath != "" {
 		worktreeName := wt.PRName(reviewRepo, prNumber)
-		worktreePath := filepath.Join(basePath, worktreeName)
+		worktreePath := wt.Resolve(cfg, reviewRepo, worktreeName)
 		if _, err := os.Stat(worktreePath); err == nil {
 			ag, aerr := resolveAgent()
 			if aerr != nil {

@@ -87,7 +87,7 @@ func (r *SetupReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 	label := fmt.Sprintf("%s PR #%d %q", repo, prNumber, pr.Title)
 
 	worktreeName := wt.PRName(repo, prNumber)
-	worktreePath := filepath.Join(basePath, worktreeName)
+	worktreePath := wt.Resolve(r.cfg, repo, worktreeName)
 	originPath := filepath.Join(basePath, repo)
 	fullRepo := r.cfg.RepoFullName(repo)
 
@@ -158,7 +158,9 @@ func (r *SetupReconciler) ensureWorktree(ctx context.Context, originPath, worktr
 			logf("%s", msg)
 		}, nil)
 	}
-	if err := wt.CreateFromPR(originPath, worktreePath, worktreeName, prNumber); err != nil {
+	// No per-command timeout: the daemon's workqueue already bounds and
+	// retries a stuck reconcile, and ctx carries its cancellation.
+	if err := wt.CreateFromPR(ctx, originPath, worktreePath, worktreeName, prNumber, 0, nil); err != nil {
 		return review.SyncMissing, err
 	}
 	return review.SyncUpdated, nil

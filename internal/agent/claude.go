@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/mgreau/zen/internal/gitignore"
 	"github.com/mgreau/zen/internal/session"
 )
 
@@ -54,7 +55,7 @@ func (a *claudeAgent) InjectContext(worktreePath, rendered string) (string, erro
 		_ = os.Remove(sentinel)
 		return "", fmt.Errorf("writing %s: %w", outPath, err)
 	}
-	addToGitExclude(worktreePath, ".zen/")
+	gitignore.EnsureExcluded(worktreePath, ".zen/")
 	return ref, nil
 }
 

@@ -114,8 +114,9 @@ func ListForRepo(cfg *config.Config, repo string) ([]Worktree, error) {
 		}
 		path := parts[0]
 
-		// Skip the main worktree
-		if path == originPath {
+		// Skip the main worktree. Git prints it resolved; originPath is
+		// spelled from base_path, which may go through a symlink.
+		if samePath(path, originPath) {
 			continue
 		}
 
