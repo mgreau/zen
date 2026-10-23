@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mgreau/zen/internal/config"
 	"github.com/mgreau/zen/internal/github"
 	"github.com/mgreau/zen/internal/review"
 	"github.com/mgreau/zen/internal/terminal"
@@ -55,6 +56,7 @@ func init() {
 	reviewCmd.Flags().BoolVar(&reviewNoITerm, "no-terminal", false, "Create worktree only, don't open terminal tab")
 	reviewCmd.Flags().StringVarP(&reviewModel, "model", "m", "", "Model to use (agent-specific, e.g. opus or gpt-5-codex)")
 	addAgentFlag(reviewCmd)
+	addStackFlag(reviewCmd)
 	addResumeFlags(reviewResumeCmd)
 	reviewDeleteCmd.Flags().BoolVarP(&reviewDeleteForce, "force", "f", false, "Skip confirmation")
 	reviewCmd.AddCommand(reviewResumeCmd)
@@ -115,6 +117,10 @@ func runReview(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	stack, err := resolveStack(config.ReviewStack, reviewRepo)
+	if err != nil {
+		return err
+	}
 
 	// Create worktree using shared logic
 	result, err := review.CreateWorktree(ctx, cfg, ag, reviewRepo, prNumber, ui.LogInfo, confirmResetWorktree)
@@ -142,7 +148,8 @@ func runReview(cmd *cobra.Command, args []string) error {
 	// Ensure the /review-pr prompt is installed for the chosen agent
 	ensureReviewPrompt(ag)
 
-	launchCmd := ag.StartCommand(ag.ReviewPrompt(result.WorktreePath), reviewModel)
+	printStack(stack)
+	launchCmd := stack.Apply(ag, result.WorktreePath).StartCommand(ag.ReviewPrompt(result.WorktreePath), reviewModel)
 
 	if reviewNoITerm {
 		fmt.Println()
