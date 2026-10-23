@@ -134,6 +134,66 @@ Note that the background daemon always uses the **configured** agent: if you run
 
 `zen review resume`/`zen work resume` can carry a session across agents: when the selected agent has no session for the worktree but the other agent does, zen offers to migrate the most recent one and resume it (pass `--migrate` to skip the prompt). Claude → Codex goes through Codex's own importer via `codex app-server` (with its limits: last 30 days, ~50 most recent sessions); Codex → Claude is a zen-side translation of the rollout into a Claude session file (shell calls become `Bash` tool history, other tool calls become annotated text, encrypted reasoning is dropped, and files are capped below Claude's 5 MB resume threshold). Migration formats were verified against Claude Code 2.1.200 and Codex CLI 0.142.0; both agents' session formats are undocumented internals, so a future agent update can require adjustments. Deep dive: [session-migration.md](session-migration.md).
 
+## Agent stacks
+
+An agent stack is an executable launcher that brings its own harness and plugins and passes every argument through to the harness. zen can start and resume each session through a stack instead of running `claude` or `codex` directly. The output of [agent-pkgs](https://github.com/agent-stacks/agent-pkgs)' `mkAgentStack` (`result/bin/<name>`) is one; any executable that forwards its arguments works.
+
+```yaml
+stack: ~/stacks/default/bin/work                 # all sessions
+review_stack: ~/stacks/review/bin/zen-review     # PR reviews only
+
+repos:
+  app:
+    full_name: octo-sts/app
+    base_path: ~/git/repo-octo-sts-app
+    stack: app-work                              # a bare name is looked up on PATH
+    review_stack: ~/stacks/app-review/bin/review
+```
+
+`stack` and `review_stack` each take a path to an executable (a leading `~` is expanded) or a bare name looked up on `PATH`. They are valid at the top level and under each `repos.<name>` entry. `zen review`, `zen review resume`, `zen work new` and `zen work resume` also take `--stack <value>`, which beats every config key:
+
+```bash
+zen review 42 --stack ~/stacks/review/bin/zen-review
+zen work new app my-feature --stack app-work
+```
+
+The first value set wins, highest first:
+
+| Session | Precedence |
+|---------|------------|
+| PR review | `--stack`, `repos.<name>.review_stack`, `repos.<name>.stack`, `review_stack`, `stack` |
+| Feature work (including Slack tasks) | `--stack`, `repos.<name>.stack`, `stack` |
+
+With nothing set, zen launches `claude_bin` / `codex_bin` exactly as before. When a stack is used, `zen review` and `zen work` print a `Stack: <value>` line. A value that does not exist, is not executable, or is not on `PATH` fails the command before any worktree or terminal tab is created, naming the value and the flag or key it came from.
+
+The model, prompt and `--resume <id>` arguments reach the stack unchanged. The stack runs in place of the agent binary, so the harness behind it must match `agent:`. zen builds the command in the configured agent's syntax and discovers sessions, token usage and the context file per agent, so a Claude Code stack under `agent: codex` gets Codex flags and resume never finds its sessions.
+
+A stack stages its plugins in `./.agent-stacks/` in the current directory by default, which would land inside the worktree and make zen refuse to remove it. zen therefore exports `AGENT_STACKS_DIR=<zen home>/stacks/<worktree directory name>` (`~/.zen/stacks/` unless `ZEN_HOME` is set) so staging happens outside the worktree. zen deletes that directory when it removes the worktree, and a failure to delete it never fails the removal.
+
+`claude_bin` and `codex_bin` keep their meaning: zen still uses them for everything that is not launching a session, such as session migration through `codex app-server`.
+
+### Example: a Nix stack
+
+```nix
+{
+  inputs.agent-pkgs.url = "github:agent-stacks/agent-pkgs";
+
+  outputs = { self, agent-pkgs }:
+    let
+      system = "aarch64-darwin";
+      pkgs = agent-pkgs.packages.${system};
+    in {
+      packages.${system}.default = agent-pkgs.lib.${system}.mkAgentStack {
+        name = "zen-review";
+        harness = pkgs.claude-code;
+        plugins = [ pkgs.agent-plugin-github ];
+      };
+    };
+}
+```
+
+Build it with `nix build` and point zen at `result/bin/zen-review` (or a path under `/nix/store`).
+
 ## Terminal
 
 `terminal: iterm` (default), `terminal: ghostty`, `terminal: kitty`, or `terminal: macos`.

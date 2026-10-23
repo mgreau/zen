@@ -141,6 +141,13 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 		)
 	}
 
+	// Checked before anything is created so a bad stack leaves no worktree. The
+	// error is retriable: the daemon hot-reloads config, so a fix is picked up.
+	stack, err := r.cfg.ResolveStack(config.WorkStack, repo, "")
+	if err != nil {
+		return fmt.Errorf("resolving stack: %w", err)
+	}
+
 	messages, err := r.client.ConversationsReplies(ctx, channelID, messageTS)
 	if err != nil {
 		return fmt.Errorf("fetching thread: %w", err)
@@ -167,7 +174,7 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 		}
 	}
 
-	ag := r.cfg.NewAgent("")
+	ag := stack.Apply(r.cfg.NewAgent(""), worktreePath)
 	launchCmd := ag.StartCommand(renderSlackPrompt(permalink, messages), "")
 	term, err := terminal.NewTerminal(r.cfg.GetTerminal())
 	if err != nil {

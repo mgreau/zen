@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/mgreau/zen/internal/agent"
+	"github.com/mgreau/zen/internal/config"
 )
 
 var (
@@ -75,6 +76,7 @@ func remove(originPath, worktreePath string, runningIn func(string) bool, verify
 
 	if _, err := os.Stat(worktreePath); err != nil {
 		if os.IsNotExist(err) {
+			removeStacksDir(worktreePath)
 			return nil
 		}
 		return fmt.Errorf("inspect worktree: %w", err)
@@ -117,7 +119,23 @@ func remove(originPath, worktreePath string, runningIn func(string) bool, verify
 		}
 		return fmt.Errorf("git worktree remove: %w: %s", err, strings.TrimSpace(string(out)))
 	}
+	removeStacksDir(worktreePath)
 	return nil
+}
+
+// removeAll is os.RemoveAll, replaced in tests to force a cleanup failure.
+var removeAll = os.RemoveAll
+
+// removeStacksDir deletes the directory an agent stack staged plugins into
+// for worktreePath (see config.StacksDir). It is best effort: the worktree is
+// already gone, so a failure here must not fail the removal.
+func removeStacksDir(worktreePath string) {
+	switch filepath.Base(worktreePath) {
+	case ".", string(filepath.Separator):
+		// Base of an empty or root path would name the whole stacks directory.
+		return
+	}
+	_ = removeAll(config.StacksDir(worktreePath))
 }
 
 func removalDirty(worktreePath string, owned map[string]struct{}) (bool, error) {

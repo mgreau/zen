@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/mgreau/zen/internal/agent"
+	"github.com/mgreau/zen/internal/config"
 )
 
 func removalFixture(t *testing.T) (string, string) {
@@ -304,5 +305,105 @@ func runRemovalGit(t *testing.T, directory string, args ...string) {
 	cmd.Dir = directory
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+}
+
+// stagedStacksDir creates the directory a stack would stage plugins into for
+// path, under a ZEN_HOME private to the test, and returns it.
+func stagedStacksDir(t *testing.T, path string) string {
+	t.Helper()
+	t.Setenv("ZEN_HOME", t.TempDir())
+	dir := config.StacksDir(path)
+	writeRemovalFile(t, dir, "plugins/github/plugin.json", "{}")
+	return dir
+}
+
+func TestRemoveDeletesStacksDir(t *testing.T) {
+	tests := []struct {
+		name   string
+		remove func(origin, path string) error
+	}{
+		{"Remove", func(origin, path string) error {
+			return remove(origin, path, func(string) bool { return false }, nil)
+		}},
+		{"with verify hook (RemoveReview path)", func(origin, path string) error {
+			return remove(origin, path, func(string) bool { return false }, func() error { return nil })
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			origin, path := removalFixture(t)
+			dir := stagedStacksDir(t, path)
+			sibling := filepath.Join(filepath.Dir(dir), "other-worktree")
+			writeRemovalFile(t, sibling, "keep", "x")
+
+			if err := test.remove(origin, path); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Errorf("stacks dir %s survived removal (stat err = %v)", dir, err)
+			}
+			if _, err := os.Stat(filepath.Join(sibling, "keep")); err != nil {
+				t.Errorf("another worktree's stacks dir was touched: %v", err)
+			}
+		})
+	}
+}
+
+func TestRemoveMissingWorktreeStillDeletesStacksDir(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gone-worktree")
+	dir := stagedStacksDir(t, path)
+	if err := Remove(t.TempDir(), path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("stacks dir %s survived (stat err = %v)", dir, err)
+	}
+}
+
+func TestRemoveKeepsStacksDirWhenRemovalRefused(t *testing.T) {
+	origin, path := removalFixture(t)
+	dir := stagedStacksDir(t, path)
+	writeRemovalFile(t, path, "notes.txt", "keep me")
+
+	if err := remove(origin, path, func(string) bool { return false }, nil); !errors.Is(err, ErrWorktreeDirty) {
+		t.Fatalf("Remove() error = %v, want %v", err, ErrWorktreeDirty)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("refused removal deleted the stacks dir: %v", err)
+	}
+}
+
+func TestRemoveStacksDirFailureDoesNotFailRemoval(t *testing.T) {
+	origin, path := removalFixture(t)
+	stagedStacksDir(t, path)
+	old := removeAll
+	t.Cleanup(func() { removeAll = old })
+	called := false
+	removeAll = func(string) error {
+		called = true
+		return errors.New("permission denied")
+	}
+
+	if err := remove(origin, path, func(string) bool { return false }, nil); err != nil {
+		t.Fatalf("Remove() = %v, want nil despite stacks cleanup failure", err)
+	}
+	if !called {
+		t.Fatal("stacks cleanup was never attempted")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("worktree still present")
+	}
+}
+
+func TestRemoveStacksDirNeverDeletesWholeStacksRoot(t *testing.T) {
+	zen := t.TempDir()
+	t.Setenv("ZEN_HOME", zen)
+	writeRemovalFile(t, filepath.Join(zen, "stacks"), "app-pr-1/keep", "x")
+	for _, path := range []string{"", ".", "/"} {
+		removeStacksDir(path)
+	}
+	if _, err := os.Stat(filepath.Join(zen, "stacks", "app-pr-1", "keep")); err != nil {
+		t.Fatalf("degenerate worktree path wiped the stacks root: %v", err)
 	}
 }

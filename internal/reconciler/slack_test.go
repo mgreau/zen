@@ -2,7 +2,9 @@ package reconciler
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"chainguard.dev/driftlessaf/workqueue"
@@ -205,6 +207,28 @@ func TestSlackReconcile_UnknownRepo(t *testing.T) {
 	}
 	if workqueue.GetNonRetriableDetails(err) == nil {
 		t.Error("expected NonRetriableError for unknown repo")
+	}
+}
+
+func TestSlackReconcile_BadStackFailsBeforeCreatingWorktree(t *testing.T) {
+	base := t.TempDir()
+	cfg := &config.Config{
+		Repos: map[string]config.RepoConfig{
+			"mono": {FullName: "chainguard-dev/mono", BasePath: base, Stack: filepath.Join(base, "missing-stack")},
+		},
+		Slack: config.SlackConfig{DefaultRepo: "mono"},
+	}
+	rec := NewSlackReconciler(cfg, &fakeSlackAPI{}, "U1")
+
+	err := rec.Reconcile(context.Background(), "C1:1700000000.1", workqueue.Options{})
+	if err == nil || !strings.Contains(err.Error(), "repos.mono.stack") {
+		t.Fatalf("Reconcile() error = %v, want one naming repos.mono.stack", err)
+	}
+	if workqueue.GetNonRetriableDetails(err) != nil {
+		t.Error("a bad stack should be retriable: a config fix is hot-reloaded")
+	}
+	if entries, _ := os.ReadDir(base); len(entries) != 0 {
+		t.Errorf("worktree directory created despite bad stack: %v", entries)
 	}
 }
 

@@ -27,7 +27,8 @@ import (
 // To attribute sessions to a worktree we read each rollout's session_meta line
 // and match its recorded cwd.
 type codexAgent struct {
-	bin string
+	bin   string
+	stack *Stack
 }
 
 // cwdCache caches rollout file path → recorded cwd. It is package-level (not
@@ -39,8 +40,14 @@ var cwdCache sync.Map
 func (a *codexAgent) Kind() Kind  { return Codex }
 func (a *codexAgent) Bin() string { return a.bin }
 
+func (a *codexAgent) WithStack(st *Stack) Agent {
+	c := *a
+	c.stack = st
+	return &c
+}
+
 func (a *codexAgent) StartCommand(prompt, model string) string {
-	cmd := a.bin
+	cmd := a.stack.launchPrefix(a.bin)
 	if model != "" {
 		cmd += " -m " + shellQuote(model)
 	}
@@ -53,7 +60,7 @@ func (a *codexAgent) StartCommand(prompt, model string) string {
 // ResumeCommand resumes a recorded session by UUID. Codex restores the model
 // from the session itself; an explicit --model override is forwarded via -m.
 func (a *codexAgent) ResumeCommand(sessionID, model string) string {
-	cmd := fmt.Sprintf("%s resume %s", a.bin, shellQuote(sessionID))
+	cmd := fmt.Sprintf("%s resume %s", a.stack.launchPrefix(a.bin), shellQuote(sessionID))
 	if model != "" {
 		cmd += " -m " + shellQuote(model)
 	}

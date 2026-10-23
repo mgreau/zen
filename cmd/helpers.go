@@ -6,7 +6,9 @@ import (
 	"os"
 
 	"github.com/mgreau/zen/internal/agent"
+	"github.com/mgreau/zen/internal/config"
 	"github.com/mgreau/zen/internal/ui"
+	"github.com/mgreau/zen/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
@@ -31,6 +33,37 @@ func resolveAgent() (agent.Agent, error) {
 		return nil, fmt.Errorf("invalid agent %q: must be \"claude\" or \"codex\"", kind)
 	}
 	return cfg.NewAgent(agentFlag), nil
+}
+
+// stackFlag is the optional --stack override shared by commands that launch an
+// agent. It beats every stack key in config.
+var stackFlag string
+
+// addStackFlag registers the shared --stack flag on a command.
+func addStackFlag(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&stackFlag, "stack", "", "Agent stack to launch the session through: a path or a name on PATH (overrides config)")
+}
+
+// resolveStack picks and validates the agent stack for a session in repo, or
+// returns nil when none is configured. Call it before creating a terminal tab
+// so a bad value fails the command first.
+func resolveStack(mode config.StackMode, repo string) (*config.StackRef, error) {
+	return cfg.ResolveStack(mode, repo, stackFlag)
+}
+
+// stackModeFor maps a worktree kind to the stack keys that apply to it.
+func stackModeFor(t worktree.Type) config.StackMode {
+	if t == worktree.TypePRReview {
+		return config.ReviewStack
+	}
+	return config.WorkStack
+}
+
+// printStack reports the stack a session launches through, if any.
+func printStack(ref *config.StackRef) {
+	if ref != nil {
+		fmt.Printf("Stack: %s\n", ui.CyanText(ref.Value))
+	}
 }
 
 // hasAgentSession reports whether the agent has any session for the worktree.

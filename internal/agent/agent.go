@@ -40,6 +40,11 @@ type Agent interface {
 	Kind() Kind
 	// Bin returns the resolved executable name/path.
 	Bin() string
+	// WithStack returns a copy of the agent whose StartCommand and
+	// ResumeCommand launch through st. Bin and every other use of the agent
+	// binary are unchanged. A nil st returns an agent that launches the
+	// binary directly.
+	WithStack(st *Stack) Agent
 
 	// StartCommand builds the shell command to launch the agent with an
 	// optional initial prompt and model. An empty prompt or model is omitted.
