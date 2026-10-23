@@ -26,7 +26,7 @@ For every PR in your review queue and every feature you're working on, zen creat
 
 ```bash
 git clone https://github.com/mgreau/zen.git && cd zen
-flox activate                     # Go 1.25, git, gh, make — or install those yourself
+flox activate                     # Go 1.26, git, gh, make — or install those yourself
 make build && mv zen ~/bin/       # or anywhere on your PATH
 
 gh auth login
@@ -286,7 +286,7 @@ zen context inject <path> --pr 42 --repo app
 ## Building
 
 ```
-flox activate    # optional: pinned Go 1.25.7, git, gh, make
+flox activate    # optional: pinned Go 1.26.4, git, gh, make
 make build
 ```
 
