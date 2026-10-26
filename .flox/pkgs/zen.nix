@@ -1,16 +1,16 @@
 {
   buildGoModule,
-  go_1_25,
+  go_1_27,
   lib,
   makeWrapper,
   git,
   gh,
 }:
 
-# Pin Go 1.25 here so both `flox build` (catalog pkgs) and the flake
-# (callPackage) get it. go.mod requires go 1.25.7; an unpinned
+# Pin Go 1.27 here so both `flox build` (catalog pkgs) and the flake
+# (callPackage) get it. go.mod requires go 1.27.0; an unpinned
 # buildGoModule can be older and fail in the sandbox (toolchain fetch).
-(buildGoModule.override { go = go_1_25; }) {
+(buildGoModule.override { go = go_1_27; }) {
   pname = "zen";
   version = "dev";
 
@@ -46,6 +46,6 @@
     homepage = "https://github.com/mgreau/zen";
     license = lib.licenses.mit;
     mainProgram = "zen";
-    platforms = lib.platforms.linux ++ lib.platforms.darwin;
+    platforms = lib.platforms.linux ++ [ "aarch64-darwin" ];
   };
 }

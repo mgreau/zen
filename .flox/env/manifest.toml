@@ -9,22 +9,26 @@ schema-version = "1.14.0"
 # GOPATH and module cache live in $FLOX_ENV_CACHE so they stay per-project.
 
 [install]
-# go.mod pins `go 1.25.7`; catalog max on go_1_25 is newer, but 1.25.7 is the
-# exact language/toolchain line and is built for all four systems (latest
-# go_1_25@1.25.13 is missing x86_64-darwin).
-go.pkg-path = "go_1_25"
-go.version = "1.25.7"
+# go.mod sets the `go 1.27.0` language floor; the dev env pins the newest
+# go_1_27 in the catalog. Keep go.mod at .0: `flox build` uses its own
+# nixpkgs, whose go_1_27 can lag the catalog's newest patch. No go_1_27
+# release is built for x86_64-darwin, so that system is left out below.
+go.pkg-path = "go_1_27"
+go.version = "1.27.3"
 
 # Documented build path is `make build` (Makefile).
 gnumake.pkg-path = "gnumake"
 
 # Runtime: zen execs `git` for worktrees/fetch/log (cmd/*, internal/worktree, reconciler).
 # Unpinned: pairing git@2.54.0 + gh@2.96.0 with go_1_25@1.25.7 made toplevel
-# constraints too tight (2026-08-24). Latest git/gh omit x86_64-darwin.
+# constraints too tight (2026-08-24).
 git.pkg-path = "git"
 
 # Runtime: zen execs `gh` for auth tokens and GitHub API (internal/github).
 gh.pkg-path = "gh"
+
+[options]
+systems = ["aarch64-darwin", "aarch64-linux", "x86_64-linux"]
 
 [hook]
 on-activate = '''

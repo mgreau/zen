@@ -26,7 +26,7 @@ For every PR in your review queue and every feature you're working on, zen creat
 
 ```bash
 git clone https://github.com/mgreau/zen.git && cd zen
-flox activate                     # Go 1.25, git, gh, make — or install those yourself
+flox activate                     # Go 1.27, git, gh, make — or install those yourself
 make build && mv zen ~/bin/       # or anywhere on your PATH
 
 gh auth login
@@ -280,13 +280,13 @@ zen context inject <path> --pr 42 --repo app
 | **[GitHub CLI](https://cli.github.com/) (`gh`)** | Authentication and GitHub API access — must be logged in (`gh auth login`) |
 | **[iTerm2](https://iterm2.com/)**, **[Ghostty](https://ghostty.io/)**, **[kitty](https://sw.kovidgoyal.net/kitty/)**, or **Terminal.app** | Opens review/work sessions in new tabs (iTerm2/Ghostty/Terminal.app) or OS windows (kitty). Set `terminal: macos` for the built-in macOS Terminal. Ghostty and Terminal.app need accessibility permissions for tab creation and fall back to new windows otherwise (see [docs/configuration.md](docs/configuration.md#terminal)) |
 | **[Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`) or [Codex](https://developers.openai.com/codex/cli) (`codex`)** | AI-assisted PR reviews and coding sessions — pick one with `agent:` in config (see [Configuration](#configuration)) |
-| **Go 1.25+** | Building from source — or `flox activate` for a pinned toolchain (see [Building](#building)) |
+| **Go 1.27+** | Building from source — or `flox activate` for a pinned toolchain (see [Building](#building)) |
 | **[Flox](https://flox.dev)** (optional) | Reproducible local env: `flox activate` then `make build`, or `flox build zen` for a hermetic binary |
 
 ## Building
 
 ```
-flox activate    # optional: pinned Go 1.25.7, git, gh, make
+flox activate    # optional: pinned Go 1.27.3, git, gh, make
 make build
 ```
 

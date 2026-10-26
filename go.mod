@@ -1,6 +1,6 @@
 module github.com/mgreau/zen
 
-go 1.25.7
+go 1.27.0
 
 require (
 	chainguard.dev/driftlessaf v0.0.0-20260217015705-f583b916060f

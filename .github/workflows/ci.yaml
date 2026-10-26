@@ -39,8 +39,8 @@ jobs:
     # macos-latest (arm64) is included, not just ubuntu-latest: nixpkgs
     # package availability and the Nix fixupPhase (patchelf on Linux vs.
     # install_name_tool/codesigning on Darwin) genuinely diverge by
-    # platform, and zen ships nix-darwin support — see the go_1_25 darwin
-    # availability gap noted in .flox/env/manifest.toml for a precedent.
+    # platform, and zen ships nix-darwin support — see the go_1_27
+    # x86_64-darwin gap noted in .flox/env/manifest.toml for a precedent.
     # Both are free/unmetered on GitHub-hosted runners for public repos.
     strategy:
       matrix:
