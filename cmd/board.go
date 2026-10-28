@@ -16,9 +16,11 @@ var boardCmd = &cobra.Command{
 Runs as an interactive terminal view, refreshing every 30 seconds (or on
 demand with 'r'). Shows two tables:
 
-  My Pull Requests   Your open PRs across all configured repos, grouped by
-                      status: draft, failing CI, changes requested, ready to
-                      merge, in review, in flight. PRs stacked on one of your
+  My Pull Requests   Your open PRs in every repo, configured or not (one
+                      configured shows its short name, any other its
+                      owner/repo), grouped by status: draft, failing CI,
+                      changes requested, ready to merge, in review, in
+                      flight. PRs stacked on one of your
                       other open PRs (same repo, base branch = another PR's
                       head branch) are shown together with a |---- marker.
   Needs Your Review  PRs where you're a requested reviewer, across all

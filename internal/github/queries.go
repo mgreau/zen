@@ -396,7 +396,7 @@ func GetMyOpenPRs(ctx context.Context, repoFilter string) ([]MyPR, error) {
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
 	query := `query($q: String!) {
-  search(query: $q, type: ISSUE, first: 50) {
+  search(query: $q, type: ISSUE, first: 100) {
     nodes {
       ... on PullRequest {
         number

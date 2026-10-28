@@ -35,7 +35,7 @@ const (
 type MyPRRow struct {
 	Status  Status
 	Number  int
-	Repo    string // short config name
+	Repo    string // config short name, or owner/repo when unconfigured
 	Title   string
 	URL     string
 	Age     string
@@ -75,54 +75,49 @@ func ageOf(createdAt string) (string, int) {
 	return ui.FormatDuration(secs), secs
 }
 
-// FetchMyPRs fetches the user's own open PRs across all configured repos,
-// classifies each into a status bucket, and orders them by dependency chain
-// (a PR immediately followed by anything stacked on top of it), with chains
-// and independent PRs ranked by status priority then age (oldest first).
+// FetchMyPRs fetches the user's own open PRs in every repository, not just
+// the configured ones: a PR opened somewhere zen has never been told about is
+// still the user's to track. One unscoped search covers them all, so the cost
+// of a refresh does not grow with the repo list. Each PR is classified into a
+// status bucket and ordered by dependency chain (a PR immediately followed by
+// anything stacked on top of it), with chains and independent PRs ranked by
+// status priority then age (oldest first).
 func FetchMyPRs(ctx context.Context, cfg *config.Config) ([]MyPRRow, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 
-	repos := cfg.RepoNames()
-	rowsByRepo := make([][]MyPRRow, len(repos))
+	prs, err := github.GetMyOpenPRs(ctx, "")
+	if err != nil {
+		return nil, fmt.Errorf("fetching your PRs: %w", err)
+	}
+	return orderWithDependencies(myPRRows(cfg, prs)), nil
+}
 
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(maxConcurrentRepoFetches)
-	for i, repo := range repos {
-		g.Go(func() error {
-			full := cfg.RepoFullName(repo)
-			prs, err := github.GetMyOpenPRs(gctx, full)
-			if err != nil {
-				return fmt.Errorf("fetching your PRs in %s: %w", repo, err)
-			}
-			rows := make([]MyPRRow, 0, len(prs))
-			for _, pr := range prs {
-				age, ageSecs := ageOf(pr.CreatedAt)
-				rows = append(rows, MyPRRow{
-					Status:  ClassifyMyPR(pr),
-					Number:  pr.Number,
-					Repo:    repo,
-					Title:   pr.Title,
-					URL:     pr.URL,
-					Age:     age,
-					ageSecs: ageSecs,
-					BaseRef: pr.BaseRefName,
-					HeadRef: pr.HeadRefName,
-				})
-			}
-			rowsByRepo[i] = rows
-			return nil
+// myPRRows turns search results into table rows. A PR in a configured repo is
+// labelled with its config short name; one anywhere else keeps its
+// owner/repo, which RepoFullName passes through unchanged, so the summary
+// panel and dependency grouping work for it too.
+func myPRRows(cfg *config.Config, prs []github.MyPR) []MyPRRow {
+	rows := make([]MyPRRow, 0, len(prs))
+	for _, pr := range prs {
+		repo := pr.Repository.NameWithOwner
+		if short, ok := cfg.ConfiguredRepo(repo); ok {
+			repo = short
+		}
+		age, ageSecs := ageOf(pr.CreatedAt)
+		rows = append(rows, MyPRRow{
+			Status:  ClassifyMyPR(pr),
+			Number:  pr.Number,
+			Repo:    repo,
+			Title:   pr.Title,
+			URL:     pr.URL,
+			Age:     age,
+			ageSecs: ageSecs,
+			BaseRef: pr.BaseRefName,
+			HeadRef: pr.HeadRefName,
 		})
 	}
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-
-	var all []MyPRRow
-	for _, rows := range rowsByRepo {
-		all = append(all, rows...)
-	}
-	return orderWithDependencies(all), nil
+	return rows
 }
 
 // FetchReviewRequests fetches PRs the user has been asked to review across
