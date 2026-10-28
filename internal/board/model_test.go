@@ -71,3 +71,27 @@ func TestClampHeight(t *testing.T) {
 		}
 	}
 }
+
+func TestMyRepoColWidth(t *testing.T) {
+	tests := []struct {
+		name  string
+		repos []string
+		want  int
+	}{
+		{"short config names keep the default", []string{"zen", "flox"}, repoColWidth},
+		{"an owner/repo label widens the column to fit", []string{"zen", "numtide/llm-agents.nix"}, len("numtide/llm-agents.nix")},
+		{"a very long label is capped", []string{"some-organisation/a-rather-long-repository"}, maxRepoColWidth},
+		{"no rows keep the default", nil, repoColWidth},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows := make([]MyPRRow, len(tt.repos))
+			for i, r := range tt.repos {
+				rows[i].Repo = r
+			}
+			if got := myRepoColWidth(rows); got != tt.want {
+				t.Errorf("myRepoColWidth(%v) = %d, want %d", tt.repos, got, tt.want)
+			}
+		})
+	}
+}

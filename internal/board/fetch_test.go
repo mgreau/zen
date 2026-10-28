@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mgreau/zen/internal/config"
+	"github.com/mgreau/zen/internal/github"
 )
 
 func TestTouchesWatchPaths(t *testing.T) {
@@ -54,4 +55,45 @@ func TestAssignReviewTiers_emptyRows(t *testing.T) {
 	cfg := &config.Config{Authors: []string{"alice"}, WatchPaths: []string{"driftlessaf"}}
 	// Must not panic or hang when there's nothing to tier.
 	assignReviewTiers(context.Background(), cfg, nil)
+}
+
+func TestMyPRRows_labelsConfiguredReposByShortName(t *testing.T) {
+	cfg := &config.Config{Repos: map[string]config.RepoConfig{
+		"workstation": {FullName: "imkarrer/flox-workstation"},
+	}}
+	prs := []github.MyPR{
+		{Number: 1, Repository: github.RepoInfo{NameWithOwner: "imkarrer/flox-workstation"}},
+		{Number: 2, Repository: github.RepoInfo{NameWithOwner: "agent-stacks/agent-pkgs"}},
+	}
+
+	rows := myPRRows(cfg, prs)
+
+	if got := rows[0].Repo; got != "workstation" {
+		t.Errorf("configured repo labelled %q, want its short name %q", got, "workstation")
+	}
+	if got := rows[1].Repo; got != "agent-stacks/agent-pkgs" {
+		t.Errorf("unconfigured repo labelled %q, want its owner/repo", got)
+	}
+	// The summary panel resolves the label back through RepoFullName, so an
+	// unconfigured PR must still reach the right repository.
+	if got := cfg.RepoFullName(rows[1].Repo); got != "agent-stacks/agent-pkgs" {
+		t.Errorf("RepoFullName(%q) = %q, want agent-stacks/agent-pkgs", rows[1].Repo, got)
+	}
+}
+
+func TestMyPRRows_sameRepoNameUnderTwoOwnersStaysDistinct(t *testing.T) {
+	// Stacked-PR detection keys on Repo+HeadRef, so two unconfigured repos
+	// that share a name must not collapse into one.
+	prs := []github.MyPR{
+		{Number: 1, HeadRefName: "a", Repository: github.RepoInfo{NameWithOwner: "flox/zen"}},
+		{Number: 2, BaseRefName: "a", Repository: github.RepoInfo{NameWithOwner: "mgreau/zen"}},
+	}
+
+	rows := orderWithDependencies(myPRRows(&config.Config{}, prs))
+
+	for _, r := range rows {
+		if r.Depth != 0 {
+			t.Errorf("PR #%d stacked at depth %d across different repos", r.Number, r.Depth)
+		}
+	}
 }
