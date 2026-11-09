@@ -36,7 +36,7 @@ agent: claude
 claude_bin: claude   # executable used when agent: claude
 codex_bin: codex     # executable used when agent: codex
 
-terminal: iterm  # or "ghostty", "kitty", "macos", or "tmux"; unset means tmux inside tmux, else iterm
+terminal: iterm  # or "ghostty", "kitty", "macos", "tmux", or "agent-deck"; unset means tmux inside tmux, else iterm
 
 # Prefix for feature branches created by `zen work new`.
 # If unset, falls back to `git config user.name` (spaces → hyphens), then no prefix.
@@ -136,9 +136,9 @@ Note that the background daemon always uses the **configured** agent: if you run
 
 ## Terminal
 
-`terminal: iterm`, `terminal: ghostty`, `terminal: kitty`, `terminal: macos`, or
-`terminal: tmux`. When `terminal` is unset, zen uses `tmux` if it runs inside a
-tmux session (`$TMUX` is set) and `iterm` otherwise.
+`terminal: iterm`, `terminal: ghostty`, `terminal: kitty`, `terminal: macos`,
+`terminal: tmux`, or `terminal: agent-deck`. When `terminal` is unset, zen uses
+`tmux` if it runs inside a tmux session (`$TMUX` is set) and `iterm` otherwise.
 
 For Ghostty tab creation on macOS:
 
@@ -164,6 +164,19 @@ over ssh, such as a cloud workstation, where there is no terminal application
 to drive. The command runs through your login shell (`$SHELL -l -c`), and the
 window keeps a shell in the worktree when the agent exits. Outside tmux, zen
 reports an error; use `--no-terminal` there instead.
+
+`terminal: agent-deck` opens each session in
+[agent-deck](https://github.com/asheshgoplani/agent-deck) instead of a terminal
+tab. zen runs `agent-deck launch` with the same command it would type into a
+tab, so the session appears in agent-deck's TUI under the `zen` group, titled
+after the worktree directory. agent-deck recognises a leading `claude` or
+`codex` and tracks the session as that tool, keeping zen's model and prompt
+arguments; a launch through an env prefix runs as a shell session. Set
+`AGENTDECK_PROFILE` to pick the agent-deck profile. agent-deck allows one
+session per worktree: resuming replaces a stopped or errored one and refuses
+to start a second agent beside a live one, printing the
+`agent-deck session attach` command instead. Needs `agent-deck` on `PATH`;
+works wherever agent-deck does, macOS and Linux.
 
 ## Slack task watcher
 
