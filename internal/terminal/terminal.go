@@ -3,6 +3,7 @@ package terminal
 import (
 	"fmt"
 
+	"github.com/mgreau/zen/internal/agentdeck"
 	"github.com/mgreau/zen/internal/ghostty"
 	"github.com/mgreau/zen/internal/iterm"
 	"github.com/mgreau/zen/internal/kitty"
@@ -29,6 +30,8 @@ func NewTerminal(terminalType string) (Terminal, error) {
 		return &KittyTerminal{}, nil
 	case "macos":
 		return &MacOSTerminal{}, nil
+	case "agent-deck":
+		return &AgentDeckTerminal{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported terminal type: %s", terminalType)
 	}
@@ -76,4 +79,17 @@ func (t *MacOSTerminal) Name() string {
 
 func (t *MacOSTerminal) OpenTab(workDir, command string) error {
 	return macos.OpenTab(workDir, command)
+}
+
+// AgentDeckTerminal opens sessions in agent-deck rather than a terminal
+// emulator. It is not a terminal strictly, but it takes the same workDir and
+// command, so it slots in behind the same interface.
+type AgentDeckTerminal struct{}
+
+func (t *AgentDeckTerminal) Name() string {
+	return "agent-deck"
+}
+
+func (t *AgentDeckTerminal) OpenTab(workDir, command string) error {
+	return agentdeck.OpenTab(workDir, command)
 }
