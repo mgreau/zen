@@ -68,8 +68,13 @@ func removeReview(ctx context.Context, originPath, worktreePath string, prNumber
 }
 
 // remove runs verify, when set, after the agent and local-change checks and
-// before anything is deleted, while GitMu is held.
+// before anything is deleted, while RepoLock and GitMu are held.
 func remove(originPath, worktreePath string, runningIn func(string) bool, verify func() error) error {
+	repoLock, err := AcquireRepoLock(originPath)
+	if err != nil {
+		return err
+	}
+	defer repoLock.Release()
 	GitMu.Lock()
 	defer GitMu.Unlock()
 

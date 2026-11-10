@@ -14,9 +14,15 @@ import (
 //
 // Uses --no-checkout + a separate checkout to avoid "Could not write new
 // index file" on large repos (13K+ files) — the two-step approach handles
-// the index write reliably. Serializes on GitMu to prevent concurrent
-// index.lock conflicts across worktree operations on the same origin repo.
+// the index write reliably. Serializes on RepoLock and GitMu to prevent
+// concurrent index.lock conflicts across worktree operations on the same
+// origin repo, in this process or another.
 func CreateFromMain(originPath, worktreePath, worktreeName, branch string) error {
+	repoLock, err := AcquireRepoLock(originPath)
+	if err != nil {
+		return err
+	}
+	defer repoLock.Release()
 	GitMu.Lock()
 	defer GitMu.Unlock()
 
@@ -59,9 +65,15 @@ func CreateFromMain(originPath, worktreePath, worktreeName, branch string) error
 //
 // Uses --no-checkout + a separate checkout to avoid "Could not write new
 // index file" on large repos (13K+ files) — the two-step approach handles
-// the index write reliably. Serializes on GitMu to prevent concurrent
-// index.lock conflicts across worktree operations on the same origin repo.
+// the index write reliably. Serializes on RepoLock and GitMu to prevent
+// concurrent index.lock conflicts across worktree operations on the same
+// origin repo, in this process or another.
 func CreateFromPR(originPath, worktreePath, worktreeName string, prNumber int) error {
+	repoLock, err := AcquireRepoLock(originPath)
+	if err != nil {
+		return err
+	}
+	defer repoLock.Release()
 	GitMu.Lock()
 	defer GitMu.Unlock()
 
