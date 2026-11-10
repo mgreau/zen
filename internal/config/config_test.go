@@ -355,6 +355,61 @@ ignore_drafts: false
 	}
 }
 
+func TestLoadKeepSessionsOnDelete(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want bool
+	}{
+		{
+			name: "omitted defaults to false",
+			yaml: `repos:
+  m:
+    full_name: o/m
+    base_path: /tmp/m
+`,
+			want: false,
+		},
+		{
+			name: "explicit true",
+			yaml: `repos:
+  m:
+    full_name: o/m
+    base_path: /tmp/m
+keep_sessions_on_delete: true
+`,
+			want: true,
+		},
+		{
+			name: "explicit false",
+			yaml: `repos:
+  m:
+    full_name: o/m
+    base_path: /tmp/m
+keep_sessions_on_delete: false
+`,
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			t.Setenv("HOME", tmpDir)
+			zenDir := filepath.Join(tmpDir, ".zen")
+			os.MkdirAll(zenDir, 0o755)
+			os.WriteFile(filepath.Join(zenDir, "config.yaml"), []byte(tt.yaml), 0o644)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			if cfg.KeepSessionsOnDelete != tt.want {
+				t.Errorf("KeepSessionsOnDelete = %v, want %v", cfg.KeepSessionsOnDelete, tt.want)
+			}
+		})
+	}
+}
+
 func TestWatchConfigDefaults(t *testing.T) {
 	w := WatchConfig{}
 
