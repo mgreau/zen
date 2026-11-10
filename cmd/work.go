@@ -34,7 +34,10 @@ Optionally provide a context string to use as the initial Claude prompt.`,
 var workDeleteCmd = &cobra.Command{
 	Use:   "delete <name>",
 	Short: "Delete a feature worktree by name or path",
-	Long: `Delete a feature worktree and its Claude session files.
+	Long: `Delete a feature worktree and its agent session files.
+
+Session files are kept instead when keep_sessions_on_delete is true in config
+or --keep-sessions is given.
 
 Accepts a worktree name (e.g., mono-factory-v2-agentic) or full path.
 Shows a summary of what will be removed before confirming.`,
@@ -53,6 +56,7 @@ var (
 	workNewNoITerm  bool
 	workNewModel    string
 	workDeleteForce bool
+	workDeleteKeep  bool
 )
 
 func init() {
@@ -60,6 +64,7 @@ func init() {
 	workNewCmd.Flags().StringVarP(&workNewModel, "model", "m", "", "Model to use (agent-specific, e.g. opus or gpt-5-codex)")
 	addAgentFlag(workNewCmd)
 	workDeleteCmd.Flags().BoolVarP(&workDeleteForce, "force", "f", false, "Skip confirmation")
+	workDeleteCmd.Flags().BoolVar(&workDeleteKeep, "keep-sessions", false, "Keep agent session files (overrides config when set)")
 	addResumeFlags(workResumeCmd)
 	workCmd.AddCommand(workNewCmd)
 	workCmd.AddCommand(workDeleteCmd)
@@ -315,8 +320,13 @@ func runWorkDelete(cmd *cobra.Command, args []string) error {
 	}
 	ui.LogSuccess("Removed worktree")
 
-	// Clean up agent session files
-	if len(sessions) > 0 {
+	keepSessions := cfg.KeepSessionsOnDelete
+	if cmd.Flags().Changed("keep-sessions") {
+		keepSessions = workDeleteKeep
+	}
+
+	// Clean up agent session files unless they are kept
+	if len(sessions) > 0 && !keepSessions {
 		if removed, err := ag.CleanSessions(match.Path); err != nil {
 			fmt.Printf("  %s clean session files: %v\n", ui.YellowText("Warning:"), err)
 		} else if removed > 0 {

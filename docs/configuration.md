@@ -50,6 +50,12 @@ branch_prefix: mgreau
 # reconcile time covers the race where a PR is queued while ready then drafted.
 ignore_drafts: true
 
+# Keep agent session history when `zen work delete` removes a worktree, so a
+# finished conversation can still be read or resumed elsewhere. Defaults to
+# false (session files are deleted with the worktree). Override on a single
+# run with `--keep-sessions` or `--keep-sessions=false`.
+keep_sessions_on_delete: true
+
 watch:
   dispatch_interval: "10s"      # How often to process queued work
   cleanup_interval: "1h"        # How often to scan for merged PRs
