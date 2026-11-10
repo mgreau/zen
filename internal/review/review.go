@@ -80,6 +80,11 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 	// Create worktree under lock
 	branchName := wt.PRBranch(prNumber)
 
+	repoLock, err := wt.AcquireRepoLock(originPath)
+	if err != nil {
+		return nil, err
+	}
+	defer repoLock.Release()
 	wt.GitMu.Lock()
 
 	log(fmt.Sprintf("Fetching pull/%d/head...", prNumber))
@@ -132,6 +137,7 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 	wt.RemoveStaleLock(lockFile, worktreeName)
 
 	wt.GitMu.Unlock()
+	repoLock.Release()
 
 	injectContext(ctx, ag, worktreePath, fullRepo, prNumber, log)
 	prcache.Set(repoShort, prNumber, details.Title, details.Author)

@@ -17,6 +17,67 @@ import (
 // GitMu serializes git worktree operations to prevent concurrent index.lock conflicts.
 var GitMu sync.Mutex
 
+// RepoLock is a cross-process lock on one origin repository. GitMu only
+// serializes worktree operations inside a single zen process, so `zen watch`
+// creating review worktrees could race `zen work new` or `zen review` in
+// another process on the same repository's index, refs, and config. The lock
+// is an flock on a stable sibling file, .<repo>.zen.lock, which other tools
+// that change the origin checkout can take too.
+type RepoLock struct {
+	file *os.File
+}
+
+// repoLockPath returns the sibling lock file path for originPath, resolving
+// symlinks so every path to the same repository shares one lock.
+func repoLockPath(originPath string) (string, error) {
+	absolute, err := filepath.Abs(originPath)
+	if err != nil {
+		return "", fmt.Errorf("resolving repository path: %w", err)
+	}
+	canonical, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", fmt.Errorf("resolving repository symlinks: %w", err)
+	}
+	return filepath.Join(filepath.Dir(canonical), "."+filepath.Base(canonical)+".zen.lock"), nil
+}
+
+// AcquireRepoLock blocks until no other process holds originPath's lock.
+func AcquireRepoLock(originPath string) (*RepoLock, error) {
+	path, err := repoLockPath(originPath)
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("opening repository lock: %w", err)
+	}
+	for {
+		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX)
+		if err != syscall.EINTR {
+			break
+		}
+	}
+	if err != nil {
+		file.Close()
+		return nil, fmt.Errorf("locking repository: %w", err)
+	}
+	return &RepoLock{file: file}, nil
+}
+
+// Release unlocks and closes the lock. It is safe to call more than once.
+func (lock *RepoLock) Release() error {
+	if lock == nil || lock.file == nil {
+		return nil
+	}
+	unlockErr := syscall.Flock(int(lock.file.Fd()), syscall.LOCK_UN)
+	closeErr := lock.file.Close()
+	lock.file = nil
+	if unlockErr != nil {
+		return unlockErr
+	}
+	return closeErr
+}
+
 // CleanStaleLocks removes stale index.lock files from worktrees of the given repo.
 // A lock is considered stale if the PID inside it is no longer running.
 func CleanStaleLocks(cfg *config.Config, repo string) {
