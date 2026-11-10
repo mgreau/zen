@@ -1,6 +1,7 @@
 package worktree
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -85,6 +86,67 @@ func TestListForRepoClassifiesByBranch(t *testing.T) {
 	for name, w := range want {
 		if g, ok := byName[name]; !ok || g != w {
 			t.Errorf("%s = %+v (listed %v), want %+v", name, g, ok, w)
+		}
+	}
+}
+
+func TestListForRepoIgnoresWorktreesOutsideBase(t *testing.T) {
+	root := t.TempDir()
+	basePath := filepath.Join(root, "base")
+	origin := filepath.Join(basePath, "mono")
+	runRemovalGit(t, root, "init", "-b", "main", origin)
+	runRemovalGit(t, origin, "config", "user.email", "test@example.com")
+	runRemovalGit(t, origin, "config", "user.name", "Test")
+	runRemovalGit(t, origin, "config", "commit.gpgsign", "false")
+	writeRemovalFile(t, origin, "tracked", "base")
+	runRemovalGit(t, origin, "add", "tracked")
+	runRemovalGit(t, origin, "commit", "-m", "initial")
+	runRemovalGit(t, origin, "worktree", "add", "-b", "inside", filepath.Join(basePath, "mono-inside"))
+	runRemovalGit(t, origin, "worktree", "add", "-b", "nested", filepath.Join(basePath, "nested", "mono-nested"))
+	runRemovalGit(t, origin, "worktree", "add", "-b", "outside", filepath.Join(root, "elsewhere", "mono-outside"))
+
+	cfg := &config.Config{Repos: map[string]config.RepoConfig{
+		"mono": {FullName: "example/mono", BasePath: basePath},
+	}}
+	wts, err := ListForRepo(cfg, "mono")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, w := range wts {
+		names = append(names, w.Name)
+	}
+	if len(names) != 1 || names[0] != "mono-inside" {
+		t.Errorf("listed %v, want only mono-inside", names)
+	}
+}
+
+func TestDirectlyUnderBase(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "base")
+	inside := filepath.Join(base, "repo-feature")
+	nested := filepath.Join(inside, "nested")
+	outside := filepath.Join(root, "outside")
+	for _, dir := range []string{nested, outside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	escape := filepath.Join(base, "escape")
+	if err := os.Symlink(outside, escape); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]bool{
+		inside:                         true,
+		base:                           false,
+		nested:                         false,
+		outside:                        false,
+		escape:                         false,
+		filepath.Join(base, "missing"): true,
+		filepath.Join(root, "missing"): false,
+	} {
+		if got := directlyUnderBase(path, base); got != want {
+			t.Errorf("directlyUnderBase(%s) = %v, want %v", path, got, want)
 		}
 	}
 }
