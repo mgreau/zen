@@ -119,6 +119,14 @@ func ListForRepo(cfg *config.Config, repo string) ([]Worktree, error) {
 			continue
 		}
 
+		// A repository can have linked worktrees anywhere on disk. Zen only
+		// owns worktrees created directly in the configured base path, so
+		// ignore the rest; otherwise they are listed, classified, and offered
+		// for cleanup and deletion as if Zen had made them.
+		if !directlyUnderBase(path, basePath) {
+			continue
+		}
+
 		// Extract branch from [branch] notation. A detached HEAD has none and
 		// is printed as "(detached HEAD)" instead.
 		branch := ""
@@ -146,6 +154,30 @@ func ListForRepo(cfg *config.Config, repo string) ([]Worktree, error) {
 	}
 
 	return worktrees, nil
+}
+
+// directlyUnderBase reports whether path, with symlinks resolved, is a direct
+// child of base. A symlink inside base that points elsewhere does not count.
+// A path that no longer exists, such as a prunable worktree, is judged by its
+// parent directory so it can still be cleaned up.
+func directlyUnderBase(path, base string) bool {
+	parent := filepath.Dir(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		parent = filepath.Dir(resolved)
+	}
+	return canonicalPath(parent) == canonicalPath(base)
+}
+
+// canonicalPath resolves symlinks and makes p absolute, falling back to the
+// unresolved form of p when it cannot be resolved.
+func canonicalPath(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		p = resolved
+	}
+	if absolute, err := filepath.Abs(p); err == nil {
+		p = absolute
+	}
+	return filepath.Clean(p)
 }
 
 // ListAll lists worktrees across all configured repositories.
