@@ -46,6 +46,39 @@ type ReviewRequest struct {
 	// Kind is "new" or "rereview", set by GetReviewRequests to record which
 	// of its two queries matched. Not part of the GitHub API response.
 	Kind string `json:"-"`
+	// ReviewedOid is the commit the current user's latest review was submitted
+	// against, or "" when GitHub reports no such review or its commit is gone
+	// (force-pushed away). Set by searchReviewRequests.
+	ReviewedOid string `json:"-"`
+}
+
+// changedSinceReview reports whether the PR head moved after the current
+// user's latest review. An unknown reviewed commit counts as changed, so a
+// PR is only ever dropped from the re-review list on positive evidence that
+// the user has already seen its current head.
+func (rr ReviewRequest) changedSinceReview() bool {
+	return rr.ReviewedOid == "" || rr.ReviewedOid != rr.HeadRefOid
+}
+
+// searchNode is one PR in a reviewRequestSearch response. viewerLatestReview
+// is decoded here rather than on ReviewRequest so it stays out of the JSON
+// that callers such as the MCP inbox tool emit.
+type searchNode struct {
+	ReviewRequest
+	ViewerLatestReview *struct {
+		Commit *struct {
+			Oid string `json:"oid"`
+		} `json:"commit"`
+	} `json:"viewerLatestReview"`
+}
+
+// reviewRequest returns the node's ReviewRequest with ReviewedOid filled in.
+func (n searchNode) reviewRequest() ReviewRequest {
+	rr := n.ReviewRequest
+	if n.ViewerLatestReview != nil && n.ViewerLatestReview.Commit != nil {
+		rr.ReviewedOid = n.ViewerLatestReview.Commit.Oid
+	}
+	return rr
 }
 
 // Review request kinds, set on ReviewRequest.Kind by GetReviewRequests.
@@ -168,6 +201,10 @@ func appendUniqueReviewRequest(dst []ReviewRequest, seen map[string]bool, rr Rev
 
 // buildReviewRequestQueries returns the two GitHub search query strings used
 // by GetReviewRequests: requested-reviews and re-review queries.
+//
+// The re-review query excludes the user's own PRs: replying to a review
+// thread on your own PR records a review by you, so without -author:@me
+// every PR of yours that is still awaiting approval would match.
 func buildReviewRequestQueries(repoFilter string, ignoreDrafts bool) (string, string) {
 	repoClause := ""
 	if repoFilter != "" {
@@ -178,7 +215,7 @@ func buildReviewRequestQueries(repoFilter string, ignoreDrafts bool) (string, st
 		draftClause = " draft:false"
 	}
 	q1 := fmt.Sprintf("is:pr is:open review-requested:@me%s%s", repoClause, draftClause)
-	q2 := fmt.Sprintf("is:pr is:open reviewed-by:@me review:required%s%s", repoClause, draftClause)
+	q2 := fmt.Sprintf("is:pr is:open reviewed-by:@me review:required -author:@me%s%s", repoClause, draftClause)
 	return q1, q2
 }
 
@@ -221,6 +258,7 @@ const reviewRequestSearch = `query($q: String!, $after: String) {
         headRefOid
         isDraft
         closed
+        viewerLatestReview { commit { oid } }
       }
     }
   }
@@ -253,7 +291,7 @@ func searchReviewRequests(ctx context.Context, query string) ([]ReviewRequest, e
 						HasNextPage bool   `json:"hasNextPage"`
 						EndCursor   string `json:"endCursor"`
 					} `json:"pageInfo"`
-					Nodes []ReviewRequest `json:"nodes"`
+					Nodes []searchNode `json:"nodes"`
 				} `json:"search"`
 			} `json:"data"`
 		}
@@ -261,7 +299,9 @@ func searchReviewRequests(ctx context.Context, query string) ([]ReviewRequest, e
 			return nil, fmt.Errorf("parsing GraphQL response: %w", err)
 		}
 
-		all = append(all, result.Data.Search.Nodes...)
+		for _, n := range result.Data.Search.Nodes {
+			all = append(all, n.reviewRequest())
+		}
 		info := result.Data.Search.PageInfo
 		if !info.HasNextPage || info.EndCursor == "" || info.EndCursor == cursor {
 			return all, nil
@@ -272,7 +312,11 @@ func searchReviewRequests(ctx context.Context, query string) ([]ReviewRequest, e
 }
 
 // GetReviewRequests fetches PRs where the user is a requested reviewer,
-// including re-reviews. Uses GraphQL via `gh api graphql`. When ignoreDrafts
+// including re-reviews: PRs by someone else that the user has reviewed, that
+// still need an approval, and whose head has moved since that review. A PR
+// the user reviewed at its current head is not waiting on them, so it is
+// left out unless they are explicitly requested again.
+// Uses GraphQL via `gh api graphql`. When ignoreDrafts
 // is true, draft PRs are filtered out at the GitHub search layer. An empty
 // repoFilter searches every repository the user can see, which is only safe
 // for callers that show what they get; the daemon uses
@@ -286,9 +330,15 @@ func GetReviewRequests(ctx context.Context, repoFilter string, ignoreDrafts bool
 	if err != nil {
 		return nil, err
 	}
-	rereview, err := searchReviewRequests(ctx, q2)
+	reviewed, err := searchReviewRequests(ctx, q2)
 	if err != nil {
 		return nil, err
+	}
+	var rereview []ReviewRequest
+	for _, rr := range reviewed {
+		if rr.changedSinceReview() {
+			rereview = append(rereview, rr)
+		}
 	}
 	return mergeReviewRequests(requested, rereview), nil
 }
