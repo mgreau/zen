@@ -26,8 +26,11 @@ type Config struct {
 	Terminal     string                `yaml:"terminal"` // "iterm", "ghostty", "kitty", or "macos"
 	BranchPrefix string                `yaml:"branch_prefix"`
 	IgnoreDrafts bool                  `yaml:"ignore_drafts"`
-	Watch        WatchConfig           `yaml:"watch"`
-	Slack        SlackConfig           `yaml:"slack"`
+	// KeepSessionsOnDelete keeps agent session history when `zen work delete`
+	// removes a worktree.
+	KeepSessionsOnDelete bool        `yaml:"keep_sessions_on_delete"`
+	Watch                WatchConfig `yaml:"watch"`
+	Slack                SlackConfig `yaml:"slack"`
 }
 
 // SlackConfig holds configuration for the Slack task watcher: polling for the

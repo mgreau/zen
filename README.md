@@ -104,7 +104,7 @@ zen work new app my-feature "initial prompt"   # with Claude prompt
 zen work new app my-feature --model opus       # pick Claude model
 zen work resume <name>                         # resume a feature session in new tab
 zen work resume <name> --model opus            # resume with a specific model
-zen work delete <name>                         # delete worktree (cleans Claude sessions too)
+zen work delete <name>                         # delete worktree (cleans agent sessions too, unless kept)
 ```
 
 Feature branches are prefixed by `branch_prefix` from config — see [docs/configuration.md](docs/configuration.md).
