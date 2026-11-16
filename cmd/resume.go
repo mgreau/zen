@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mgreau/zen/internal/agent"
+	"github.com/mgreau/zen/internal/config"
 	"github.com/mgreau/zen/internal/migrate"
 	"github.com/mgreau/zen/internal/review"
 	"github.com/mgreau/zen/internal/session"
@@ -80,15 +81,21 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 		return nil
 	}
 
+	stack, err := resolveStack(stackModeFor(wt.Type), wt.Repo)
+	if err != nil {
+		return err
+	}
+
 	// No existing sessions for this agent — offer to migrate the other
-	// agent's work before falling back to a fresh session.
+	// agent's work before falling back to a fresh session. Migration drives
+	// the real agent binary, so it runs before the stack is applied.
 	if noSessions {
 		migrated, err := maybeMigrateSession(wt, ag)
 		if err != nil {
 			return err
 		}
 		if migrated == nil {
-			return openNewSession(wt, t, ag)
+			return openNewSession(wt, t, ag, stack)
 		}
 		sessions = []session.Session{*migrated}
 	}
@@ -106,7 +113,7 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 	home := os.Getenv("HOME")
 	shortPath := ui.ShortenHome(wt.Path, home)
 
-	resumeCmd := ag.ResumeCommand(s.ID, resumeModel)
+	resumeCmd := stack.Apply(ag, wt.Path).ResumeCommand(s.ID, resumeModel)
 
 	// No-iTerm mode
 	if resumeNoITerm {
@@ -116,6 +123,7 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 		fmt.Println()
 		fmt.Println(ui.DimText(fmt.Sprintf("Worktree: %s", shortPath)))
 		fmt.Println(ui.DimText(fmt.Sprintf("Session:  %s (%s)", s.ModHuman, s.SizeStr)))
+		printStack(stack)
 		return nil
 	}
 
@@ -129,6 +137,7 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 	if resumeModel != "" {
 		fmt.Printf("  Model:    %s\n", ui.CyanText(resumeModel))
 	}
+	printStack(stack)
 	fmt.Println()
 
 	if err := t.OpenTab(wt.Path, resumeCmd); err != nil {
@@ -199,7 +208,7 @@ func maybeMigrateSession(wt worktree.Worktree, ag agent.Agent) (*session.Session
 
 // openNewSession starts a new agent session in a new terminal tab.
 // For PR worktrees, it starts with a review prompt; for others, it starts plain.
-func openNewSession(wt worktree.Worktree, t terminal.Terminal, ag agent.Agent) error {
+func openNewSession(wt worktree.Worktree, t terminal.Terminal, ag agent.Agent, stack *config.StackRef) error {
 	home := os.Getenv("HOME")
 	shortPath := ui.ShortenHome(wt.Path, home)
 
@@ -211,7 +220,7 @@ func openNewSession(wt worktree.Worktree, t terminal.Terminal, ag agent.Agent) e
 		action = "Starting PR review"
 	}
 
-	launchCmd := ag.StartCommand(initialPrompt, resumeModel)
+	launchCmd := stack.Apply(ag, wt.Path).StartCommand(initialPrompt, resumeModel)
 
 	if resumeNoITerm {
 		fmt.Println()
@@ -219,6 +228,7 @@ func openNewSession(wt worktree.Worktree, t terminal.Terminal, ag agent.Agent) e
 		fmt.Printf("  cd %s && %s\n", wt.Path, launchCmd)
 		fmt.Println()
 		fmt.Println(ui.DimText(fmt.Sprintf("Worktree: %s", shortPath)))
+		printStack(stack)
 		return nil
 	}
 
@@ -229,6 +239,7 @@ func openNewSession(wt worktree.Worktree, t terminal.Terminal, ag agent.Agent) e
 	if resumeModel != "" {
 		fmt.Printf("  Model:    %s\n", ui.CyanText(resumeModel))
 	}
+	printStack(stack)
 	fmt.Println()
 
 	if err := t.OpenTab(wt.Path, launchCmd); err != nil {
@@ -309,6 +320,7 @@ func addResumeFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&resumeModel, "model", "m", "", "Model to use (agent-specific, e.g. opus or gpt-5-codex)")
 	cmd.Flags().BoolVar(&resumeMigrate, "migrate", false, "When the agent has no session here, migrate the other agent's most recent one without prompting")
 	addAgentFlag(cmd)
+	addStackFlag(cmd)
 }
 
 // runReviewResume handles `zen review resume <pr-number>`.
