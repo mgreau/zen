@@ -16,6 +16,7 @@ func TestNewTerminal(t *testing.T) {
 		{"kitty", "kitty", "kitty", false},
 		{"macos", "macos", "Terminal", false},
 		{"tmux", "tmux", "tmux", false},
+		{"agent-deck", "agent-deck", "agent-deck", false},
 		{"empty is invalid", "", "", true},
 		{"invalid terminal", "invalid", "", true},
 	}
