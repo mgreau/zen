@@ -52,7 +52,12 @@ func TestRepoLockSerializesHolders(t *testing.T) {
 }
 
 func TestRepoLockPathIsSharedThroughSymlinks(t *testing.T) {
-	root := t.TempDir()
+	// repoLockPath resolves symlinks, and the temp dir may itself sit behind
+	// one (macOS /var is /private/var), so expect the resolved root.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	repo := filepath.Join(root, "repo")
 	if err := os.Mkdir(repo, 0o755); err != nil {
 		t.Fatal(err)
