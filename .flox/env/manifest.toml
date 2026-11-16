@@ -9,11 +9,12 @@ schema-version = "1.14.0"
 # GOPATH and module cache live in $FLOX_ENV_CACHE so they stay per-project.
 
 [install]
-# go.mod pins `go 1.25.7`; catalog max on go_1_25 is newer, but 1.25.7 is the
-# exact language/toolchain line and is built for all four systems (latest
-# go_1_25@1.25.13 is missing x86_64-darwin).
-go.pkg-path = "go_1_25"
-go.version = "1.25.7"
+# go_1_25 was removed from nixpkgs (Go 1.25 is end-of-life), so this tracks
+# go_1_26, the oldest supported line. go.mod still says `go 1.25.7` (the minimum
+# language version); a 1.26 toolchain builds it. 1.26.4 is the newest go_1_26
+# built for all four systems (go_1_26@1.26.5+ is missing x86_64-darwin).
+go.pkg-path = "go_1_26"
+go.version = "1.26.4"
 
 # Documented build path is `make build` (Makefile).
 gnumake.pkg-path = "gnumake"
@@ -37,3 +38,8 @@ mkdir -p "$GOPATH" "$GOCACHE" "$GOMODCACHE"
 [profile]
 bash = 'export GOPATH="$FLOX_ENV_CACHE/go"; export PATH="$GOPATH/bin:$PATH"'
 zsh = 'export GOPATH="$FLOX_ENV_CACHE/go"; export PATH="$GOPATH/bin:$PATH"'
+
+[options]
+# Listed explicitly: without it, re-locking dropped x86_64-darwin from the
+# lock instead of resolving it.
+systems = ["aarch64-darwin", "aarch64-linux", "x86_64-darwin", "x86_64-linux"]
