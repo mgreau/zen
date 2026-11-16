@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/mgreau/zen/internal/agent"
+	"github.com/mgreau/zen/internal/config"
+	"github.com/mgreau/zen/internal/gitrepo"
 	"github.com/mgreau/zen/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -13,6 +15,38 @@ import (
 // homeDir returns the user's home directory.
 func homeDir() string {
 	return os.Getenv("HOME")
+}
+
+// offerRegisterRepo interactively offers to add a detected clone to the
+// config on first use. On acceptance it persists the entry and updates the
+// in-memory cfg so the current command can proceed. Returns true if the
+// repo was registered.
+func offerRegisterRepo(info gitrepo.Info) bool {
+	if !ui.Interactive() {
+		return false
+	}
+	// Already registered under some short name — nothing to offer.
+	for _, r := range cfg.Repos {
+		if r.FullName == info.FullName {
+			return false
+		}
+	}
+
+	home := homeDir()
+	fmt.Printf("%s is not registered with zen yet.\n", info.FullName)
+	if !ui.ConfirmYesDefault(fmt.Sprintf("Register it as %q (worktrees in %s)? [Y/n]: ",
+		info.Short, ui.ShortenHome(info.BasePath, home))) {
+		return false
+	}
+
+	rc := config.RepoConfig{FullName: info.FullName, BasePath: info.BasePath}
+	if _, err := config.AddRepo(info.Short, rc); err != nil {
+		ui.LogWarn(fmt.Sprintf("could not register repo: %v", err))
+		return false
+	}
+	cfg.Repos[info.Short] = rc
+	ui.LogSuccess(fmt.Sprintf("Registered %q → %s", info.Short, info.FullName))
+	return true
 }
 
 // agentFlag is the optional --agent override shared by commands that launch an
