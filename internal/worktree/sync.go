@@ -130,9 +130,7 @@ func IsMissingPRRef(err error) bool {
 // to match GitHub anyway should ResetToRemotePR when the tree is clean.
 func FastForward(ctx context.Context, worktreePath string, prNumber int) error {
 	ref := RemotePRRef(prNumber)
-	cmd := exec.CommandContext(ctx, "git", "merge", "--ff-only", ref)
-	cmd.Dir = worktreePath
-	out, err := cmd.CombinedOutput()
+	out, err := runInWorktree(ctx, worktreePath, "merge", "--ff-only", ref)
 	if err != nil {
 		detail := strings.TrimSpace(string(out))
 		if detail == "" {
@@ -178,9 +176,7 @@ func UniqueCommitCount(worktreePath string, prNumber int) (int, error) {
 // reflog as pr-N@{1}.
 func ResetToRemotePR(ctx context.Context, worktreePath string, prNumber int) error {
 	ref := RemotePRRef(prNumber)
-	cmd := exec.CommandContext(ctx, "git", "reset", "--hard", ref)
-	cmd.Dir = worktreePath
-	out, err := cmd.CombinedOutput()
+	out, err := runInWorktree(ctx, worktreePath, "reset", "--hard", ref)
 	if err != nil {
 		detail := strings.TrimSpace(string(out))
 		if ctx.Err() == context.DeadlineExceeded {
@@ -189,4 +185,20 @@ func ResetToRemotePR(ctx context.Context, worktreePath string, prNumber int) err
 		return fmt.Errorf("git reset --hard %s: %w: %s", ref, err, detail)
 	}
 	return nil
+}
+
+// runInWorktree runs a git command that writes the index in worktreePath. If
+// it fails on an index.lock that a crashed git left behind, the lock is
+// removed and the command is retried once; a fresh lock is left to its owner.
+func runInWorktree(ctx context.Context, worktreePath string, args ...string) ([]byte, error) {
+	run := func() ([]byte, error) {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = worktreePath
+		return cmd.CombinedOutput()
+	}
+	out, err := run()
+	if err != nil && ctx.Err() == nil && recoverIndexLock(worktreePath, string(out)) {
+		return run()
+	}
+	return out, err
 }

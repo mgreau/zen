@@ -98,8 +98,8 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 
 	log(fmt.Sprintf("Creating worktree %s...", worktreeName))
 	gitCtx, cancel = context.WithTimeout(ctx, gitTimeout)
-	// Use --no-checkout + separate checkout to avoid "Could not write new index file"
-	// on large repos (13K+ files). The two-step approach handles the index write reliably.
+	// Add with --no-checkout and check out separately, so a failed checkout is
+	// reported on its own and the partial worktree is cleaned up.
 	wtCmd := exec.CommandContext(gitCtx, "git", "worktree", "add", "--no-checkout", worktreePath, branchName)
 	wtCmd.Dir = originPath
 	if out, err := wtCmd.CombinedOutput(); err != nil {
@@ -126,10 +126,6 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 		return nil, fmt.Errorf("git checkout in worktree: %w: %s", err, string(out))
 	}
 	cancel()
-
-	// Clean stale index.lock (only if holding process is dead)
-	lockFile := filepath.Join(originPath, ".git", "worktrees", worktreeName, "index.lock")
-	wt.RemoveStaleLock(lockFile, worktreeName)
 
 	wt.GitMu.Unlock()
 
