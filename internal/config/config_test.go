@@ -180,24 +180,30 @@ func TestLoadDefaults(t *testing.T) {
 }
 
 func TestLoadTerminal(t *testing.T) {
+	const insideTmux = "/tmp/tmux-1000/default,1234,0"
 	tests := []struct {
 		name     string
 		terminal string
+		tmuxEnv  string
 		want     string
 		wantErr  bool
 	}{
-		{"default is iterm", "", "iterm", false},
-		{"iterm", "iterm", "iterm", false},
-		{"ghostty", "ghostty", "ghostty", false},
-		{"kitty", "kitty", "kitty", false},
-		{"macos", "macos", "macos", false},
-		{"invalid", "konsole", "", true},
+		{"default is iterm", "", "", "iterm", false},
+		{"default inside tmux is tmux", "", insideTmux, "tmux", false},
+		{"explicit terminal wins inside tmux", "iterm", insideTmux, "iterm", false},
+		{"iterm", "iterm", "", "iterm", false},
+		{"ghostty", "ghostty", "", "ghostty", false},
+		{"kitty", "kitty", "", "kitty", false},
+		{"macos", "macos", "", "macos", false},
+		{"tmux", "tmux", "", "tmux", false},
+		{"invalid", "konsole", "", "", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			t.Setenv("HOME", tmpDir)
+			t.Setenv("TMUX", tt.tmuxEnv)
 
 			zenDir := filepath.Join(tmpDir, ".zen")
 			os.MkdirAll(zenDir, 0o755)

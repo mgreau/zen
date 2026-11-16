@@ -230,10 +230,12 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid agent %q: must be \"claude\" or \"codex\"", cfg.Agent)
 	}
 	if cfg.Terminal == "" {
-		cfg.Terminal = "iterm" // default to iTerm for backward compatibility
+		cfg.Terminal = defaultTerminal()
 	}
-	if cfg.Terminal != "iterm" && cfg.Terminal != "ghostty" && cfg.Terminal != "kitty" && cfg.Terminal != "macos" {
-		return nil, fmt.Errorf("invalid terminal type %q: must be \"iterm\", \"ghostty\", \"kitty\", or \"macos\"", cfg.Terminal)
+	switch cfg.Terminal {
+	case "iterm", "ghostty", "kitty", "macos", "tmux":
+	default:
+		return nil, fmt.Errorf("invalid terminal type %q: must be \"iterm\", \"ghostty\", \"kitty\", \"macos\", or \"tmux\"", cfg.Terminal)
 	}
 	if cfg.Repos == nil {
 		cfg.Repos = make(map[string]RepoConfig)
@@ -246,6 +248,16 @@ func Load() (*Config, error) {
 // GetTerminal returns the configured terminal type.
 func (c *Config) GetTerminal() string {
 	return c.Terminal
+}
+
+// defaultTerminal is the terminal used when the config names none: tmux when
+// zen runs inside a tmux session, such as on a workstation reached over ssh
+// with no terminal application to drive, and iTerm otherwise, as before.
+func defaultTerminal() string {
+	if os.Getenv("TMUX") != "" {
+		return "tmux"
+	}
+	return "iterm"
 }
 
 // AgentKind returns the effective agent kind. A non-empty override (e.g. from

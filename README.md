@@ -275,10 +275,10 @@ zen context inject <path> --pr 42 --repo app
 
 | Requirement | Why |
 |-------------|-----|
-| **macOS or Linux** | On macOS, iTerm2/Ghostty/Terminal.app tab management and notifications use AppleScript; on Linux, use kitty for tabs and `notify-send` (libnotify) for notifications |
+| **macOS or Linux** | On macOS, iTerm2/Ghostty/Terminal.app tab management and notifications use AppleScript; on Linux, use kitty or tmux for sessions and `notify-send` (libnotify) for notifications |
 | **Git** | Worktree creation, fetching PR branches, cleanup |
 | **[GitHub CLI](https://cli.github.com/) (`gh`)** | Authentication and GitHub API access — must be logged in (`gh auth login`) |
-| **[iTerm2](https://iterm2.com/)**, **[Ghostty](https://ghostty.io/)**, **[kitty](https://sw.kovidgoyal.net/kitty/)**, or **Terminal.app** | Opens review/work sessions in new tabs (iTerm2/Ghostty/Terminal.app) or OS windows (kitty). Set `terminal: macos` for the built-in macOS Terminal. Ghostty and Terminal.app need accessibility permissions for tab creation and fall back to new windows otherwise (see [docs/configuration.md](docs/configuration.md#terminal)) |
+| **[iTerm2](https://iterm2.com/)**, **[Ghostty](https://ghostty.io/)**, **[kitty](https://sw.kovidgoyal.net/kitty/)**, **Terminal.app**, or **[tmux](https://github.com/tmux/tmux)** | Opens review/work sessions in new tabs (iTerm2/Ghostty/Terminal.app), OS windows (kitty) or tmux windows (tmux, the default inside a tmux session, for example on a remote workstation). Set `terminal: macos` for the built-in macOS Terminal. Ghostty and Terminal.app need accessibility permissions for tab creation and fall back to new windows otherwise (see [docs/configuration.md](docs/configuration.md#terminal)) |
 | **[Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`) or [Codex](https://developers.openai.com/codex/cli) (`codex`)** | AI-assisted PR reviews and coding sessions — pick one with `agent:` in config (see [Configuration](#configuration)) |
 | **Go 1.27+** | Building from source — or `flox activate` for a pinned toolchain (see [Building](#building)) |
 | **[Flox](https://flox.dev)** (optional) | Reproducible local env: `flox activate` then `make build`, or `flox build zen` for a hermetic binary |

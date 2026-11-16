@@ -7,6 +7,7 @@ import (
 	"github.com/mgreau/zen/internal/iterm"
 	"github.com/mgreau/zen/internal/kitty"
 	"github.com/mgreau/zen/internal/macos"
+	"github.com/mgreau/zen/internal/tmux"
 )
 
 // Terminal represents a terminal emulator that can open tabs/windows.
@@ -29,6 +30,8 @@ func NewTerminal(terminalType string) (Terminal, error) {
 		return &KittyTerminal{}, nil
 	case "macos":
 		return &MacOSTerminal{}, nil
+	case "tmux":
+		return &TmuxTerminal{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported terminal type: %s", terminalType)
 	}
@@ -76,4 +79,15 @@ func (t *MacOSTerminal) Name() string {
 
 func (t *MacOSTerminal) OpenTab(workDir, command string) error {
 	return macos.OpenTab(workDir, command)
+}
+
+// TmuxTerminal opens each session as a new window in the current tmux session.
+type TmuxTerminal struct{}
+
+func (t *TmuxTerminal) Name() string {
+	return "tmux"
+}
+
+func (t *TmuxTerminal) OpenTab(workDir, command string) error {
+	return tmux.OpenWindow(workDir, command)
 }
