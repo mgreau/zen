@@ -13,9 +13,15 @@ import (
 //
 // Adds the worktree with --no-checkout and checks it out as a separate step,
 // so a failed checkout is reported on its own and the partial worktree is
-// cleaned up. Serializes on GitMu to prevent concurrent index.lock conflicts
-// across worktree operations on the same origin repo.
+// cleaned up. Serializes on RepoLock and GitMu to prevent concurrent
+// index.lock conflicts across worktree operations on the same origin repo,
+// in this process or another.
 func CreateFromMain(originPath, worktreePath, worktreeName, branch string) error {
+	repoLock, err := AcquireRepoLock(originPath)
+	if err != nil {
+		return err
+	}
+	defer repoLock.Release()
 	GitMu.Lock()
 	defer GitMu.Unlock()
 
@@ -54,9 +60,15 @@ func CreateFromMain(originPath, worktreePath, worktreeName, branch string) error
 //
 // Adds the worktree with --no-checkout and checks it out as a separate step,
 // so a failed checkout is reported on its own and the partial worktree is
-// cleaned up. Serializes on GitMu to prevent concurrent index.lock conflicts
-// across worktree operations on the same origin repo.
+// cleaned up. Serializes on RepoLock and GitMu to prevent concurrent
+// index.lock conflicts across worktree operations on the same origin repo,
+// in this process or another.
 func CreateFromPR(originPath, worktreePath, worktreeName string, prNumber int) error {
+	repoLock, err := AcquireRepoLock(originPath)
+	if err != nil {
+		return err
+	}
+	defer repoLock.Release()
 	GitMu.Lock()
 	defer GitMu.Unlock()
 

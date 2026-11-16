@@ -127,6 +127,11 @@ func SyncExisting(ctx context.Context, originPath, worktreePath string, prNumber
 		}
 	}
 
+	repoLock, err := wt.AcquireRepoLock(originPath)
+	if err != nil {
+		return SyncUpToDate, err
+	}
+	defer repoLock.Release()
 	wt.GitMu.Lock()
 	defer wt.GitMu.Unlock()
 
