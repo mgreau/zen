@@ -36,7 +36,7 @@ agent: claude
 claude_bin: claude   # executable used when agent: claude
 codex_bin: codex     # executable used when agent: codex
 
-terminal: iterm  # or "ghostty", "kitty", or "macos"
+terminal: iterm  # or "ghostty", "kitty", "macos", or "tmux"; unset means tmux inside tmux, else iterm
 
 # Prefix for feature branches created by `zen work new`.
 # If unset, falls back to `git config user.name` (spaces → hyphens), then no prefix.
@@ -136,7 +136,9 @@ Note that the background daemon always uses the **configured** agent: if you run
 
 ## Terminal
 
-`terminal: iterm` (default), `terminal: ghostty`, `terminal: kitty`, or `terminal: macos`.
+`terminal: iterm`, `terminal: ghostty`, `terminal: kitty`, `terminal: macos`, or
+`terminal: tmux`. When `terminal` is unset, zen uses `tmux` if it runs inside a
+tmux session (`$TMUX` is set) and `iterm` otherwise.
 
 For Ghostty tab creation on macOS:
 
@@ -155,6 +157,13 @@ kitty instance; otherwise zen starts a separate kitty instance per session.
 `terminal: macos` uses the built-in macOS Terminal.app. If Terminal already has
 a window, zen opens a new tab via Cmd+T (needs Accessibility, same as Ghostty);
 if none exist, or tab creation fails, it opens a new window. macOS-only.
+
+`terminal: tmux` opens each session as a new window in the tmux session zen
+runs in, named after the worktree directory. It suits a remote host reached
+over ssh, such as a cloud workstation, where there is no terminal application
+to drive. The command runs through your login shell (`$SHELL -l -c`), and the
+window keeps a shell in the worktree when the agent exits. Outside tmux, zen
+reports an error; use `--no-terminal` there instead.
 
 ## Slack task watcher
 
