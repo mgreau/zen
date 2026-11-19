@@ -14,6 +14,7 @@ import (
 	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/config"
 	ghpkg "github.com/mgreau/zen/internal/github"
+	wt "github.com/mgreau/zen/internal/worktree"
 )
 
 func TestCleanupReconcile_InvalidKey(t *testing.T) {
@@ -234,5 +235,71 @@ func runCleanupGit(t *testing.T, directory string, args ...string) {
 	cmd.Dir = directory
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+}
+
+// mixedLayoutFixture creates <base>/testrepo and a merged review worktree
+// for PR 42 at the path built by place, then returns a reconciler whose
+// configured layout is the *other* one. It is the state of a user mid-transition.
+func mixedLayoutFixture(t *testing.T, layout string, place func(basePath, originPath string) string) (worktreePath string, rec *CleanupReconciler) {
+	t.Helper()
+	basePath, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	originPath := filepath.Join(basePath, "testrepo")
+	initCleanupRepo(t, basePath, originPath)
+	worktreePath = place(basePath, originPath)
+	runCleanupGit(t, originPath, "worktree", "add", "-b", "pr-42", worktreePath)
+
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = worktreePath
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD: %v", err)
+	}
+
+	cfg := &config.Config{
+		WorktreeLayout: layout,
+		Repos: map[string]config.RepoConfig{
+			"testrepo": {FullName: "test/testrepo", BasePath: basePath},
+		},
+	}
+	rec = NewCleanupReconciler(cfg)
+	rec.prMergeInfo = mergedInfo(strings.TrimSpace(string(out)), 2*time.Hour)
+	return worktreePath, rec
+}
+
+// A user mid-transition has worktrees in the old layout and nested in the
+// config. Cleanup must remove them where they actually are.
+//
+// This is the failure that would otherwise be silent: computing the path
+// from the layout alone yields a nested path that does not exist, the
+// reconciler's os.Stat takes its "already removed" branch, and the queue
+// reports success while the sibling worktree stays on disk forever.
+func TestCleanupReconcile_SiblingWorktreeUnderNestedLayout(t *testing.T) {
+	siblingPath, rec := mixedLayoutFixture(t, config.LayoutNested, func(basePath, _ string) string {
+		return filepath.Join(basePath, "testrepo-pr-42")
+	})
+
+	if err := rec.Reconcile(context.Background(), "testrepo:42", workqueue.Options{}); err != nil {
+		t.Fatalf("Reconcile() error: %v", err)
+	}
+	if _, err := os.Stat(siblingPath); !os.IsNotExist(err) {
+		t.Errorf("sibling worktree still on disk at %s -- cleanup reported success without removing it", siblingPath)
+	}
+}
+
+// The mirror: a nested worktree with the layout rolled back to sibling.
+func TestCleanupReconcile_NestedWorktreeUnderSiblingLayout(t *testing.T) {
+	nestedPath, rec := mixedLayoutFixture(t, config.LayoutSibling, func(_, originPath string) string {
+		return filepath.Join(originPath, wt.NestedDir, "testrepo-pr-42")
+	})
+
+	if err := rec.Reconcile(context.Background(), "testrepo:42", workqueue.Options{}); err != nil {
+		t.Fatalf("Reconcile() error: %v", err)
+	}
+	if _, err := os.Stat(nestedPath); !os.IsNotExist(err) {
+		t.Errorf("nested worktree still on disk at %s", nestedPath)
 	}
 }

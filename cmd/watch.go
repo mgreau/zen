@@ -488,16 +488,9 @@ func pollOnce(ctx context.Context, st *reconciler.PollMemory, queue workqueue.In
 			// inbox. SHA refresh still runs.
 			st.NotifiedNew[key] = true
 		}
-		basePath := cfg.RepoBasePath(short)
-		worktreePath := wt.PRPath(basePath, short, pr.Number)
-		exists := false
-		head := ""
-		if _, err := os.Stat(worktreePath); err == nil {
-			exists = true
-			if h, herr := wt.HEAD(worktreePath); herr == nil {
-				head = h
-				st.AppliedSHAs[key] = h
-			}
+		exists, head := reviewWorktreeHEAD(cfg, short, pr.Number)
+		if head != "" {
+			st.AppliedSHAs[key] = head
 		}
 
 		if reconciler.ShouldNotifyNew(st.NotifiedNew[key], exists) {
@@ -538,6 +531,24 @@ func pollOnce(ctx context.Context, st *reconciler.PollMemory, queue workqueue.In
 
 	st.LegacySeen = false
 	saveState(st, kept)
+}
+
+// reviewWorktreeHEAD reports whether repo's review worktree for prNumber
+// exists and, when git can read it, the commit it has checked out. The
+// worktree is located through wt.Resolve, so it is found under either
+// worktree_layout, not only where the current setting would create it.
+func reviewWorktreeHEAD(c *config.Config, repo string, prNumber int) (exists bool, head string) {
+	worktreePath := wt.Resolve(c, repo, wt.PRName(repo, prNumber))
+	if worktreePath == "" {
+		return false, ""
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		return false, ""
+	}
+	if h, err := wt.HEAD(worktreePath); err == nil {
+		head = h
+	}
+	return true, head
 }
 
 func shortSHA(sha string) string {

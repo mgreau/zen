@@ -56,7 +56,7 @@ func (r *CleanupReconciler) Reconcile(ctx context.Context, key string, _ workque
 		)
 	}
 
-	worktreePath := wt.PRPath(basePath, repo, prNumber)
+	worktreePath := wt.Resolve(r.cfg, repo, wt.PRName(repo, prNumber))
 	originPath := filepath.Join(basePath, repo)
 	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 		return nil // already removed
