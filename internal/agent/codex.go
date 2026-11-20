@@ -175,10 +175,9 @@ func (a *codexAgent) FindSessions(worktreePath string) ([]session.Session, error
 	// Rollouts record the cwd as Codex saw it, which may be a symlinked form
 	// of the worktree path (e.g. /tmp vs /private/tmp on macOS); compare
 	// against the resolved path too.
-	resolvedWT := worktreePath
-	if r, err := filepath.EvalSymlinks(worktreePath); err == nil {
-		resolvedWT = r
-	}
+	// ResolvePath also handles a worktree that was just removed, which
+	// delete cleans up after.
+	resolvedWT := session.ResolvePath(worktreePath)
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
