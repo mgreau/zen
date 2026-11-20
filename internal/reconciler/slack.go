@@ -167,14 +167,15 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 		}
 	}
 
-	ag := r.cfg.NewAgent("")
-	launchCmd := ag.StartCommand(renderSlackPrompt(permalink, messages), "")
 	term, err := terminal.NewTerminal(r.cfg.GetTerminal())
 	if err != nil {
 		return fmt.Errorf("resolving terminal: %w", err)
 	}
-	if err := term.OpenTab(worktreePath, launchCmd); err != nil {
-		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
+	ag := terminal.AgentFor(term, r.cfg.NewAgent(""), r.cfg.Notify)
+	launchCmd := ag.StartCommand(renderSlackPrompt(permalink, messages), "")
+	outcome, err := terminal.OpenInBackground(term, worktreePath, launchCmd)
+	if err != nil {
+		return fmt.Errorf("opening %s %s: %w", term.Name(), term.Unit(), err)
 	}
 
 	if err := RecordSlackOrigin(SlackOrigin{
@@ -189,6 +190,16 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 		logf("Warning: failed to record Slack origin for %s: %v", key, err)
 	}
 
+	if outcome == terminal.AlreadyRunning {
+		// The prompt did not run, and must not be retried. The worktree is
+		// named after this message, and each message is queued once (the
+		// daemon persists the keys it has seen), so a busy window is this
+		// task's own agent from an earlier attempt. Retrying would run the
+		// same request twice once that agent finishes.
+		logf("Slack task not started again for %s: an agent already runs in its %s %s (worktree: %s)",
+			key, term.Name(), term.Unit(), worktreePath)
+		return nil
+	}
 	logf("Slack task started for %s (worktree: %s)", key, worktreePath)
 	return nil
 }

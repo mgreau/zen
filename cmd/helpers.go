@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/mgreau/zen/internal/agent"
+	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -54,4 +55,25 @@ func ensureReviewPrompt(ag agent.Agent) {
 	if installed {
 		ui.LogInfo(fmt.Sprintf("Installed /review-pr prompt for %s", ag.Kind()))
 	}
+}
+
+// openTab runs the agent command for workDir in terminal t and reports what
+// happened: a new tab, the worktree's existing tab reused, or a switch to the
+// tab where the agent already runs, in which case the command did not run.
+//
+// build makes the command from an agent. openTab passes it ag set up for t
+// (see terminal.AgentFor); printing build(ag) instead gives the plain command
+// for the user to run themselves.
+func openTab(t terminal.Terminal, workDir string, ag agent.Agent, build func(agent.Agent) string) error {
+	outcome, err := t.OpenTab(workDir, build(terminal.AgentFor(t, ag, cfg.Notify)))
+	if err != nil {
+		return fmt.Errorf("opening %s %s: %w", t.Name(), t.Unit(), err)
+	}
+	msg := terminal.Describe(t, outcome)
+	if outcome == terminal.AlreadyRunning {
+		ui.LogWarn(msg)
+	} else {
+		ui.LogSuccess(msg)
+	}
+	return nil
 }

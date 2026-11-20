@@ -12,14 +12,23 @@ import (
 // parsing delegate to the internal/session package, which implements Claude's
 // per-project ~/.claude/projects/<encoded-path>/*.jsonl layout.
 type claudeAgent struct {
-	bin string
+	bin      string
+	settings string // extra settings JSON for --settings; empty for none
 }
 
 func (a *claudeAgent) Kind() Kind  { return Claude }
 func (a *claudeAgent) Bin() string { return a.bin }
 
+// command returns the claude invocation every command starts with.
+func (a *claudeAgent) command() string {
+	if a.settings == "" {
+		return a.bin
+	}
+	return a.bin + " --settings " + shellQuote(a.settings)
+}
+
 func (a *claudeAgent) StartCommand(prompt, model string) string {
-	cmd := a.bin
+	cmd := a.command()
 	if model != "" {
 		cmd += " --model " + shellQuote(model)
 	}
@@ -30,7 +39,7 @@ func (a *claudeAgent) StartCommand(prompt, model string) string {
 }
 
 func (a *claudeAgent) ResumeCommand(sessionID, model string) string {
-	cmd := a.bin
+	cmd := a.command()
 	if model != "" {
 		cmd += " --model " + shellQuote(model)
 	}
