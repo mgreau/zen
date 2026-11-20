@@ -243,8 +243,20 @@ func ParseStrict(data []byte) (*Config, error) {
 	cfg := &Config{}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
-	if err := dec.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
+	err := dec.Decode(cfg)
+	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
+	}
+	if err == nil {
+		// Load reads only the first document, so a second one would be
+		// installed without ever being checked or used.
+		var extra yaml.Node
+		if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+			if err != nil {
+				return nil, err
+			}
+			return nil, errors.New("config holds more than one YAML document (---); zen reads only the first")
+		}
 	}
 	return finish(cfg)
 }
@@ -299,17 +311,34 @@ func (c *Config) ValidateRepos() error {
 		return fmt.Errorf("no repos configured")
 	}
 	for _, name := range c.sortedRepoNames() {
-		if !repoShortName.MatchString(name) {
-			return fmt.Errorf("repo short name %q must be letters, digits, '.', '_' or '-', starting with a letter or digit", name)
+		if err := ValidateRepoShortName(name); err != nil {
+			return err
 		}
 		repo := c.Repos[name]
-		owner, rest, ok := strings.Cut(repo.FullName, "/")
-		if !ok || owner == "" || rest == "" || strings.Contains(rest, "/") {
-			return fmt.Errorf("repo %q: full_name %q must be owner/name", name, repo.FullName)
+		if err := ValidateRepoFullName(repo.FullName); err != nil {
+			return fmt.Errorf("repo %q: %w", name, err)
 		}
 		if strings.TrimSpace(repo.BasePath) == "" {
 			return fmt.Errorf("repo %q: base_path is required", name)
 		}
+	}
+	return nil
+}
+
+// ValidateRepoShortName reports a repo short name that cannot name a worktree
+// directory.
+func ValidateRepoShortName(name string) error {
+	if !repoShortName.MatchString(name) {
+		return fmt.Errorf("repo short name %q must be letters, digits, '.', '_' or '-', starting with a letter or digit", name)
+	}
+	return nil
+}
+
+// ValidateRepoFullName reports a full_name that is not owner/name.
+func ValidateRepoFullName(full string) error {
+	owner, rest, ok := strings.Cut(full, "/")
+	if !ok || owner == "" || rest == "" || strings.Contains(rest, "/") {
+		return fmt.Errorf("full_name %q must be owner/name", full)
 	}
 	return nil
 }

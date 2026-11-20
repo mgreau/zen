@@ -102,11 +102,11 @@ func runUnattendedSetup(opts setupOptions, stdin io.Reader, out io.Writer) error
 		return err
 	}
 
+	if err := validateSetupConfig(data); err != nil {
+		return err
+	}
 	parsed, err := config.ParseStrict(data)
 	if err != nil {
-		return fmt.Errorf("invalid config: %w", err)
-	}
-	if err := parsed.ValidateRepos(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
@@ -133,6 +133,20 @@ func runUnattendedSetup(opts setupOptions, stdin io.Reader, out io.Writer) error
 		return err
 	}
 	fmt.Fprintf(out, "Installed %d new %s prompt(s) in %s\n", installed, ag.Kind(), ag.PromptsDir())
+	return nil
+}
+
+// validateSetupConfig is the check every config setup writes must pass: a
+// strict parse (unknown keys and extra documents fail, agent and terminal are
+// checked as Load checks them) plus the repo rules in Config.ValidateRepos.
+func validateSetupConfig(data []byte) error {
+	parsed, err := config.ParseStrict(data)
+	if err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+	if err := parsed.ValidateRepos(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
 	return nil
 }
 
@@ -248,11 +262,15 @@ func newSetupConfig(repos map[string]config.RepoConfig, authors []string, agentK
 // when force is set. The write goes through a temporary file and a rename so
 // a running daemon, which reloads config on every poll, never reads half a
 // file. A symlinked config (stow, chezmoi, home-manager) is written through
-// to its target so the link survives, and a replaced file keeps its mode.
+// to its target, even one that does not exist yet, so the link survives, and
+// a replaced file keeps its mode.
 func writeConfig(path string, data []byte, force bool) (wrote bool, err error) {
-	target := path
+	target, err := resolveSymlinks(path)
+	if err != nil {
+		return false, fmt.Errorf("resolving %s: %w", path, err)
+	}
 	mode := fs.FileMode(0o644)
-	existing, err := os.ReadFile(path)
+	existing, err := os.ReadFile(target)
 	switch {
 	case err == nil:
 		if bytes.Equal(existing, data) {
@@ -260,9 +278,6 @@ func writeConfig(path string, data []byte, force bool) (wrote bool, err error) {
 		}
 		if !force {
 			return false, fmt.Errorf("%s already exists with different content; pass --force to overwrite it", path)
-		}
-		if target, err = filepath.EvalSymlinks(path); err != nil {
-			return false, fmt.Errorf("resolving %s: %w", path, err)
 		}
 		if info, err := os.Stat(target); err == nil {
 			mode = info.Mode().Perm()
@@ -278,6 +293,41 @@ func writeConfig(path string, data []byte, force bool) (wrote bool, err error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// resolveSymlinks follows path through any chain of symlinks to the file it
+// names. Unlike filepath.EvalSymlinks it succeeds when the final target does
+// not exist yet (a dotfiles link created before its source), returning where
+// that target would be.
+func resolveSymlinks(path string) (string, error) {
+	p := path
+	for range 40 {
+		info, err := os.Lstat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return p, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&fs.ModeSymlink == 0 {
+			return p, nil
+		}
+		link, err := os.Readlink(p)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(link) {
+			// Resolve the link's own directory first so ".." in a relative
+			// link means what it means to the kernel.
+			dir, err := filepath.EvalSymlinks(filepath.Dir(p))
+			if err != nil {
+				return "", err
+			}
+			link = filepath.Join(dir, link)
+		}
+		p = link
+	}
+	return "", fmt.Errorf("too many levels of symbolic links")
 }
 
 // replaceFile atomically replaces path with data: it writes a temporary file
@@ -300,11 +350,23 @@ func replaceFile(path string, data []byte, mode fs.FileMode) error {
 		tmp.Close()
 		return fmt.Errorf("writing config: %w", err)
 	}
+	// Flush before the rename, or a crash right after provisioning can leave
+	// an empty config.yaml on some filesystems.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("writing config: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return fmt.Errorf("writing config: %w", err)
+	}
+	// Persist the rename too. Best effort: not every platform can sync a
+	// directory, and the file itself is already on disk.
+	if d, err := os.Open(dir); err == nil {
+		d.Sync()
+		d.Close()
 	}
 	return nil
 }
@@ -351,11 +413,11 @@ func runInteractiveSetup(opts setupOptions) error {
 		fmt.Println(ui.BoldText(fmt.Sprintf("Repository %d", len(repoMap)+1)))
 		fmt.Println("───────────────────────────────────────────────────────────────")
 
-		shortName, err := prompt(scanner, "Short name (e.g. apko)", "apko")
+		shortName, err := promptValid(scanner, "Short name (e.g. apko)", "apko", config.ValidateRepoShortName)
 		if err != nil {
 			return err
 		}
-		fullName, err := promptRequired(scanner, "GitHub full name (e.g. chainguard-dev/apko)")
+		fullName, err := promptValid(scanner, "GitHub full name (e.g. chainguard-dev/apko)", "", config.ValidateRepoFullName)
 		if err != nil {
 			return err
 		}
@@ -420,6 +482,11 @@ func runInteractiveSetup(opts setupOptions) error {
 	if err != nil {
 		return fmt.Errorf("marshalling config: %w", err)
 	}
+	// Answers are checked as they are given; this applies the same final check
+	// as an unattended install so the two can never write different things.
+	if err := validateSetupConfig(data); err != nil {
+		return err
+	}
 	// The user already confirmed overwriting an existing config above.
 	if _, err := writeConfig(configPath, data, true); err != nil {
 		return err
@@ -482,16 +549,37 @@ func prompt(scanner *bufio.Scanner, label, defaultVal string) (string, error) {
 
 // promptRequired asks for input and repeats until a non-empty value is given.
 func promptRequired(scanner *bufio.Scanner, label string) (string, error) {
+	return promptValid(scanner, label, "", nil)
+}
+
+// promptValid asks for input until validate accepts it, printing why it did
+// not. An empty answer takes defaultVal; with no default, an answer is
+// required. A nil validate accepts any non-empty answer.
+func promptValid(scanner *bufio.Scanner, label, defaultVal string, validate func(string) error) (string, error) {
 	for {
-		fmt.Printf("%s: ", label)
+		if defaultVal != "" {
+			fmt.Printf("%s [%s]: ", label, defaultVal)
+		} else {
+			fmt.Printf("%s: ", label)
+		}
 		val, err := readLine(scanner)
 		if err != nil {
 			return "", err
 		}
-		if val != "" {
-			return val, nil
+		if val == "" {
+			val = defaultVal
 		}
-		fmt.Println("  (required)")
+		if val == "" {
+			fmt.Println("  (required)")
+			continue
+		}
+		if validate != nil {
+			if err := validate(val); err != nil {
+				fmt.Printf("  %v\n", err)
+				continue
+			}
+		}
+		return val, nil
 	}
 }
 

@@ -204,6 +204,7 @@ func TestUnattendedSetupRejectsBadInput(t *testing.T) {
 		{name: "file short name with space", opts: setupOptions{configFile: "-"}, stdin: "repos:\n  my app:\n    full_name: o/a\n    base_path: /p\n", want: "short name"},
 		{name: "file short name traversal", opts: setupOptions{configFile: "-"}, stdin: "repos:\n  ../x:\n    full_name: o/a\n    base_path: /p\n", want: "short name"},
 		{name: "flag short name like a flag", opts: setupOptions{repos: []string{"-x=o/a:/p"}}, want: "short name"},
+		{name: "file two documents", opts: setupOptions{configFile: "-"}, stdin: "repos:\n  a:\n    full_name: o/a\n    base_path: /p\n---\nauthers: [x]\n", want: "more than one YAML document"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -301,5 +302,94 @@ func TestUnattendedSetupThroughSymlink(t *testing.T) {
 	}
 	if st, err := os.Stat(target); err != nil || st.Mode().Perm() != 0o600 {
 		t.Errorf("target mode = %v, %v; want 0600 kept", st.Mode().Perm(), err)
+	}
+}
+
+func TestUnattendedSetupLeadingDocumentMarker(t *testing.T) {
+	setupTestHome(t)
+	// A single document that starts with --- is still one document.
+	data := "---\nrepos:\n  a:\n    full_name: o/a\n    base_path: /p\n"
+	opts := setupOptions{configFile: "-", skipPrompts: true}
+	if err := runUnattendedSetup(opts, strings.NewReader(data), &bytes.Buffer{}); err != nil {
+		t.Fatalf("leading ---: %v", err)
+	}
+}
+
+func TestUnattendedSetupDanglingSymlink(t *testing.T) {
+	for _, relative := range []bool{false, true} {
+		name := "absolute"
+		if relative {
+			name = "relative"
+		}
+		t.Run(name, func(t *testing.T) {
+			home := setupTestHome(t)
+			// The dotfiles link exists, but its source has not been created.
+			target := filepath.Join(home, "dotfiles", "zen", "config.yaml")
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			link := config.Path()
+			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			dest := target
+			if relative {
+				dest = filepath.Join("..", "dotfiles", "zen", "config.yaml")
+			}
+			if err := os.Symlink(dest, link); err != nil {
+				t.Fatal(err)
+			}
+
+			opts := setupOptions{repos: []string{"o/a:/p"}, skipPrompts: true}
+			if err := runUnattendedSetup(opts, nil, &bytes.Buffer{}); err != nil {
+				t.Fatalf("setup through dangling symlink: %v", err)
+			}
+			info, err := os.Lstat(link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("%s was replaced by a regular file", link)
+			}
+			if _, err := os.Stat(target); err != nil {
+				t.Fatalf("symlink target was not written: %v", err)
+			}
+			if _, err := config.Load(); err != nil {
+				t.Fatalf("config.Load through symlink: %v", err)
+			}
+		})
+	}
+}
+
+func TestResolveSymlinksLoop(t *testing.T) {
+	dir := t.TempDir()
+	a, b := filepath.Join(dir, "a"), filepath.Join(dir, "b")
+	if err := os.Symlink(b, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(a, b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveSymlinks(a); err == nil {
+		t.Fatal("resolveSymlinks on a loop succeeded, want an error")
+	}
+}
+
+func TestPromptValidReasksOnBadAnswer(t *testing.T) {
+	scanner := bufio.NewScanner(strings.NewReader("apko\nchainguard-dev/apko\n"))
+	got, err := promptValid(scanner, "GitHub full name", "", config.ValidateRepoFullName)
+	if err != nil || got != "chainguard-dev/apko" {
+		t.Fatalf("promptValid = %q, %v; want the second, valid answer", got, err)
+	}
+
+	scanner = bufio.NewScanner(strings.NewReader("my repo\n\n"))
+	got, err = promptValid(scanner, "Short name", "apko", config.ValidateRepoShortName)
+	if err != nil || got != "apko" {
+		t.Fatalf("promptValid = %q, %v; want the default after a bad answer", got, err)
+	}
+
+	scanner = bufio.NewScanner(strings.NewReader("../x\n"))
+	if _, err := promptValid(scanner, "Short name", "apko", config.ValidateRepoShortName); !errors.Is(err, errStdinClosed) {
+		t.Fatalf("promptValid with only bad answers = %v, want errStdinClosed", err)
 	}
 }
