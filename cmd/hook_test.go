@@ -65,3 +65,23 @@ func TestWorktreeFor(t *testing.T) {
 		t.Errorf("worktreeLabel outside any worktree = %q, want proj", got)
 	}
 }
+
+func TestSessionCommands(t *testing.T) {
+	off := false
+	tests := []struct {
+		name               string
+		cfg                config.Config
+		wantInbox, wantAgt string
+	}{
+		{"defaults", config.Config{Agent: "claude"}, "zen inbox", ""},
+		{"agents window", config.Config{Agent: "claude", Tmux: config.TmuxConfig{AgentsWindow: true}}, "zen inbox", "claude agents"},
+		{"codex", config.Config{Agent: "codex", Tmux: config.TmuxConfig{AgentsWindow: true}}, "zen inbox", "codex agents"},
+		{"inbox off", config.Config{Agent: "claude", Tmux: config.TmuxConfig{Inbox: &off}}, "", ""},
+	}
+	for _, tt := range tests {
+		inbox, agents := sessionCommands(&tt.cfg, "zen")
+		if inbox != tt.wantInbox || agents != tt.wantAgt {
+			t.Errorf("%s: sessionCommands = %q, %q; want %q, %q", tt.name, inbox, agents, tt.wantInbox, tt.wantAgt)
+		}
+	}
+}

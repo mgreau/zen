@@ -36,7 +36,7 @@ zen inbox                          # see what needs your attention
 ```
 
 - Alternatively, skip `mv zen ~/bin` and [install with Nix](#install-with-nix).
-- On a host you ssh into, pick `tmux` as the terminal in `zen setup`. It sets tmux up to mark the windows waiting on you and to pass zen's notifications to your Mac; `zen setup tmux` does just that part. See [Terminal](docs/configuration.md#terminal).
+- On a host you ssh into, pick `tmux` as the terminal in `zen setup`. It sets tmux up to mark the windows waiting on you, pass zen's notifications to your Mac, and start each new session with `zen inbox` (and, if you like, an Agents window); `zen setup tmux` does just the tmux part. See [Terminal](docs/configuration.md#terminal).
 
 When a PR shows up in your inbox, `zen review <number>` opens that PR in a new terminal tab with Claude pre-armed and the PR context loaded. See [Prerequisites](#prerequisites) for what to install first.
 

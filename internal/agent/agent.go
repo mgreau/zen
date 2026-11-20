@@ -46,6 +46,9 @@ type Agent interface {
 	StartCommand(prompt, model string) string
 	// ResumeCommand builds the shell command to resume a recorded session.
 	ResumeCommand(sessionID, model string) string
+	// AgentsCommand builds the shell command for the agent's view of its
+	// sessions ("claude agents", "codex agents").
+	AgentsCommand() string
 
 	// ContextFile returns the default filename the agent reads project context
 	// from inside a worktree (e.g. "CLAUDE.local.md", "AGENTS.md").

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -41,9 +42,66 @@ reported on stderr.`,
 	},
 }
 
+var hookSessionCreatedCmd = &cobra.Command{
+	Use:   "session-created <session-id>",
+	Short: "tmux session-created hook: zen inbox and the Agents window",
+	Long: `Run by the session-created hook in zen's tmux settings (zen setup tmux) for
+each new session. As config.yaml's tmux section says, it types "zen inbox"
+into the session's first window and opens an Agents window running the
+agent's view of its sessions. It never fails: problems are reported on stderr.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := runHookSessionCreated(args[0]); err != nil {
+			fmt.Fprintf(os.Stderr, "zen hook session-created: %v\n", err)
+		}
+		return nil
+	},
+}
+
 func init() {
 	hookCmd.AddCommand(hookNotifyCmd)
+	hookCmd.AddCommand(hookSessionCreatedCmd)
 	rootCmd.AddCommand(hookCmd)
+}
+
+func runHookSessionCreated(session string) error {
+	c, err := config.Load()
+	if err != nil {
+		return err // without a config, zen inbox would only print the error
+	}
+	inbox, agents := sessionCommands(c, zenCommand())
+	return tmux.SetUpSession(session, inbox, agents)
+}
+
+// sessionCommands returns the commands a new tmux session gets, as c says:
+// zen's inbox, and the agent's view of its sessions. Empty means none.
+func sessionCommands(c *config.Config, zen string) (inbox, agents string) {
+	if c.Tmux.InboxEnabled() {
+		inbox = zen + " inbox"
+	}
+	if c.Tmux.AgentsWindow {
+		agents = c.NewAgent("").AgentsCommand()
+	}
+	return inbox, agents
+}
+
+// zenCommand returns how to run this zen from a shell: "zen" when that is
+// what PATH finds, so the typed command reads naturally, else its full path.
+func zenCommand() string {
+	self, err := os.Executable()
+	if err != nil {
+		return "zen"
+	}
+	if onPath, err := exec.LookPath("zen"); err == nil && sameFile(onPath, self) {
+		return "zen"
+	}
+	return "'" + strings.ReplaceAll(self, "'", `'\''`) + "'"
+}
+
+func sameFile(a, b string) bool {
+	ia, errA := os.Stat(a)
+	ib, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(ia, ib)
 }
 
 // hookInput is the part of a Claude Code hook's input zen reads.

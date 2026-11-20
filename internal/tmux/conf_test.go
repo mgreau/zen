@@ -8,7 +8,10 @@ import (
 )
 
 func TestWithBlock(t *testing.T) {
-	block := ConfBlock()
+	block, err := ConfBlock("/home/u/.zen/tmux.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := withBlock("", block); got != block {
 		t.Errorf("empty config: %q", got)
 	}
@@ -27,28 +30,54 @@ func TestWithBlock(t *testing.T) {
 	}
 }
 
+func TestTmuxQuotable(t *testing.T) {
+	for _, ok := range []string{"/home/u/.local/bin/zen", "/opt/zen 2/zen", "/nix/store/abc-zen-1.0/bin/zen"} {
+		if err := tmuxQuotable(ok); err != nil {
+			t.Errorf("tmuxQuotable(%q) = %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"zen", "/a'b/zen", `/a"b`, "/$HOME/zen", "/a#{b}", "/a\nb", "/a\\b"} {
+		if err := tmuxQuotable(bad); err == nil {
+			t.Errorf("tmuxQuotable(%q) = nil, want an error", bad)
+		}
+	}
+	if _, err := ZenConf("/a'b/zen"); err == nil {
+		t.Error("ZenConf took a path it cannot quote")
+	}
+}
+
 func TestInstallConf(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "tmux.conf")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tmux.conf")
+	zenConf := filepath.Join(dir, "zen", "tmux.conf")
 	if err := os.WriteFile(path, []byte("set -g mouse on\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if changed, err := InstallConf(path); err != nil || !changed {
+	if changed, err := InstallConf(path, zenConf, "/usr/bin/zen"); err != nil || !changed {
 		t.Fatalf("first install = %v, %v; want changed", changed, err)
 	}
-	if changed, err := InstallConf(path); err != nil || changed {
+	if changed, err := InstallConf(path, zenConf, "/usr/bin/zen"); err != nil || changed {
 		t.Fatalf("second install = %v, %v; want unchanged", changed, err)
 	}
 	data, _ := os.ReadFile(path)
-	if !strings.HasPrefix(string(data), "set -g mouse on\n") || strings.Count(string(data), confBegin) != 1 {
-		t.Errorf("config after install:\n%s", data)
+	if !strings.HasPrefix(string(data), "set -g mouse on\n") || strings.Count(string(data), confBegin) != 1 ||
+		!strings.Contains(string(data), "source-file -q '"+zenConf+"'") {
+		t.Errorf("user config after install:\n%s", data)
 	}
 	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
 		t.Errorf("mode = %v, want 0600 kept", info.Mode().Perm())
 	}
+	settings, _ := os.ReadFile(zenConf)
+	if !strings.Contains(string(settings), `'/usr/bin/zen' hook session-created`) {
+		t.Errorf("zen settings:\n%s", settings)
+	}
 
-	created := filepath.Join(t.TempDir(), "new", "tmux.conf")
-	if changed, err := InstallConf(created); err != nil || !changed {
-		t.Errorf("install into a missing file = %v, %v", changed, err)
+	// A new zen path rewrites zen's file only.
+	if changed, err := InstallConf(path, zenConf, "/opt/zen/zen"); err != nil || !changed {
+		t.Errorf("install with a new zen path = %v, %v; want changed", changed, err)
+	}
+	if again, _ := os.ReadFile(path); string(again) != string(data) {
+		t.Error("a new zen path changed the user's config")
 	}
 }
 
@@ -70,28 +99,47 @@ func TestConfPath(t *testing.T) {
 	}
 }
 
-// The block must be valid tmux config.
-func TestConfBlockLoads(t *testing.T) {
+// What zen writes must be valid tmux config, and run its hook for each new
+// session, the first included.
+func TestConfLoads(t *testing.T) {
 	startServer(t)
-	path := filepath.Join(t.TempDir(), "tmux.conf")
-	if _, err := InstallConf(path); err != nil {
+	dir := t.TempDir()
+	rec := filepath.Join(dir, "rec")
+	fakeZen := filepath.Join(dir, "zen")
+	if err := os.WriteFile(fakeZen, []byte("#!/bin/sh\necho \"$*\" >> "+rec+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Reload(path); err != nil {
-		t.Fatalf("tmux rejected the block: %v", err)
+	path := filepath.Join(dir, "tmux.conf")
+	if _, err := InstallConf(path, filepath.Join(dir, "zen.conf"), fakeZen); err != nil {
+		t.Fatal(err)
 	}
-	out, _ := tmuxOutput(t, "show-options", "-gv", "focus-events")
-	if out != "on" {
+	// Twice: a second source must replace zen's hook, not add another.
+	for range 2 {
+		if _, err := Reload(path); err != nil {
+			t.Fatalf("tmux rejected the settings: %v", err)
+		}
+	}
+	if out, _ := tmuxOutput(t, "show-options", "-gv", "focus-events"); out != "on" {
 		t.Errorf("focus-events after reload = %q, want on", out)
 	}
+	if out, _ := tmuxOutput(t, "show-hooks", "-g", "session-created"); strings.Count(out, "hook session-created") != 1 {
+		t.Errorf("session-created hooks:\n%s\nwant zen's once", out)
+	}
+
+	tmuxCmd(t, "new-session", "-d", "-s", "later")
+	waitFor(t, "the hook", func() bool {
+		data, _ := os.ReadFile(rec)
+		return strings.HasPrefix(string(data), "hook session-created $")
+	})
 }
 
 // zen's marker goes in front of the user's own window format, once.
 func TestConfKeepsUserFormat(t *testing.T) {
 	startServer(t)
 	tmuxCmd(t, "set-option", "-g", "window-status-format", "#[fg=green]#I|#W")
-	path := filepath.Join(t.TempDir(), "tmux.conf")
-	if _, err := InstallConf(path); err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tmux.conf")
+	if _, err := InstallConf(path, filepath.Join(dir, "zen.conf"), "/usr/bin/zen"); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {

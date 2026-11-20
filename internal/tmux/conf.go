@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -9,38 +10,76 @@ import (
 	"strings"
 )
 
-// The markers around the settings zen manages in the user's tmux config.
+// zen keeps its tmux settings in a file of its own (ZenConf), which it
+// rewrites freely, and adds one line to the user's tmux config to read it,
+// between these markers.
 const (
 	confBegin = "# >>> zen >>> managed by `zen setup tmux`: edits between these lines are replaced"
 	confEnd   = "# <<< zen <<<"
 )
 
-// confSettings are the tmux settings zen's tmux support relies on.
-var confSettings = []string{
-	"# Track which terminals have focus, so zen doesn't notify you about the",
-	"# window you are looking at.",
-	"set -g focus-events on",
-	"# Mark windows whose agent is waiting on you: a reverse \"● \" in front of",
-	"# your window-status-format, as set when this block is read. -F expands",
-	"# #{window-status-format} to it now, and ## keeps zen's part for later;",
-	"# %if adds it only once.",
-	`%if "#{?#{m:*@zen-status*,#{window-status-format}},0,1}"`,
-	`set -gF window-status-format '##{?##{==:##{@zen-status},waiting},#[reverse]● #[noreverse],}#{window-status-format}'`,
-	"%endif",
-	"# prefix + W: pick from the windows waiting on you.",
-	`bind W choose-tree -Zw -f '#{==:#{@zen-status},waiting}'`,
+// sessionHookIndex is the index of zen's session-created hook. A fixed index
+// means sourcing the file again replaces the hook rather than adding another,
+// and leaves the user's own hooks, which tmux numbers from 0, alone.
+const sessionHookIndex = 100
+
+// ZenConf returns zen's tmux settings, which run zenBin from a hook.
+func ZenConf(zenBin string) (string, error) {
+	if err := tmuxQuotable(zenBin); err != nil {
+		return "", err
+	}
+	return strings.Join([]string{
+		"# Managed by `zen setup tmux`, which rewrites this file: change",
+		"# ~/.zen/config.yaml instead, or put your own settings in your tmux config.",
+		"",
+		"# Track which terminals have focus, so zen doesn't notify you about the",
+		"# window you are looking at.",
+		"set -g focus-events on",
+		"",
+		"# Mark windows whose agent is waiting on you: a reverse \"● \" in front of",
+		"# your window-status-format, as set when this file is read. -F expands",
+		"# #{window-status-format} to it now, and ## keeps zen's part for later;",
+		"# %if adds it only once.",
+		`%if "#{?#{m:*@zen-status*,#{window-status-format}},0,1}"`,
+		`set -gF window-status-format '##{?##{==:##{@zen-status},waiting},#[reverse]● #[noreverse],}#{window-status-format}'`,
+		"%endif",
+		"",
+		"# prefix + W: pick from the windows waiting on you.",
+		`bind W choose-tree -Zw -f '#{==:#{@zen-status},waiting}'`,
+		"",
+		"# Set up each new session as config.yaml's tmux section says: zen inbox in",
+		"# its first window, an Agents window.",
+		fmt.Sprintf(`set-hook -g 'session-created[%d]' { run-shell -b "'%s' hook session-created '#{session_id}'" }`, sessionHookIndex, zenBin),
+		"",
+	}, "\n"), nil
 }
 
-// ConfBlock returns the block of settings zen keeps in the tmux config.
-func ConfBlock() string {
-	return confBegin + "\n" + strings.Join(confSettings, "\n") + "\n" + confEnd + "\n"
+// ConfBlock returns the block zen keeps in the user's tmux config: a line
+// reading zen's own settings from zenConf. -q keeps tmux quiet if the file
+// goes missing, such as after zen is uninstalled.
+func ConfBlock(zenConf string) (string, error) {
+	if err := tmuxQuotable(zenConf); err != nil {
+		return "", err
+	}
+	return confBegin + "\n" + fmt.Sprintf("source-file -q '%s'", zenConf) + "\n" + confEnd + "\n", nil
+}
+
+// tmuxQuotable checks that path can go between single quotes in tmux config,
+// and between the shell's single quotes inside run-shell's double quotes:
+// tmux has no escape inside single quotes, and expands "$" and "~" inside
+// double ones.
+func tmuxQuotable(path string) error {
+	if !filepath.IsAbs(path) || strings.ContainsAny(path, "'\"$`\\\n#{}") {
+		return fmt.Errorf("%q cannot be quoted in tmux config: use a plain absolute path", path)
+	}
+	return nil
 }
 
 // ConfPath returns the tmux config file to edit: the first that exists of
 // those tmux reads, in its order (~/.tmux.conf, $XDG_CONFIG_HOME/tmux/tmux.conf,
 // ~/.config/tmux/tmux.conf), else ~/.tmux.conf. Recent tmux reads every one
 // of them that exists, and older tmux fewer, but all read the first: zen's
-// block goes where the user's settings are, and works on any version.
+// line goes where the user's settings are, and works on any version.
 func ConfPath(home string) string {
 	dot := filepath.Join(home, ".tmux.conf")
 	candidates := []string{dot}
@@ -56,17 +95,41 @@ func ConfPath(home string) string {
 	return dot
 }
 
-// InstallConf writes zen's block into the tmux config at path, creating the
-// file if needed. An existing zen block is replaced, so running it again
-// updates the settings; the rest of the file is left as it is. It reports
-// whether the file changed.
-func InstallConf(path string) (bool, error) {
+// InstallConf writes zen's settings to zenConf, then the block that reads
+// them into the user's tmux config at path, creating either file if needed.
+// An existing zen block is replaced, so running it again updates it; the
+// rest of the user's file is left as it is. It reports whether either file
+// changed.
+func InstallConf(path, zenConf, zenBin string) (bool, error) {
+	settings, err := ZenConf(zenBin)
+	if err != nil {
+		return false, err
+	}
+	block, err := ConfBlock(zenConf)
+	if err != nil {
+		return false, err
+	}
+	zenChanged, err := writeIfChanged(zenConf, settings)
+	if err != nil {
+		return false, err
+	}
 	old, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return false, err
 	}
-	updated := withBlock(string(old), ConfBlock())
-	if updated == string(old) {
+	userChanged, err := writeIfChanged(path, withBlock(string(old), block))
+	return zenChanged || userChanged, err
+}
+
+// writeIfChanged writes content to path unless it already holds it, keeping
+// the file's mode, and reports whether it wrote.
+func writeIfChanged(path, content string) (bool, error) {
+	old, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	updated := content
+	if err == nil && string(old) == updated {
 		return false, nil
 	}
 	mode := fs.FileMode(0o644)

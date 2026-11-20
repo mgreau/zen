@@ -66,6 +66,11 @@ slack:
   poll_interval: "5m"
   ack_reaction: eyes      # reaction added on pickup, default "eyes"
 
+# What each new tmux session gets, with terminal: tmux. See "New tmux sessions".
+tmux:
+  inbox: true
+  agents_window: false
+
 # Run a command for each daemon notification, e.g. to push it to your phone.
 # See "Push notifications" below.
 notify:
@@ -206,34 +211,54 @@ was started inside tmux, else the default server. If you run tmux on a custom
 socket (`tmux -L` or `-S`), start the daemon from inside that tmux, or it
 won't find the windows to update.
 
-tmux doesn't style windows by user options on its own. `zen setup tmux` adds
-the settings for that to your tmux config, and `zen setup` offers to when you
-pick tmux. It writes them between `# >>> zen >>>` and `# <<< zen <<<` lines in
-your tmux config (the first of `~/.tmux.conf`,
-`$XDG_CONFIG_HOME/tmux/tmux.conf` and `~/.config/tmux/tmux.conf` that exists,
-as tmux looks for it, else `~/.tmux.conf`), and reloads tmux when run inside
-it. Running it again updates that block and leaves the rest of the file
-alone. The block:
+tmux doesn't style windows by user options on its own: zen's tmux settings
+do that, as described in [tmux settings](#tmux-settings).
 
-```tmux
-# Track which terminals have focus, so zen doesn't notify you about the
-# window you are looking at.
-set -g focus-events on
-# Mark windows whose agent is waiting on you: a reverse "● " in front of
-# your window-status-format, as set when this block is read. -F expands
-# #{window-status-format} to it now, and ## keeps zen's part for later;
-# %if adds it only once.
-%if "#{?#{m:*@zen-status*,#{window-status-format}},0,1}"
-set -gF window-status-format '##{?##{==:##{@zen-status},waiting},#[reverse]● #[noreverse],}#{window-status-format}'
-%endif
-# prefix + W: pick from the windows waiting on you.
-bind W choose-tree -Zw -f '#{==:#{@zen-status},waiting}'
+### tmux settings
+
+`zen setup tmux` installs zen's tmux settings, and `zen setup` offers to when
+you pick tmux. They live in a file of zen's own, `~/.zen/tmux.conf`, which
+zen rewrites each time, so don't edit it. Your tmux config (the first of
+`~/.tmux.conf`, `$XDG_CONFIG_HOME/tmux/tmux.conf` and
+`~/.config/tmux/tmux.conf` that exists, as tmux looks for it, else
+`~/.tmux.conf`) gets one line that reads it, between `# >>> zen >>>` and `# <<< zen <<<` lines.
+Nothing else in your file is changed. Run inside tmux, setup reloads it.
+
+The settings:
+
+- `focus-events on`, so zen doesn't notify you about the window you're
+  looking at.
+- A reverse `● ` in front of windows whose agent is waiting on you, added
+  to the front of your own `window-status-format`, or tmux's default. zen's
+  line comes last in your config, so it sees a format your config sets
+  above it. If a theme sets the format later, put zen's marker in front of
+  it yourself: `#{?#{==:#{@zen-status},waiting},#[reverse]● ,}`.
+- `prefix + W`: a picker of just the waiting windows.
+- A `session-created` hook that sets up each new session, as below. It uses
+  hook index 100, so your own `session-created` hooks are kept.
+
+### New tmux sessions
+
+Each new tmux session gets, as `config.yaml` says:
+
+```yaml
+tmux:
+  inbox: true          # the default: zen inbox in the session's first window
+  agents_window: false # the default; true opens an Agents window too
 ```
 
-zen's marker goes in front of your own `window-status-format`, or tmux's
-default. The block comes last in your config, so it sees a format your
-config sets above it. If a theme sets the format later, put zen's marker in
-front of it yourself: `#{?#{==:#{@zen-status},waiting},#[reverse]● ,}`.
+- `inbox` types `zen inbox` into the session's first window, so you see
+  what needs you, and the window stays an ordinary prompt afterwards. It's
+  only typed into a session that is a lone shell: a session created to run a
+  program, such as `tmux new 'vim'`, is left alone.
+- `agents_window` opens a window named `Agents`, in the background, running
+  your agent's view of its sessions: `claude agents`, or `codex agents` with
+  `agent: codex`. Its shell stays open if the agent exits.
+
+The hook reads `config.yaml` each time, so a change applies to sessions
+created after it, without running setup again. Sessions that already exist,
+such as one you reattach to with `tmux new -A`, are left as they are. This
+applies to every new session on the tmux server, not only zen's.
 
 ### Desktop notifications over ssh
 

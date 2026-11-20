@@ -126,6 +126,16 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Unknown terminal %q, defaulting to %s\n", terminalChoice, defaultTerminal)
 		terminalChoice = defaultTerminal
 	}
+
+	// New tmux sessions: what zen opens in them (config.TmuxConfig).
+	var tmuxCfg config.TmuxConfig
+	if terminalChoice == "tmux" {
+		fmt.Println()
+		inbox := askYesNo(scanner, "Run zen inbox in the first window of each new tmux session?", true)
+		tmuxCfg.Inbox = &inbox
+		tmuxCfg.AgentsWindow = askYesNo(scanner,
+			fmt.Sprintf("Also open an Agents window running `%s agents` in each new session?", agentChoice), false)
+	}
 	fmt.Println()
 
 	// Build config
@@ -150,6 +160,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		ClaudeBin:    "claude",
 		CodexBin:     "codex",
 		Terminal:     terminalChoice,
+		Tmux:         tmuxCfg,
 		Watch: config.WatchConfig{
 			DispatchInterval:  "10s",
 			CleanupInterval:   "1h",
@@ -307,24 +318,28 @@ func setupTmux(scanner *bufio.Scanner) error {
 	}
 	path := tmux.ConfPath(homeDir())
 	short := ui.ShortenHome(path, homeDir())
-	if scanner != nil {
-		fmt.Printf("Add zen's settings to %s (window markers, focus tracking, prefix + W)? [Y/n]: ", short)
-		scanner.Scan()
-		if a := strings.ToLower(strings.TrimSpace(scanner.Text())); a == "n" || a == "no" {
-			fmt.Println("  Skipped. Run `zen setup tmux` to add them later.")
-			fmt.Println()
-			return nil
-		}
+	zenConf := filepath.Join(config.Dir(), "tmux.conf")
+	shortZen := ui.ShortenHome(zenConf, homeDir())
+	if scanner != nil && !askYesNo(scanner, fmt.Sprintf(
+		"Write zen's tmux settings to %s and read them from %s (window markers, focus tracking, prefix + W, new-session setup)?",
+		shortZen, short), true) {
+		fmt.Println("  Skipped. Run `zen setup tmux` to add them later.")
+		fmt.Println()
+		return nil
 	}
 
-	changed, err := tmux.InstallConf(path)
+	zenBin, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("updating %s: %w", short, err)
+		return fmt.Errorf("finding the zen executable: %w", err)
+	}
+	changed, err := tmux.InstallConf(path, zenConf, zenBin)
+	if err != nil {
+		return fmt.Errorf("updating tmux settings: %w", err)
 	}
 	if changed {
-		ui.LogSuccess("Added zen's settings to " + short)
+		ui.LogSuccess(fmt.Sprintf("Wrote zen's settings to %s, read from %s", shortZen, short))
 	} else {
-		ui.LogSuccess(short + " already has zen's settings")
+		ui.LogSuccess(short + " already reads zen's settings")
 	}
 	if reloaded, err := tmux.Reload(path); err != nil {
 		ui.LogWarn(fmt.Sprintf("reloading tmux: %v (run: tmux source-file %s)", err, short))
@@ -332,6 +347,31 @@ func setupTmux(scanner *bufio.Scanner) error {
 		ui.LogSuccess("Reloaded tmux")
 	} else {
 		fmt.Printf("  tmux reads them when it next starts, or now with: tmux source-file %s\n", short)
+	}
+
+	// What new sessions get. zen setup has just written the config; for zen
+	// setup tmux, it is whatever config.yaml says.
+	if c, err := config.Load(); err == nil {
+		onOff := func(b bool) string {
+			if b {
+				return "on"
+			}
+			return "off"
+		}
+		rows := [][3]string{
+			{"zen inbox in its first window", onOff(c.Tmux.InboxEnabled()), "tmux.inbox in config.yaml"},
+			{fmt.Sprintf("an Agents window: %s agents", c.AgentKind("")), onOff(c.Tmux.AgentsWindow), "tmux.agents_window"},
+		}
+		width := 0
+		for _, r := range rows {
+			width = max(width, len(r[0]))
+		}
+		fmt.Println()
+		fmt.Println("Each new tmux session gets:")
+		for _, r := range rows {
+			fmt.Printf("  %-*s  %-3s  (%s)\n", width, r[0], r[1], r[2])
+		}
+		fmt.Println("  Sessions that already exist are left as they are.")
 	}
 
 	fmt.Println()
@@ -342,4 +382,21 @@ func setupTmux(scanner *bufio.Scanner) error {
 	fmt.Println("  Either   needs notification permission in macOS System Settings.")
 	fmt.Println()
 	return nil
+}
+
+// askYesNo asks a yes/no question, where an empty answer means def.
+func askYesNo(scanner *bufio.Scanner, question string, def bool) bool {
+	hint := "[y/N]"
+	if def {
+		hint = "[Y/n]"
+	}
+	fmt.Printf("%s %s: ", question, hint)
+	scanner.Scan()
+	switch strings.ToLower(strings.TrimSpace(scanner.Text())) {
+	case "y", "yes":
+		return true
+	case "n", "no":
+		return false
+	}
+	return def
 }

@@ -61,6 +61,10 @@ func (a *codexAgent) ResumeCommand(sessionID, model string) string {
 }
 
 // ContextFile is AGENTS.md, the project-context file Codex reads automatically.
+// AgentsCommand opens Codex's agent command center, to browse and switch
+// sessions.
+func (a *codexAgent) AgentsCommand() string { return a.bin + " agents" }
+
 func (a *codexAgent) ContextFile() string { return codexContextFile }
 
 const (

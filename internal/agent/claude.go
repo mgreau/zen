@@ -46,6 +46,10 @@ func (a *claudeAgent) ResumeCommand(sessionID, model string) string {
 	return cmd + " --resume " + shellQuote(sessionID)
 }
 
+// AgentsCommand opens Claude Code's agent view: its interactive and
+// background sessions.
+func (a *claudeAgent) AgentsCommand() string { return a.bin + " agents" }
+
 // ContextFile is CLAUDE.local.md so the repo's own CLAUDE.md is never touched.
 func (a *claudeAgent) ContextFile() string { return claudeContextFile }
 

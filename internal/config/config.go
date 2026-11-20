@@ -32,6 +32,24 @@ type Config struct {
 	Watch        WatchConfig           `yaml:"watch"`
 	Slack        SlackConfig           `yaml:"slack"`
 	Notify       NotifyConfig          `yaml:"notify,omitempty"`
+	Tmux         TmuxConfig            `yaml:"tmux,omitempty"`
+}
+
+// TmuxConfig sets up each new tmux session, through the hook `zen setup
+// tmux` installs. It takes effect for sessions created after a change, with
+// no need to run setup again.
+type TmuxConfig struct {
+	// Inbox runs `zen inbox` in the first window of each new session;
+	// unset means on. See InboxEnabled.
+	Inbox *bool `yaml:"inbox,omitempty"`
+	// AgentsWindow also opens an "Agents" window in the background, running
+	// the agent's view of its sessions (`claude agents`, `codex agents`).
+	AgentsWindow bool `yaml:"agents_window,omitempty"`
+}
+
+// InboxEnabled reports whether new tmux sessions start with `zen inbox`.
+func (t TmuxConfig) InboxEnabled() bool {
+	return t.Inbox == nil || *t.Inbox
 }
 
 // NotifyConfig holds what the daemon does for a notification besides showing
