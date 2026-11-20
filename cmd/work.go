@@ -200,12 +200,10 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	launchCmd := ag.StartCommand(context, workNewModel)
-
 	if workNewNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Open manually:"))
-		fmt.Printf("  cd %s && %s\n", worktreePath, launchCmd)
+		fmt.Printf("  cd %s && %s\n", worktreePath, ag.StartCommand(context, workNewModel))
 		return nil
 	}
 
@@ -215,6 +213,7 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	launchCmd := prepareLaunch(ag, worktreePath).StartCommand(context, workNewModel)
 	if err := term.OpenTab(worktreePath, launchCmd); err != nil {
 		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
 	}

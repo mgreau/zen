@@ -35,6 +35,7 @@ poll_interval: "5m"
 agent: claude
 claude_bin: claude   # executable used when agent: claude
 codex_bin: codex     # executable used when agent: codex
+remote_control: false  # launch every session with remote control on (see "Remote control")
 
 terminal: iterm  # or "ghostty", "kitty", "macos", or "tmux"; unset means tmux inside tmux, else iterm
 
@@ -129,6 +130,24 @@ zen never overwrites a repo's committed `AGENTS.md`; if one exists, the context 
 Note that the background daemon always uses the **configured** agent: if you run `zen review 42 --agent codex` while `agent: claude` is set in config, the daemon's context injection and session tracking for that worktree still act as Claude. Set `agent:` in config when switching agents for more than a one-off session.
 
 `zen agent status` (and the `zen_agent_status` MCP tool) is the exception to single-agent behaviour: it lists sessions from **all** agents in one table with an AGENT column; pass `--agent claude|codex` to narrow it. "waiting" detection comes from the daemon's snapshot and is only available for the configured agent — other agents' sessions show as running/stopped.
+
+### Remote control
+
+`remote_control: true` (default `false`) launches every agent session zen starts or resumes — `zen review`, `zen work`, the resume commands, and Slack-triggered sessions — so it can be driven from another device:
+
+| | `claude` | `codex` |
+|--|----------|---------|
+| How | `claude --remote-control …` | zen brings up Codex's app-server daemon with remote control, then launches `codex --remote unix:// -C <worktree> …` |
+| Scope | per session | one daemon shared by all sessions; each TUI attaches to it |
+
+Codex has no per-session switch: remote control belongs to its (experimental) app-server daemon. Right before opening each tab, zen runs `codex app-server daemon enable-remote-control` and `codex app-server daemon start` (both no-ops when already done), with their output appended to `~/.zen/state/codex-daemon.log`. The daemon runs from `/` in its own session, so it outlives the tab that started it and never makes a worktree look busy; `-C <worktree>` keeps each session in its own worktree. zen resolves `codex_bin` to an absolute path (expanding `~/`) and uses it both to start the daemon and to launch the session; this needs `codex_bin` to name an executable, not a shell command like `npx codex`. If the daemon cannot be brought up, zen prints a warning and launches Codex without remote control. Commands printed by `--no-iterm` never start the daemon, so they launch Codex locally.
+
+Things to know about the shared Codex daemon:
+
+- **Environment.** Codex runs tools inside the daemon, which keeps the environment (`PATH`, tool-manager shims, credentials) of whichever process started it — the first `zen` command or `zen watch` that launched a Codex session — not the terminal each session opens in. If `zen watch` runs with a minimal `PATH` (e.g. under launchd), start the daemon yourself from a full shell with `codex app-server daemon start` before the first Slack-triggered session, or restart it with `codex app-server daemon restart`.
+- **Upgrades.** A daemon that is already running is left alone, so after upgrading Codex it keeps running the old build while new sessions use the new one. Run `codex app-server daemon restart` after an upgrade.
+- **Session detection.** A remote Codex thread runs inside the daemon, not in the terminal tab. zen detects a live session by its process in the worktree, so a thread that keeps running after its tab closes (for example, driven from a paired device) shows as stopped, and the worktree counts as idle for cleanup and fast-forward.
+- **Persistence.** `enable-remote-control` is a Codex setting that outlives zen, and zen re-applies it on every Codex launch while `remote_control` is on. Turning `remote_control` off in zen does not turn it off in Codex; run `codex app-server daemon disable-remote-control` (or `... stop`) for that. Pair a device with `codex remote-control pair`.
 
 ### Session migration between agents
 

@@ -33,6 +33,19 @@ func resolveAgent() (agent.Agent, error) {
 	return cfg.NewAgent(agentFlag), nil
 }
 
+// prepareLaunch readies the agent to launch in workDir (starting Codex's
+// remote-control daemon when needed), reporting progress and any fallback.
+func prepareLaunch(ag agent.Agent, workDir string) agent.Agent {
+	if ag.NeedsLaunchPrep() {
+		ui.LogInfo(fmt.Sprintf("Preparing %s remote control...", ag.Kind()))
+	}
+	prepared, err := ag.PrepareLaunch(workDir)
+	if err != nil {
+		ui.LogWarn(fmt.Sprintf("%s remote control unavailable, launching without it: %v", ag.Kind(), err))
+	}
+	return prepared
+}
+
 // hasAgentSession reports whether the agent has any session for the worktree.
 func hasAgentSession(ag agent.Agent, worktreePath string) bool {
 	sessions, _ := ag.FindSessions(worktreePath)
