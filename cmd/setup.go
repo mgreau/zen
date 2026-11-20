@@ -131,10 +131,23 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	var tmuxCfg config.TmuxConfig
 	if terminalChoice == "tmux" {
 		fmt.Println()
-		inbox := askYesNo(scanner, "Run zen inbox in the first window of each new tmux session?", true)
-		tmuxCfg.Inbox = &inbox
-		tmuxCfg.AgentsWindow = askYesNo(scanner,
-			fmt.Sprintf("Also open an Agents window running `%s agents` in each new session?", agentChoice), false)
+		fmt.Println("Each new tmux session can start with a command in its first window, and")
+		fmt.Println("an Agents window. You can change these later in the tmux section of config.yaml.")
+		first := prompt(scanner, "Command for the first window (none for nothing)", "zen inbox")
+		if strings.EqualFold(strings.TrimSpace(first), "none") {
+			first = ""
+		}
+		tmuxCfg.FirstWindowCommand = &first
+		tmuxCfg.AgentsWindow = askYesNo(scanner, "Also open an Agents window in each new session?", false)
+		if tmuxCfg.AgentsWindow {
+			defaultCmd := agent.New(agent.Kind(agentChoice), "").AgentsCommand()
+			// Only a changed command is written, so the default keeps
+			// following the agent if you switch agents later.
+			if cmd := strings.TrimSpace(prompt(scanner, "  Command for the Agents window", defaultCmd)); cmd != defaultCmd {
+				tmuxCfg.AgentsWindowCommand = cmd
+			}
+			tmuxCfg.AgentsWindowDir = prompt(scanner, "  Directory for the Agents window", config.DefaultAgentsWindowDir)
+		}
 	}
 	fmt.Println()
 
@@ -349,26 +362,20 @@ func setupTmux(scanner *bufio.Scanner) error {
 	// What new sessions get. zen setup has just written the config; for zen
 	// setup tmux, it is whatever config.yaml says.
 	if c, err := config.Load(); err == nil {
-		onOff := func(b bool) string {
-			if b {
-				return "on"
-			}
-			return "off"
+		first := c.Tmux.FirstWindow("zen")
+		if first == "" {
+			first = "(nothing)"
 		}
-		rows := [][3]string{
-			{"zen inbox in its first window", onOff(c.Tmux.InboxEnabled()), "tmux.inbox in config.yaml"},
-			{fmt.Sprintf("an Agents window: %s agents", c.AgentKind("")), onOff(c.Tmux.AgentsWindow), "tmux.agents_window"},
-		}
-		width := 0
-		for _, r := range rows {
-			width = max(width, len(r[0]))
+		agents := "(off)"
+		if cmd := c.Tmux.AgentsWindowCmd(c.NewAgent("")); cmd != "" {
+			agents = fmt.Sprintf("%s, in %s", cmd, ui.ShortenHome(c.Tmux.GetAgentsWindowDir(), homeDir()))
 		}
 		fmt.Println()
 		fmt.Println("Each new tmux session gets:")
-		for _, r := range rows {
-			fmt.Printf("  %-*s  %-3s  (%s)\n", width, r[0], r[1], r[2])
-		}
-		fmt.Println("  Sessions that already exist are left as they are.")
+		fmt.Printf("  First window:   %s\n", first)
+		fmt.Printf("  Agents window:  %s\n", agents)
+		fmt.Println("  Change them in the tmux section of ~/.zen/config.yaml; they apply to")
+		fmt.Println("  sessions created after that. Sessions that already exist are left alone.")
 	}
 
 	fmt.Println()

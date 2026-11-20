@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -13,22 +14,24 @@ const AgentsWindowName = "Agents"
 // SetUpSession prepares a session tmux has just created, from zen's
 // session-created hook:
 //
-//   - With inbox, a command such as "zen inbox", it types it into the first
+//   - With first, a command such as "zen inbox", it types it into the first
 //     window, so the window stays an ordinary shell prompt afterwards. Only
 //     when the session is a lone shell: a session created to run a program
 //     (tmux new 'vim') must not get keys typed into it.
 //   - With agents, a command such as "claude agents", it opens an Agents
-//     window in the background, through the user's login shell like the
-//     windows zen opens for worktrees, so you stay on the first window.
-func SetUpSession(session, inbox, agents string) error {
-	if inbox != "" {
+//     window in the background, in agentsDir, through the user's login
+//     shell like the windows zen opens for worktrees, so you stay on the
+//     first window. A missing agentsDir falls back to the session's
+//     directory rather than failing.
+func SetUpSession(session, first, agents, agentsDir string) error {
+	if first != "" {
 		out, err := exec.Command("tmux", "display-message", "-p", "-t", session+":",
 			"#{session_windows}\t#{pane_id}\t#{pane_start_command}").Output()
 		if err != nil {
 			return fmt.Errorf("tmux display-message: %w", err)
 		}
 		if p, ok := freshShell(strings.TrimRight(string(out), "\n")); ok {
-			if err := run("send-keys", "-t", p, "-l", inbox); err != nil {
+			if err := run("send-keys", "-t", p, "-l", first); err != nil {
 				return err
 			}
 			if err := run("send-keys", "-t", p, "Enter"); err != nil {
@@ -37,8 +40,11 @@ func SetUpSession(session, inbox, agents string) error {
 		}
 	}
 	if agents != "" {
-		args := append([]string{"new-window", "-d", "-t", session + ":", "-n", AgentsWindowName},
-			shellArgs(agents, userShell())...)
+		args := []string{"new-window", "-d", "-t", session + ":", "-n", AgentsWindowName}
+		if info, err := os.Stat(agentsDir); agentsDir != "" && err == nil && info.IsDir() {
+			args = append(args, "-c", agentsDir)
+		}
+		args = append(args, shellArgs(agents, userShell())...)
 		if err := run(args...); err != nil {
 			return err
 		}

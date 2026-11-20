@@ -559,3 +559,40 @@ func TestLoadNotifyEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestTmuxConfig(t *testing.T) {
+	t.Setenv("HOME", "/home/u")
+	var c TmuxConfig
+	if got := c.GetAgentsWindowDir(); got != "/home/u/git" {
+		t.Errorf("default agents dir = %q", got)
+	}
+	c.AgentsWindowDir = "~/src/work"
+	if got := c.GetAgentsWindowDir(); got != "/home/u/src/work" {
+		t.Errorf("agents dir = %q", got)
+	}
+	c.AgentsWindowDir = "/srv/code"
+	if got := c.GetAgentsWindowDir(); got != "/srv/code" {
+		t.Errorf("absolute agents dir = %q", got)
+	}
+
+	// An explicit empty first-window command means none, unlike unset.
+	dir := t.TempDir()
+	t.Setenv("ZEN_HOME", dir)
+	yml := "tmux:\n  first_window_command: \"\"\n  agents_window: true\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Tmux.FirstWindow("zen"); got != "" {
+		t.Errorf("first_window_command: \"\" gave %q, want none", got)
+	}
+	if got := (TmuxConfig{}).FirstWindow("zen"); got != "zen inbox" {
+		t.Errorf("unset first window = %q, want zen inbox", got)
+	}
+	if !cfg.Tmux.AgentsWindow {
+		t.Error("agents_window: true did not load")
+	}
+}

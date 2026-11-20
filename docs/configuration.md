@@ -68,8 +68,9 @@ slack:
 
 # What each new tmux session gets, with terminal: tmux. See "New tmux sessions".
 tmux:
-  inbox: true
+  first_window_command: zen inbox
   agents_window: false
+  agents_window_dir: ~/git
 
 # Run a command for each daemon notification, e.g. to push it to your phone.
 # See "Push notifications" below.
@@ -232,22 +233,32 @@ Each new tmux session gets, as `config.yaml` says:
 
 ```yaml
 tmux:
-  inbox: true          # the default: zen inbox in the session's first window
-  agents_window: false # the default; true opens an Agents window too
+  first_window_command: zen inbox  # the default; "" types nothing
+  agents_window: false             # the default; true opens an Agents window
+  agents_window_command: claude    # default: claude agents, or codex agents
+  agents_window_dir: ~/git         # the default
 ```
 
-- `inbox` types `zen inbox` into the session's first window, so you see
-  what needs you, and the window stays an ordinary prompt afterwards. It's
-  only typed into a session that is a lone shell: a session created to run a
-  program, such as `tmux new 'vim'`, is left alone.
+- `first_window_command` is typed into the session's first window, so the
+  window stays an ordinary prompt afterwards: `zen inbox` shows what needs
+  you, `zen dashboard` everything you have going. It's only typed into a
+  session that is a lone shell: a session created to run a program, such as
+  `tmux new 'vim'`, is left alone.
 - `agents_window` opens a window named `Agents`, in the background, running
-  your agent's view of its sessions: `claude agents`, or `codex agents` with
-  `agent: codex`. Its shell stays open if the agent exits.
+  `agents_window_command` through your login shell. By default that's your
+  agent's view of its sessions: `claude agents`, or `codex agents` with
+  `agent: codex`. Set it to `claude` for a plain session instead. The shell
+  stays open if the command exits.
+- `agents_window_dir` is where the Agents window starts. It defaults to
+  `~/git`, rather than your home directory, so Claude doesn't ask whether to
+  trust your home directory each time. If the directory doesn't exist, the
+  window starts in the session's directory.
 
-The hook reads `config.yaml` each time, so a change applies to sessions
-created after it, without running setup again. Sessions that already exist,
-such as one you reattach to with `tmux new -A`, are left as they are. This
-applies to every new session on the tmux server, not only zen's.
+`zen setup` asks for these when you pick tmux. The hook reads `config.yaml`
+each time, so a change applies to sessions created after it, without
+running setup again. Sessions that already exist, such as one you reattach
+to with `tmux new -A`, are left as they are. This applies to every new
+session on the tmux server, not only zen's.
 
 ### Desktop notifications over ssh
 
