@@ -75,6 +75,7 @@ type WorkEntry struct {
 }
 
 func runWork(cmd *cobra.Command, args []string) error {
+	ensureImportPrompt()
 	wts, err := wt.ListAll(cfg)
 	if err != nil {
 		return fmt.Errorf("listing worktrees: %w", err)
@@ -160,6 +161,7 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	ensureImportPrompt()
 	target, err := newFeatureTarget(repo, branch)
 	if err != nil {
 		return err

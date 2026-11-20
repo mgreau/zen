@@ -140,7 +140,7 @@ func runReview(cmd *cobra.Command, args []string) error {
 	}
 
 	// Ensure the /review-pr prompt is installed for the chosen agent
-	ensureReviewPrompt(ag)
+	ensurePrompts(ag)
 
 	if reviewNoITerm {
 		fmt.Println()

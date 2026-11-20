@@ -205,7 +205,7 @@ func openNewSession(wt worktree.Worktree, t terminal.Terminal, ag agent.Agent) e
 	initialPrompt := ""
 	action := "Starting new session"
 	if wt.Type == worktree.TypePRReview {
-		ensureReviewPrompt(ag)
+		ensurePrompts(ag)
 		initialPrompt = ag.ReviewPrompt(wt.Path)
 		action = "Starting PR review"
 	}
