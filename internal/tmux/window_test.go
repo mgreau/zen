@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -243,6 +244,11 @@ func TestOpenWindowReusesWindow(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if exists(marker("third")) {
 		t.Error("reopening a busy window ran the command in it")
+	}
+
+	out, err := exec.Command("tmux", "show-options", "-w", "-v", "-t", first.ID, "allow-passthrough").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "all" {
+		t.Errorf("allow-passthrough = %q, %v; want all", out, err)
 	}
 
 	var tagged int

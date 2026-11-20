@@ -6,11 +6,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/mgreau/zen/internal/agent"
+	"github.com/mgreau/zen/internal/notify"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,6 +30,18 @@ type Config struct {
 	IgnoreDrafts bool                  `yaml:"ignore_drafts"`
 	Watch        WatchConfig           `yaml:"watch"`
 	Slack        SlackConfig           `yaml:"slack"`
+	Notify       NotifyConfig          `yaml:"notify"`
+}
+
+// NotifyConfig holds what the daemon does for a notification besides showing
+// it on the desktop (see notify.Configure).
+type NotifyConfig struct {
+	// Command is a shell command run for each notification, such as a curl
+	// to a push service. Empty means none.
+	Command string `yaml:"command"`
+	// Events limits Command to these events (see notify.Events). Empty
+	// means all of them.
+	Events []string `yaml:"events"`
 }
 
 // SlackConfig holds configuration for the Slack task watcher: polling for the
@@ -236,6 +250,11 @@ func Load() (*Config, error) {
 	case "iterm", "ghostty", "kitty", "macos", "tmux":
 	default:
 		return nil, fmt.Errorf("invalid terminal type %q: must be \"iterm\", \"ghostty\", \"kitty\", \"macos\", or \"tmux\"", cfg.Terminal)
+	}
+	for _, e := range cfg.Notify.Events {
+		if !slices.Contains(notify.Events(), e) {
+			return nil, fmt.Errorf("invalid notify event %q: must be one of %s", e, strings.Join(notify.Events(), ", "))
+		}
 	}
 	if cfg.Repos == nil {
 		cfg.Repos = make(map[string]RepoConfig)
