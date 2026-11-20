@@ -13,8 +13,8 @@ import (
 
 func TestWithTmuxStatus(t *testing.T) {
 	plain := New(Claude, "claude")
-	ag := WithTmuxStatus(plain)
-	quoted := shellQuote(tmuxStatusSettings())
+	ag := WithTmuxStatus(plain, "")
+	quoted := shellQuote(tmuxStatusSettings(""))
 
 	if got, want := ag.StartCommand("/review-pr", ""), "claude --settings "+quoted+" '/review-pr'"; got != want {
 		t.Errorf("StartCommand =\n  %s\nwant\n  %s", got, want)
@@ -28,7 +28,7 @@ func TestWithTmuxStatus(t *testing.T) {
 		t.Errorf("plain StartCommand after WithTmuxStatus = %q", got)
 	}
 	// Codex has no hooks and is returned as is.
-	if got := WithTmuxStatus(New(Codex, "codex")).StartCommand("", ""); got != "codex" {
+	if got := WithTmuxStatus(New(Codex, "codex"), "/bin/zen").StartCommand("", ""); got != "codex" {
 		t.Errorf("Codex StartCommand with WithTmuxStatus = %q", got)
 	}
 }
@@ -43,7 +43,7 @@ func TestTmuxStatusSettings(t *testing.T) {
 			} `json:"hooks"`
 		} `json:"hooks"`
 	}
-	if err := json.Unmarshal([]byte(tmuxStatusSettings()), &s); err != nil {
+	if err := json.Unmarshal([]byte(tmuxStatusSettings("")), &s); err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{
@@ -93,7 +93,7 @@ func hookCommand(t *testing.T, event string) string {
 			} `json:"hooks"`
 		} `json:"hooks"`
 	}
-	if err := json.Unmarshal([]byte(tmuxStatusSettings()), &s); err != nil {
+	if err := json.Unmarshal([]byte(tmuxStatusSettings("")), &s); err != nil {
 		t.Fatal(err)
 	}
 	return s.Hooks[event][0].Hooks[0].Command
@@ -143,5 +143,35 @@ func TestTmuxStatusHookInTmux(t *testing.T) {
 	}
 	if got := tm("show-options", "-w", "-v", "-t", "t", "@zen-hooks"); got != "1" {
 		t.Errorf("@zen-hooks after Stop hook = %q, want 1", got)
+	}
+}
+
+func TestTmuxStatusSettingsWithNotify(t *testing.T) {
+	var s struct {
+		Channel string `json:"preferredNotifChannel"`
+		Hooks   map[string][]struct {
+			Hooks []struct {
+				Command string `json:"command"`
+				Async   bool   `json:"async"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal([]byte(tmuxStatusSettings("/opt/my zen/zen")), &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Channel != "notifications_disabled" {
+		t.Errorf("preferredNotifChannel = %q, want notifications_disabled", s.Channel)
+	}
+	for event, want := range map[string]bool{"Notification": true, "Stop": true, "SessionStart": false, "UserPromptSubmit": false, "PostToolUse": false} {
+		hooks := s.Hooks[event][0].Hooks
+		got := len(hooks) == 2 && hooks[1].Command == `'/opt/my zen/zen' hook notify` && hooks[1].Async
+		if got != want {
+			t.Errorf("%s: notify hook present = %v, want %v (%+v)", event, got, want, hooks)
+		}
+	}
+
+	// Without zen's notifications, Claude keeps its own.
+	if strings.Contains(tmuxStatusSettings(""), "preferredNotifChannel") {
+		t.Error("settings without zenBin turn off Claude's notifications")
 	}
 }

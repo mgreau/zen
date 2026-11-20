@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mgreau/zen/internal/agent"
+	"github.com/mgreau/zen/internal/config"
 )
 
 func TestNewTerminal(t *testing.T) {
@@ -89,10 +90,17 @@ func TestDescribe(t *testing.T) {
 
 func TestAgentFor(t *testing.T) {
 	ag := agent.New(agent.Claude, "claude")
-	if got := AgentFor(&TmuxTerminal{}, ag).StartCommand("", ""); !strings.Contains(got, "--settings") {
+	if got := AgentFor(&TmuxTerminal{}, ag, config.NotifyConfig{}).StartCommand("", ""); !strings.Contains(got, "--settings") {
 		t.Errorf("tmux: %q, want the status hooks", got)
 	}
-	if got := AgentFor(&ITermTerminal{}, ag).StartCommand("", ""); got != "claude" {
+	off := false
+	if got := AgentFor(&TmuxTerminal{}, ag, config.NotifyConfig{Terminal: &off}).StartCommand("", ""); strings.Contains(got, "hook notify") {
+		t.Errorf("tmux with notify.terminal off: %q, want no notify hook", got)
+	}
+	if got := AgentFor(&TmuxTerminal{}, ag, config.NotifyConfig{}).StartCommand("", ""); !strings.Contains(got, "hook notify") {
+		t.Errorf("tmux: %q, want the notify hook", got)
+	}
+	if got := AgentFor(&ITermTerminal{}, ag, config.NotifyConfig{}).StartCommand("", ""); got != "claude" {
 		t.Errorf("iTerm: %q, want no hooks", got)
 	}
 }

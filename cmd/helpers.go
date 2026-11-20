@@ -65,7 +65,7 @@ func ensureReviewPrompt(ag agent.Agent) {
 // (see terminal.AgentFor); printing build(ag) instead gives the plain command
 // for the user to run themselves.
 func openTab(t terminal.Terminal, workDir string, ag agent.Agent, build func(agent.Agent) string) error {
-	outcome, err := t.OpenTab(workDir, build(terminal.AgentFor(t, ag)))
+	outcome, err := t.OpenTab(workDir, build(terminal.AgentFor(t, ag, cfg.Notify)))
 	if err != nil {
 		return fmt.Errorf("opening %s %s: %w", t.Name(), t.Unit(), err)
 	}

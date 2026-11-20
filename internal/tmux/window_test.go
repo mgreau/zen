@@ -402,3 +402,9 @@ func TestOpenWindowIdleWithOtherShell(t *testing.T) {
 	}
 	waitFor(t, "command", func() bool { return exists(filepath.Join(workDir, "ran")) })
 }
+
+func tmuxOutput(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	out, err := exec.Command("tmux", args...).Output()
+	return strings.TrimSpace(string(out)), err
+}

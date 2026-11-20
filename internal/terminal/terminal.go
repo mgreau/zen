@@ -2,8 +2,10 @@ package terminal
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/mgreau/zen/internal/agent"
+	"github.com/mgreau/zen/internal/config"
 	"github.com/mgreau/zen/internal/ghostty"
 	"github.com/mgreau/zen/internal/iterm"
 	"github.com/mgreau/zen/internal/kitty"
@@ -70,13 +72,20 @@ func OpenInBackground(t Terminal, workDir, command string) (Outcome, error) {
 }
 
 // AgentFor returns ag set up for commands that run in t: in tmux, with the
-// hooks that report the agent's state to its window (agent.WithTmuxStatus).
-// Commands printed for the user to run themselves should use ag as is.
-func AgentFor(t Terminal, ag agent.Agent) agent.Agent {
-	if _, ok := t.(*TmuxTerminal); ok {
-		return agent.WithTmuxStatus(ag)
+// hooks that report the agent's state to its window and, unless n turns them
+// off, send zen's own notifications (agent.WithTmuxStatus). Commands printed
+// for the user to run themselves should use ag as is.
+func AgentFor(t Terminal, ag agent.Agent, n config.NotifyConfig) agent.Agent {
+	if _, ok := t.(*TmuxTerminal); !ok {
+		return ag
 	}
-	return ag
+	zenBin := ""
+	if n.TerminalEnabled() {
+		if bin, err := os.Executable(); err == nil {
+			zenBin = bin
+		}
+	}
+	return agent.WithTmuxStatus(ag, zenBin)
 }
 
 // NewTerminal creates a new terminal instance based on the terminal type.
