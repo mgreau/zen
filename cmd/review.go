@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/github"
 	"github.com/mgreau/zen/internal/review"
 	"github.com/mgreau/zen/internal/terminal"
@@ -23,7 +24,7 @@ var reviewCmd = &cobra.Command{
 
 Usage:
   zen review <pr-number>           Create worktree + open iTerm tab
-  zen review resume <pr-number>    Resume existing session in new tab
+  zen review resume <pr-number>    Resume existing session in a terminal tab
   zen review delete <pr-number>    Delete a PR review worktree`,
 	DisableFlagParsing: false,
 	RunE:               runReview,
@@ -142,12 +143,14 @@ func runReview(cmd *cobra.Command, args []string) error {
 	// Ensure the /review-pr prompt is installed for the chosen agent
 	ensureReviewPrompt(ag)
 
-	launchCmd := ag.StartCommand(ag.ReviewPrompt(result.WorktreePath), reviewModel)
+	launchCmd := func(a agent.Agent) string {
+		return a.StartCommand(a.ReviewPrompt(result.WorktreePath), reviewModel)
+	}
 
 	if reviewNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Open manually:"))
-		fmt.Printf("  cd %s && %s\n", result.WorktreePath, launchCmd)
+		fmt.Printf("  cd %s && %s\n", result.WorktreePath, launchCmd(ag))
 		return nil
 	}
 
@@ -157,11 +160,9 @@ func runReview(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := term.OpenTab(result.WorktreePath, launchCmd); err != nil {
-		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
+	if err := openTab(term, result.WorktreePath, ag, launchCmd); err != nil {
+		return err
 	}
-
-	ui.LogSuccess(fmt.Sprintf("%s tab opened", term.Name()))
 	fmt.Println()
 	return nil
 }

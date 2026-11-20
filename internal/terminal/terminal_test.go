@@ -1,7 +1,10 @@
 package terminal
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/mgreau/zen/internal/agent"
 )
 
 func TestNewTerminal(t *testing.T) {
@@ -62,5 +65,34 @@ func TestMacOSTerminalName(t *testing.T) {
 	term := &MacOSTerminal{}
 	if got := term.Name(); got != "Terminal" {
 		t.Errorf("MacOSTerminal.Name() = %q, want %q", got, "Terminal")
+	}
+}
+
+func TestDescribe(t *testing.T) {
+	tmux := &TmuxTerminal{}
+	tests := []struct {
+		term Terminal
+		o    Outcome
+		want string
+	}{
+		{&ITermTerminal{}, Opened, "iTerm2 tab opened"},
+		{tmux, Opened, "tmux window opened"},
+		{tmux, Reused, "Started in the worktree's existing tmux window"},
+		{tmux, AlreadyRunning, "The agent is already running in the worktree's tmux window: switched to it"},
+	}
+	for _, tt := range tests {
+		if got := Describe(tt.term, tt.o); got != tt.want {
+			t.Errorf("Describe(%s, %d) = %q, want %q", tt.term.Name(), tt.o, got, tt.want)
+		}
+	}
+}
+
+func TestAgentFor(t *testing.T) {
+	ag := agent.New(agent.Claude, "claude")
+	if got := AgentFor(&TmuxTerminal{}, ag).StartCommand("", ""); !strings.Contains(got, "--settings") {
+		t.Errorf("tmux: %q, want the status hooks", got)
+	}
+	if got := AgentFor(&ITermTerminal{}, ag).StartCommand("", ""); got != "claude" {
+		t.Errorf("iTerm: %q, want no hooks", got)
 	}
 }
