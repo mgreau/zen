@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -531,5 +532,30 @@ watch:
 	}
 	if cfg.Watch.CleanupAfterDays != 7 {
 		t.Errorf("CleanupAfterDays = %d, want 7", cfg.Watch.CleanupAfterDays)
+	}
+}
+
+func TestLoadNotifyEvents(t *testing.T) {
+	for _, tt := range []struct {
+		events  string
+		wantErr bool
+	}{
+		{"[session-waiting, digest]", false},
+		{"[]", false},
+		{"[session-wating]", true},
+	} {
+		dir := t.TempDir()
+		t.Setenv("ZEN_HOME", dir)
+		yml := "notify:\n  command: echo hi\n  events: " + tt.events + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(yml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load()
+		if (err != nil) != tt.wantErr {
+			t.Errorf("events %s: Load() error = %v, wantErr %v", tt.events, err, tt.wantErr)
+		}
+		if err != nil && !strings.Contains(err.Error(), "invalid notify event") {
+			t.Errorf("events %s: Load() error = %v, want an invalid event error", tt.events, err)
+		}
 	}
 }

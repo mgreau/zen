@@ -65,6 +65,12 @@ slack:
   default_repo: mono     # short repo name worktrees are created in
   poll_interval: "5m"
   ack_reaction: eyes      # reaction added on pickup, default "eyes"
+
+# Run a command for each daemon notification, e.g. to push it to your phone.
+# See "Push notifications" below.
+notify:
+  command: 'curl -fsS -d "$ZEN_MESSAGE" https://ntfy.sh/<random-topic>'
+  events: [session-waiting]
 ```
 
 The daemon re-reads `config.yaml` on every poll tick. Changes to `poll_interval`, `authors`, `repos`, and other settings take effect without restarting.
@@ -164,6 +170,104 @@ over ssh, such as a cloud workstation, where there is no terminal application
 to drive. The command runs through your login shell (`$SHELL -l -c`), and the
 window keeps a shell in the worktree when the agent exits. Outside tmux, zen
 reports an error; use `--no-terminal` there instead.
+
+zen tags each window it opens with the window option `@zen-worktree`, so one
+worktree gets one window. Opening a worktree that already has a window, as
+`zen review resume` or `zen work resume` do, reuses it. If the window is at its
+shell prompt, the agent starts there. If something is still running in it, or
+you split it into several panes, zen only switches to it and says so. Windows the daemon opens for Slack tasks open in the
+background, so they don't take focus from the window you're typing in.
+
+### Highlighting windows that need you
+
+zen keeps the window option `@zen-status` on each of its windows. The value is
+`running`, `waiting` (the agent needs you), or `stopped`. Two things set it:
+
+- For Claude, hooks that zen passes with `--settings` when it opens the agent
+  in a tmux window. They set the status as soon as Claude starts, finishes a
+  turn or asks for a permission, and when you reply, and mark it `stopped`
+  when Claude exits. Nothing is written into
+  the worktree, your own hooks still run, and the commands zen prints for
+  `--no-terminal` don't include them.
+- The daemon's session scan. This works for every agent, after a delay of up
+  to `session_scan_interval` plus the idle threshold. Where Claude's hooks set
+  the status, the daemon marks the window `stopped` once Claude exits, and
+  `waiting` after a turn you interrupted with Esc, which no hook reports. It
+  tells that from a long, quiet tool by the interrupt marker Claude records
+  in the session. A session idle for 10 minutes is marked `waiting` whatever
+  the hooks last said, for waits no hook reports, unless its last step is a
+  tool call still running, such as a subagent.
+
+After you approve a permission, the window stays `waiting` until the
+approved tool finishes: no hook fires on the approval itself.
+
+The daemon reaches tmux the way any tmux client does: through `$TMUX` if it
+was started inside tmux, else the default server. If you run tmux on a custom
+socket (`tmux -L` or `-S`), start the daemon from inside that tmux, or it
+won't find the windows to update.
+
+tmux doesn't style windows by user options on its own. Add something like this
+to `~/.tmux.conf`:
+
+```tmux
+# Mark waiting windows in the status line.
+set -g window-status-format '#{?#{==:#{@zen-status},waiting},#[reverse]● ,}#I:#W#F#[default]'
+# prefix + W: pick from the windows waiting on you.
+bind W choose-tree -Zw -f '#{==:#{@zen-status},waiting}'
+```
+
+### Desktop notifications over ssh
+
+When you ssh into the host from a Mac, Claude Code's own desktop
+notifications can reach the Mac. Claude sends them as escape sequences to
+its terminal. tmux blocks such sequences unless `allow-passthrough` is set,
+so zen sets `allow-passthrough all` on each window it opens. With `all`,
+tmux lets the sequences through from windows you aren't looking at too.
+tmux 3.3 only knows `on`, which covers the visible window only, and older
+tmux has no passthrough. Passthrough gives programs in zen's windows the
+same access to your terminal they would have without tmux.
+
+On the Mac, the terminal has to show them:
+
+- iTerm2: turn on Settings → Profiles → Terminal → *Notification Center
+  Alerts*, and under *Filter Alerts* tick *Send escape sequence-generated
+  alerts*.
+- Ghostty shows them by default.
+- Either way, the terminal app needs notification permission in System
+  Settings.
+
+This only works while a tmux client is attached over ssh. To be notified
+while you're detached, use a [push command](#push-notifications).
+
+## Push notifications
+
+The daemon shows its notifications (a session waiting on you, a review ready,
+and so on) on the desktop of the host it runs on. On a remote host that is
+nowhere you would see them. `notify.command` is a shell command the daemon
+also runs for each notification, for example a curl to a push service with
+apps for the Mac and the phone:
+
+```yaml
+notify:
+  # Use a long random topic: anyone who knows it can read the messages.
+  command: 'curl -fsS -H "Title: $ZEN_TITLE" -d "$ZEN_MESSAGE" https://ntfy.sh/zen-k3v9q2xw7'
+  events: [session-waiting]   # optional; empty means every event
+```
+
+The command runs through `/bin/sh` with the notification in its environment.
+Quote these variables, as above, rather than pasting them into the command:
+
+| Variable | Contents |
+|---|---|
+| `ZEN_EVENT` | `pr-review`, `pr-updated`, `worktree-ready`, `pr-merged`, `stale-worktrees`, `session-waiting`, or `digest` |
+| `ZEN_TITLE` | The notification title |
+| `ZEN_MESSAGE` | The notification text |
+| `ZEN_SUBTITLE` | The subtitle, such as the model or the repo; may be empty |
+| `ZEN_RESUME` | The zen command that opens the worktree, for `session-waiting` and `worktree-ready` |
+
+`events` limits the command to those events. A command that fails, or runs
+longer than 30 seconds, is logged in the daemon log (`zen watch logs`). The
+desktop notification is still sent either way.
 
 ## Slack task watcher
 

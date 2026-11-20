@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
 	wt "github.com/mgreau/zen/internal/worktree"
@@ -200,12 +201,12 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	launchCmd := ag.StartCommand(context, workNewModel)
+	launchCmd := func(a agent.Agent) string { return a.StartCommand(context, workNewModel) }
 
 	if workNewNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Open manually:"))
-		fmt.Printf("  cd %s && %s\n", worktreePath, launchCmd)
+		fmt.Printf("  cd %s && %s\n", worktreePath, launchCmd(ag))
 		return nil
 	}
 
@@ -215,11 +216,9 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := term.OpenTab(worktreePath, launchCmd); err != nil {
-		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
+	if err := openTab(term, worktreePath, ag, launchCmd); err != nil {
+		return err
 	}
-
-	ui.LogSuccess(fmt.Sprintf("%s tab opened", term.Name()))
 	fmt.Println()
 	return nil
 }
