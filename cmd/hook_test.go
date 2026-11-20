@@ -67,21 +67,24 @@ func TestWorktreeFor(t *testing.T) {
 }
 
 func TestSessionCommands(t *testing.T) {
-	off := false
+	none, dashboard := "", "zen dashboard"
 	tests := []struct {
-		name               string
-		cfg                config.Config
-		wantInbox, wantAgt string
+		name                string
+		cfg                 config.Config
+		wantFirst, wantAgts string
 	}{
 		{"defaults", config.Config{Agent: "claude"}, "zen inbox", ""},
+		{"own first command", config.Config{Agent: "claude", Tmux: config.TmuxConfig{FirstWindowCommand: &dashboard}}, "zen dashboard", ""},
+		{"no first command", config.Config{Agent: "claude", Tmux: config.TmuxConfig{FirstWindowCommand: &none}}, "", ""},
 		{"agents window", config.Config{Agent: "claude", Tmux: config.TmuxConfig{AgentsWindow: true}}, "zen inbox", "claude agents"},
 		{"codex", config.Config{Agent: "codex", Tmux: config.TmuxConfig{AgentsWindow: true}}, "zen inbox", "codex agents"},
-		{"inbox off", config.Config{Agent: "claude", Tmux: config.TmuxConfig{Inbox: &off}}, "", ""},
+		{"own agents command", config.Config{Agent: "claude", Tmux: config.TmuxConfig{AgentsWindow: true, AgentsWindowCommand: "claude"}}, "zen inbox", "claude"},
+		{"agents command, window off", config.Config{Agent: "claude", Tmux: config.TmuxConfig{AgentsWindowCommand: "claude"}}, "zen inbox", ""},
 	}
 	for _, tt := range tests {
-		inbox, agents := sessionCommands(&tt.cfg, "zen")
-		if inbox != tt.wantInbox || agents != tt.wantAgt {
-			t.Errorf("%s: sessionCommands = %q, %q; want %q, %q", tt.name, inbox, agents, tt.wantInbox, tt.wantAgt)
+		first, agents := sessionCommands(&tt.cfg, "zen")
+		if first != tt.wantFirst || agents != tt.wantAgts {
+			t.Errorf("%s: sessionCommands = %q, %q; want %q, %q", tt.name, first, agents, tt.wantFirst, tt.wantAgts)
 		}
 	}
 }

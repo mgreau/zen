@@ -39,17 +39,57 @@ type Config struct {
 // tmux` installs. It takes effect for sessions created after a change, with
 // no need to run setup again.
 type TmuxConfig struct {
-	// Inbox runs `zen inbox` in the first window of each new session;
-	// unset means on. See InboxEnabled.
-	Inbox *bool `yaml:"inbox,omitempty"`
-	// AgentsWindow also opens an "Agents" window in the background, running
-	// the agent's view of its sessions (`claude agents`, `codex agents`).
+	// FirstWindowCommand is typed into the first window of each new
+	// session, such as "zen dashboard". Unset means "zen inbox"; empty
+	// means nothing. See FirstWindow.
+	FirstWindowCommand *string `yaml:"first_window_command,omitempty"`
+	// AgentsWindow also opens an "Agents" window in the background.
 	AgentsWindow bool `yaml:"agents_window,omitempty"`
+	// AgentsWindowCommand runs in the Agents window, such as "claude".
+	// Empty means the agent's view of its sessions: "claude agents", or
+	// "codex agents".
+	AgentsWindowCommand string `yaml:"agents_window_command,omitempty"`
+	// AgentsWindowDir is the Agents window's working directory. Empty means
+	// ~/git, so the agent doesn't ask to trust your home directory each time.
+	AgentsWindowDir string `yaml:"agents_window_dir,omitempty"`
 }
 
-// InboxEnabled reports whether new tmux sessions start with `zen inbox`.
-func (t TmuxConfig) InboxEnabled() bool {
-	return t.Inbox == nil || *t.Inbox
+// DefaultAgentsWindowDir is the Agents window's directory unless
+// tmux.agents_window_dir says otherwise.
+const DefaultAgentsWindowDir = "~/git"
+
+// FirstWindow returns the command typed into each new session's first
+// window, or "" for none. zen is how to run zen, for the default.
+func (t TmuxConfig) FirstWindow(zen string) string {
+	if t.FirstWindowCommand == nil {
+		return zen + " inbox"
+	}
+	return strings.TrimSpace(*t.FirstWindowCommand)
+}
+
+// AgentsWindowCmd returns the command for the Agents window, or "" when it
+// is off. ag is the configured agent, for the default.
+func (t TmuxConfig) AgentsWindowCmd(ag agent.Agent) string {
+	if !t.AgentsWindow {
+		return ""
+	}
+	if cmd := strings.TrimSpace(t.AgentsWindowCommand); cmd != "" {
+		return cmd
+	}
+	return ag.AgentsCommand()
+}
+
+// GetAgentsWindowDir returns the Agents window's directory, with a leading
+// "~/" expanded.
+func (t TmuxConfig) GetAgentsWindowDir() string {
+	dir := t.AgentsWindowDir
+	if dir == "" {
+		dir = DefaultAgentsWindowDir
+	}
+	if dir == "~" || strings.HasPrefix(dir, "~/") {
+		dir = filepath.Join(os.Getenv("HOME"), dir[1:])
+	}
+	return dir
 }
 
 // NotifyConfig holds what the daemon does for a notification besides showing
