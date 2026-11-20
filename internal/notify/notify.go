@@ -31,8 +31,12 @@ func Events() []string {
 }
 
 // pushTimeout bounds a push command, so a hung network call cannot stall the
-// daemon loop that sent the notification.
-const pushTimeout = 30 * time.Second
+// daemon loop that sent the notification, and pushWaitDelay bounds the wait
+// for the command's output after that. Variables so tests can shorten them.
+var (
+	pushTimeout   = 30 * time.Second
+	pushWaitDelay = 5 * time.Second
+)
 
 var (
 	pushMu      sync.Mutex
@@ -72,20 +76,31 @@ func deliver(n note) error {
 	} else {
 		desktop = Send(n.title, n.message, n.subtitle)
 	}
-	return errors.Join(desktop, push(n))
+	pushed, err := push(n)
+	if pushed && err == nil {
+		// The notification arrived. A desktop that can't show it, as on a
+		// host you ssh into (no notify-send, or no D-Bus session), is what
+		// the push command is for: not an error each time.
+		desktop = nil
+	}
+	return errors.Join(desktop, err)
 }
 
-// push runs the configured push command for n.
-func push(n note) error {
+// push runs the configured push command for n, and reports whether it ran:
+// not when there is none, or when notify.events leaves out n's event.
+func push(n note) (bool, error) {
 	pushMu.Lock()
 	command, events := pushCommand, pushEvents
 	pushMu.Unlock()
 	if command == "" || (len(events) > 0 && !slices.Contains(events, n.event)) {
-		return nil
+		return false, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	// On timeout only the shell is killed; a child it started (a curl)
+	// could hold the output pipe open, and the wait with it, long after.
+	cmd.WaitDelay = pushWaitDelay
 	cmd.Env = append(os.Environ(),
 		"ZEN_EVENT="+n.event,
 		"ZEN_TITLE="+n.title,
@@ -94,9 +109,9 @@ func push(n note) error {
 		"ZEN_RESUME="+n.resume,
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("notify command: %w: %s", err, strings.TrimSpace(string(out)))
+		return true, fmt.Errorf("notify command: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	return nil
+	return true, nil
 }
 
 // zenBin returns the path to the running zen binary.
