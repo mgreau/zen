@@ -234,6 +234,9 @@ func watchStatus() error {
 
 func watchDaemon() error {
 	config.EnsureDirs()
+	// The daemon is what most installs run all the time, so starting it
+	// after an upgrade brings new prompts such as /zen-import.
+	ensureImportPrompt()
 
 	os.WriteFile(pidFile(), []byte(strconv.Itoa(os.Getpid())), 0o644)
 

@@ -8,3 +8,7 @@ import "strings"
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
+
+// ShellQuote is shellQuote for callers outside the package that append
+// arguments to a command built by an Agent.
+func ShellQuote(s string) string { return shellQuote(s) }

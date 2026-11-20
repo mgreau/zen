@@ -361,6 +361,41 @@ ignore_drafts: false
 	}
 }
 
+func TestLoadRemoteControl(t *testing.T) {
+	const base = `repos:
+  m:
+    full_name: o/m
+    base_path: /tmp/m
+`
+	// Codex is covered in internal/agent, where its daemon start can be
+	// stubbed; building a Codex command here would launch the real daemon.
+	tests := []struct {
+		name  string
+		yaml  string
+		agent string
+		want  string
+	}{
+		{"omitted defaults to off", base, "", "claude 'hi'"},
+		{"claude on", base + "remote_control: true\n", "", "claude 'hi' --remote-control"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			t.Setenv("ZEN_HOME", tmpDir)
+			if err := os.WriteFile(filepath.Join(tmpDir, "config.yaml"), []byte(tt.yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			if got := cfg.NewAgent(tt.agent).StartCommand("hi", ""); got != tt.want {
+				t.Errorf("StartCommand = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWatchConfigDefaults(t *testing.T) {
 	w := WatchConfig{}
 

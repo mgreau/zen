@@ -4,8 +4,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 )
 
 func TestPathToClaudeProject(t *testing.T) {
@@ -258,5 +260,96 @@ func TestFormatAge(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("FormatAge(%v) = %q, want %q", tt.t, got, tt.want)
 		}
+	}
+}
+
+// TestPathToClaudeProjectLong pins Claude Code's handling of long paths: the
+// munged name is cut at 200 and a base-36 hash of the raw path is appended.
+// The expected value comes from the same algorithm checked against a
+// directory Claude Code 2.1.329 created for a 223-character path.
+func TestPathToClaudeProjectLong(t *testing.T) {
+	// The hash input is the resolved path; test it directly so the result
+	// does not depend on whether the host's /home is a symlink.
+	path := "/home/dev/git/" + strings.Repeat("service-", 30)
+	if got := claudePathHash(utf16.Encode([]rune(path))); got != "xfag08" {
+		t.Errorf("claudePathHash = %q, want xfag08", got)
+	}
+
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := filepath.Join(base, strings.Repeat("service-", 30))
+	got := pathToClaudeProject(long)
+	munged := mungePath(long)
+	if want := munged[:200] + "-" + claudePathHash(utf16.Encode([]rune(long))); got != want || len(munged) <= 200 {
+		t.Errorf("pathToClaudeProject(long) = %q, want %q", got, want)
+	}
+	short := filepath.Join(base, "app")
+	if got := pathToClaudeProject(short); got != mungePath(short) {
+		t.Errorf("short path got a hash: %q", got)
+	}
+}
+
+// TestPathToClaudeProjectAfterRemoval checks that a worktree under a
+// symlinked base maps to the same project directory after the worktree is
+// removed, so delete can still clean its sessions.
+func TestPathToClaudeProjectAfterRemoval(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	wt := filepath.Join(real, "app-feature")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	viaLink := filepath.Join(link, "app-feature")
+	before := pathToClaudeProject(viaLink)
+	if err := os.RemoveAll(wt); err != nil {
+		t.Fatal(err)
+	}
+	if after := pathToClaudeProject(viaLink); after != before {
+		t.Errorf("after removal %q, before %q", after, before)
+	}
+}
+
+// TestFindSessionsSkipsOtherDirectoriesSharingTheName covers the lossy
+// project name: app-my_feature and app-my-feature share one directory.
+func TestFindSessionsSkipsOtherDirectoriesSharingTheName(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mine := filepath.Join(home, "app-my_feature")
+	other := filepath.Join(home, "app-my-feature")
+	for _, d := range []string{mine, other} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	proj := ProjectDirPath(mine)
+	if proj != ProjectDirPath(other) {
+		t.Fatal("fixture: expected the two paths to share a project directory")
+	}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(os.MkdirAll(proj, 0o700))
+	must(os.MkdirAll(filepath.Join(mine, "sub"), 0o755))
+	must(os.WriteFile(filepath.Join(proj, "mine.jsonl"), []byte(`{"type":"mode"}`+"\n"+`{"type":"user","cwd":"`+mine+`"}`+"\n"), 0o600))
+	must(os.WriteFile(filepath.Join(proj, "theirs.jsonl"), []byte(`{"type":"user","cwd":"`+other+`"}`+"\n"), 0o600))
+	must(os.WriteFile(filepath.Join(proj, "fresh.jsonl"), []byte(`{"type":"mode"}`+"\n"), 0o600))
+	must(os.WriteFile(filepath.Join(proj, "sub.jsonl"), []byte(`{"type":"user","cwd":"`+mine+`/sub"}`+"\n"), 0o600))
+
+	sessions, _ := FindSessions(mine)
+	ids := map[string]bool{}
+	for _, s := range sessions {
+		ids[s.ID] = true
+	}
+	if !ids["mine"] || !ids["fresh"] || !ids["sub"] || ids["theirs"] {
+		t.Errorf("FindSessions(mine) = %v, want mine, fresh and sub, not theirs", ids)
 	}
 }
