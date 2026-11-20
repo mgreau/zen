@@ -287,28 +287,49 @@ func watchDaemon() error {
 
 	// Slack task watcher (opt-in): polls for the user's own emoji reactions
 	// and spins up a feature worktree + live agent session per flagged
-	// thread. Disabled unless slack.enabled is true AND ZEN_SLACK_TOKEN is set.
+	// thread. Disabled unless slack.enabled is true AND a token is available
+	// (ZEN_SLACK_TOKEN, or a stored sign-in from zen slack login).
 	slackEnabled := cfg.Slack.Enabled
 	var slackClient *slackpkg.Client
-	var slackRec *reconciler.SlackReconciler
+	var slackRec *reconciler.SlackReconciler // nil until auth.test succeeds
+	var slackSource string
 	if slackEnabled {
-		token := os.Getenv("ZEN_SLACK_TOKEN")
-		if token == "" {
-			fmt.Printf("[%s] Slack watcher disabled: slack.enabled is true but ZEN_SLACK_TOKEN is not set\n", time.Now().Format(time.RFC3339))
+		src, refreshing, source, err := slackTokenSource()
+		if err != nil {
+			fmt.Printf("[%s] Slack watcher disabled: %v (set ZEN_SLACK_TOKEN or run zen slack login)\n", time.Now().Format(time.RFC3339), err)
 			slackEnabled = false
 		} else {
-			slackClient = slackpkg.NewClient(token)
-			authCtx, authCancel := context.WithTimeout(ctx, 10*time.Second)
-			selfUserID, err := slackClient.AuthTest(authCtx)
-			authCancel()
-			if err != nil {
+			if refreshing != nil {
+				watchSlackRefresh(refreshing)
+			}
+			slackClient = slackpkg.NewClientWithSource(src)
+			slackSource = source
+		}
+	}
+	// connectSlack runs auth.test and starts the Slack reconciler. With a
+	// stored sign-in, a failure (network down at startup, or a refresh token
+	// that needs zen slack login) is retried on every Slack poll tick, so the
+	// watcher comes back without a daemon restart. A bad ZEN_SLACK_TOKEN
+	// can't fix itself, so that disables the watcher.
+	connectSlack := func() {
+		authCtx, authCancel := context.WithTimeout(ctx, 30*time.Second)
+		selfUserID, err := slackClient.AuthTest(authCtx)
+		authCancel()
+		if err != nil {
+			if slackSource == "ZEN_SLACK_TOKEN" {
 				fmt.Printf("[%s] Slack watcher disabled: auth.test failed: %v\n", time.Now().Format(time.RFC3339), err)
 				slackEnabled = false
 			} else {
-				slackRec = reconciler.NewSlackReconciler(cfg, slackClient, selfUserID)
-				reconciler.SlackReadyHook = slackRec.NotifyReady
+				fmt.Printf("[%s] Slack watcher waiting: auth.test failed, retrying next poll: %v\n", time.Now().Format(time.RFC3339), err)
 			}
+			return
 		}
+		fmt.Printf("[%s] Slack watcher: authenticated via %s\n", time.Now().Format(time.RFC3339), slackSource)
+		slackRec = reconciler.NewSlackReconciler(cfg, slackClient, selfUserID)
+		reconciler.SlackReadyHook = slackRec.NotifyReady
+	}
+	if slackEnabled {
+		connectSlack()
 	}
 	slackSeen := loadSeenSlack()
 
@@ -345,7 +366,7 @@ func watchDaemon() error {
 
 	// Initial poll and session scan
 	pollOnce(ctx, st, setupQueue, setupRec)
-	if slackEnabled {
+	if slackRec != nil {
 		pollSlackOnce(ctx, slackClient, slackSeen, slackQueue)
 		if err := slackRec.PruneDone(ctx); err != nil {
 			fmt.Printf("[%s] Slack prune error: %v\n", time.Now().Format(time.RFC3339), err)
@@ -368,6 +389,12 @@ func watchDaemon() error {
 			pollOnce(ctx, st, setupQueue, setupRec)
 
 		case <-slackC:
+			if slackRec == nil {
+				connectSlack()
+				if slackRec == nil {
+					continue
+				}
+			}
 			pollSlackOnce(ctx, slackClient, slackSeen, slackQueue)
 
 		case <-dispatchTicker.C:
@@ -377,7 +404,7 @@ func watchDaemon() error {
 			if err := dispatcher.HandleAsync(cleanupCtx, cleanupQueue, 1, 1, cleanupRec.Reconcile, 3)(); err != nil {
 				fmt.Printf("[%s] Cleanup dispatch error: %v\n", time.Now().Format(time.RFC3339), err)
 			}
-			if slackEnabled {
+			if slackRec != nil {
 				if err := dispatcher.HandleAsync(slackCtx, slackQueue, concurrency, concurrency, slackRec.Reconcile, maxRetries)(); err != nil {
 					fmt.Printf("[%s] Slack dispatch error: %v\n", time.Now().Format(time.RFC3339), err)
 				}
@@ -388,7 +415,7 @@ func watchDaemon() error {
 
 		case <-cleanupTicker.C:
 			reconciler.ScanMergedPRs(ctx, cfg, cleanupQueue, cfg.Watch.CleanupAfterMergeDuration())
-			if slackEnabled {
+			if slackRec != nil {
 				if err := slackRec.PruneDone(ctx); err != nil {
 					fmt.Printf("[%s] Slack prune error: %v\n", time.Now().Format(time.RFC3339), err)
 				}
@@ -548,6 +575,22 @@ func shortSHA(sha string) string {
 		return "?"
 	}
 	return sha
+}
+
+// watchSlackRefresh makes a failing token refresh loud: the watcher would
+// otherwise just log an error on every poll while you're away. It logs and
+// sends one desktop alert when refreshing starts failing, and logs again
+// once it recovers (for example after zen slack login).
+func watchSlackRefresh(rs *slackpkg.RefreshingSource) {
+	rs.OnFailure = func(err error) {
+		fmt.Printf("[%s] ERROR Slack token refresh failed; the Slack watcher is stalled until this is fixed: %v\n", time.Now().Format(time.RFC3339), err)
+		if nerr := notify.Send("zen: Slack sign-in needs attention", "Token refresh failed. Run: zen slack login", err.Error()); nerr != nil {
+			fmt.Printf("[%s] Could not send desktop alert: %v\n", time.Now().Format(time.RFC3339), nerr)
+		}
+	}
+	rs.OnRecover = func() {
+		fmt.Printf("[%s] Slack token refresh recovered\n", time.Now().Format(time.RFC3339))
+	}
 }
 
 func slackSeenFile() string {

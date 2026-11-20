@@ -33,8 +33,9 @@ type Config struct {
 // SlackConfig holds configuration for the Slack task watcher: polling for the
 // user's own emoji reaction on a message, then spinning up a feature worktree
 // seeded with the thread as context. Disabled unless Enabled is explicitly
-// set to true. The Slack token itself is never stored here — it's read from
-// the ZEN_SLACK_TOKEN environment variable at daemon startup.
+// set to true. The Slack token itself is never stored here: it comes from
+// ZEN_SLACK_TOKEN, or from the rotating token zen slack login keeps in the
+// state directory.
 type SlackConfig struct {
 	Enabled      bool   `yaml:"enabled"`
 	Emoji        string `yaml:"emoji"`         // reaction name (no colons) that flags a task, default "claudecode"
@@ -42,6 +43,17 @@ type SlackConfig struct {
 	PollInterval string `yaml:"poll_interval"` // default "5m"
 	AckReaction  string `yaml:"ack_reaction"`  // reaction added on pickup, default "eyes"
 	DoneEmoji    string `yaml:"done_emoji"`    // reaction (on the original message) or a merged PR from the worktree's branch stops further completion DMs, default "done_check"
+	ClientID     string `yaml:"client_id"`     // Slack app client ID for zen slack login (PKCE; no secret needed)
+	RedirectPort int    `yaml:"redirect_port"` // localhost port for the OAuth redirect, default 8765
+}
+
+// GetRedirectPort returns the localhost port zen slack login listens on,
+// defaulting to 8765.
+func (s SlackConfig) GetRedirectPort() int {
+	if s.RedirectPort > 0 {
+		return s.RedirectPort
+	}
+	return 8765
 }
 
 // GetEmoji returns the configured reaction name, defaulting to "claudecode".
