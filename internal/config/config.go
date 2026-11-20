@@ -13,6 +13,7 @@ import (
 
 	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/notify"
+	"github.com/mgreau/zen/internal/tmux"
 	"gopkg.in/yaml.v3"
 )
 
@@ -30,7 +31,7 @@ type Config struct {
 	IgnoreDrafts bool                  `yaml:"ignore_drafts"`
 	Watch        WatchConfig           `yaml:"watch"`
 	Slack        SlackConfig           `yaml:"slack"`
-	Notify       NotifyConfig          `yaml:"notify"`
+	Notify       NotifyConfig          `yaml:"notify,omitempty"`
 }
 
 // NotifyConfig holds what the daemon does for a notification besides showing
@@ -38,10 +39,51 @@ type Config struct {
 type NotifyConfig struct {
 	// Command is a shell command run for each notification, such as a curl
 	// to a push service. Empty means none.
-	Command string `yaml:"command"`
+	Command string `yaml:"command,omitempty"`
 	// Events limits Command to these events (see notify.Events). Empty
 	// means all of them.
-	Events []string `yaml:"events"`
+	Events []string `yaml:"events,omitempty"`
+
+	// Terminal turns zen's own notifications for Claude in tmux windows on
+	// or off; unset means on. They replace Claude's built-in ones there,
+	// naming the worktree or PR and quoting Claude, and reach the computer
+	// you ssh from through tmux. See TerminalEnabled.
+	Terminal *bool `yaml:"terminal,omitempty"`
+	// TerminalEvents are the Claude events zen notifies about: "stop" (a
+	// turn ended) and Claude's notification types, such as
+	// "permission_prompt". Unset means DefaultTerminalEvents; an empty list
+	// means none.
+	TerminalEvents []string `yaml:"terminal_events,omitempty"`
+	// TerminalSequence is the escape sequence for the notification: "auto"
+	// (the default), "osc777" (Ghostty) or "osc9" (iTerm2 and others).
+	TerminalSequence string `yaml:"terminal_sequence,omitempty"`
+}
+
+// DefaultTerminalEvents are the Claude events zen notifies about unless
+// notify.terminal_events says otherwise. Claude's "idle_prompt" is left out:
+// it repeats "stop", a minute later.
+var DefaultTerminalEvents = []string{"stop", "permission_prompt", "elicitation_dialog"}
+
+// TerminalEnabled reports whether zen sends its own notifications for
+// Claude in tmux windows.
+func (n NotifyConfig) TerminalEnabled() bool {
+	return n.Terminal == nil || *n.Terminal
+}
+
+// GetTerminalEvents returns the Claude events zen notifies about.
+func (n NotifyConfig) GetTerminalEvents() []string {
+	if n.TerminalEvents == nil {
+		return DefaultTerminalEvents
+	}
+	return n.TerminalEvents
+}
+
+// GetTerminalSequence returns the notification escape sequence.
+func (n NotifyConfig) GetTerminalSequence() tmux.Sequence {
+	if n.TerminalSequence == "" {
+		return tmux.SequenceAuto
+	}
+	return tmux.Sequence(n.TerminalSequence)
 }
 
 // SlackConfig holds configuration for the Slack task watcher: polling for the
@@ -255,6 +297,9 @@ func Load() (*Config, error) {
 		if !slices.Contains(notify.Events(), e) {
 			return nil, fmt.Errorf("invalid notify event %q: must be one of %s", e, strings.Join(notify.Events(), ", "))
 		}
+	}
+	if seq := cfg.Notify.GetTerminalSequence(); !slices.Contains(tmux.Sequences(), seq) {
+		return nil, fmt.Errorf("invalid notify.terminal_sequence %q: must be auto, osc777, or osc9", seq)
 	}
 	if cfg.Repos == nil {
 		cfg.Repos = make(map[string]RepoConfig)

@@ -38,6 +38,11 @@ Silently prepares worktrees, retries failures, and cleans up after itself.`,
 		if cmd.Name() == "setup" || cmd.Name() == "version" {
 			return nil
 		}
+		// zen setup's subcommands need no config, and hooks load it
+		// themselves, so that a broken config never breaks the agent.
+		if p := cmd.Parent(); p != nil && (p.Name() == "setup" || p.Name() == "hook") {
+			return nil
+		}
 
 		var err error
 		cfg, err = config.Load()

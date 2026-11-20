@@ -171,7 +171,7 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 	if err != nil {
 		return fmt.Errorf("resolving terminal: %w", err)
 	}
-	ag := terminal.AgentFor(term, r.cfg.NewAgent(""))
+	ag := terminal.AgentFor(term, r.cfg.NewAgent(""), r.cfg.Notify)
 	launchCmd := ag.StartCommand(renderSlackPrompt(permalink, messages), "")
 	outcome, err := terminal.OpenInBackground(term, worktreePath, launchCmd)
 	if err != nil {

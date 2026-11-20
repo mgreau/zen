@@ -199,33 +199,71 @@ was started inside tmux, else the default server. If you run tmux on a custom
 socket (`tmux -L` or `-S`), start the daemon from inside that tmux, or it
 won't find the windows to update.
 
-tmux doesn't style windows by user options on its own. Add something like this
-to `~/.tmux.conf`:
+tmux doesn't style windows by user options on its own. `zen setup tmux` adds
+the settings for that to your tmux config, and `zen setup` offers to when you
+pick tmux. It writes them between `# >>> zen >>>` and `# <<< zen <<<` lines in
+`~/.tmux.conf` (or `~/.config/tmux/tmux.conf`, if only that exists), and
+reloads tmux when run inside it. Running it again updates that block and
+leaves the rest of the file alone. The block:
 
 ```tmux
-# Mark waiting windows in the status line.
-set -g window-status-format '#{?#{==:#{@zen-status},waiting},#[reverse]● ,}#I:#W#F#[default]'
+# Track which terminals have focus, so zen doesn't notify you about the
+# window you are looking at.
+set -g focus-events on
+# Mark windows whose agent is waiting on you: tmux's default format, with
+# a reverse "● " in front.
+set -g window-status-format '#{?#{==:#{@zen-status},waiting},#[reverse]● ,}#I:#W#{?window_flags,#{window_flags}, }#[default]'
 # prefix + W: pick from the windows waiting on you.
 bind W choose-tree -Zw -f '#{==:#{@zen-status},waiting}'
 ```
 
 ### Desktop notifications over ssh
 
-When you ssh into the host from a Mac, Claude Code's own desktop
-notifications can reach the Mac. Claude sends them as escape sequences to
-its terminal. tmux blocks such sequences unless `allow-passthrough` is set,
-so zen sets `allow-passthrough all` on each window it opens. With `all`,
-tmux lets the sequences through from windows you aren't looking at too.
-tmux 3.3 only knows `on`, which covers the visible window only, and older
-tmux has no passthrough. Passthrough gives programs in zen's windows the
-same access to your terminal they would have without tmux.
+When you ssh into the host from a Mac, zen sends a desktop notification for
+the Claude in each of its windows, through tmux and ssh to iTerm2 or Ghostty:
+
+- When Claude finishes a turn: the start of its reply, right away.
+- When Claude asks for a permission or an answer: its own text, such as
+  "Claude needs your permission to use Bash".
+
+The title names the window's worktree, such as `Claude · app-fix-login`, or
+for a PR review its repo, number, and title, such as
+`Claude · app#1042 · Add pagination to ListUsers`.
+
+zen does this with its own hook (`zen hook notify`), passed with the other
+hooks. It turns off Claude's own notifications for those sessions only, so
+you don't get each one twice; your Claude settings are not changed. With
+tmux's `focus-events` on, as `zen setup tmux` sets it, there's no notification
+for the window you're looking at in a focused terminal. Claude's reply can
+quote untrusted text, so zen drops control and invisible formatting
+characters from it before it reaches your terminal.
+
+```yaml
+notify:
+  terminal: true            # false: no zen notifications; Claude keeps its own
+  terminal_events: [stop, permission_prompt, elicitation_dialog]   # the default
+  terminal_sequence: auto   # or osc777 (Ghostty), osc9 (iTerm2 and others)
+```
+
+`terminal_events` takes `stop` (a turn ended) and Claude's notification types,
+such as `permission_prompt`, `elicitation_dialog`, or `idle_prompt`. An empty
+list turns them all off. `auto` sends OSC 777, which has a separate title,
+when every terminal attached to the session is Ghostty, and OSC 9, which puts
+the title in front of the text, otherwise.
+
+These notifications get through tmux because zen sets `allow-passthrough all`
+on each window it opens. With `all`, tmux lets them through from windows you
+aren't looking at too. tmux 3.3 only knows `on`, which covers the visible
+window only, and older tmux has no passthrough. Passthrough gives programs in
+zen's windows the same access to your terminal they would have without tmux.
 
 On the Mac, the terminal has to show them:
 
 - iTerm2: turn on Settings → Profiles → Terminal → *Notification Center
   Alerts*, and under *Filter Alerts* tick *Send escape sequence-generated
   alerts*.
-- Ghostty shows them by default.
+- Ghostty shows them by default. It uses its window title as the subtitle;
+  set `title = <name>` in Ghostty's config for a fixed one.
 - Either way, the terminal app needs notification permission in System
   Settings.
 
