@@ -43,6 +43,23 @@ func (a *claudeAgent) ResumeCommand(sessionID, model string) string {
 	return cmd + " --resume " + shellQuote(sessionID) + a.remoteControlFlag()
 }
 
+// ResumeWithPrompt is ResumeCommand plus a first message for the resumed
+// session. The prompt goes before --remote-control, which would otherwise
+// take it as the session name.
+func (a *claudeAgent) ResumeWithPrompt(sessionID, model, prompt string) string {
+	cmd := a.bin
+	if model != "" {
+		cmd += " --model " + shellQuote(model)
+	}
+	return cmd + " --resume " + shellQuote(sessionID) + " " + shellQuote(prompt) + a.remoteControlFlag()
+}
+
+// PromptResumer is implemented by agents that can resume a session with a
+// first message.
+type PromptResumer interface {
+	ResumeWithPrompt(sessionID, model, prompt string) string
+}
+
 // remoteControlFlag is appended last: --remote-control takes an optional
 // session name, so placed before the prompt it would swallow the prompt as
 // that name and start an empty session.

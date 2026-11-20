@@ -129,6 +129,13 @@ func TestRemoteControlCommands(t *testing.T) {
 	if got := claude.ResumeCommand("abc-123", ""); got != "claude --resume 'abc-123' --remote-control" {
 		t.Errorf("Claude ResumeCommand = %q", got)
 	}
+	pr, ok := claude.(PromptResumer)
+	if !ok {
+		t.Fatal("Claude agent does not implement PromptResumer")
+	}
+	if got := pr.ResumeWithPrompt("abc-123", "", "moved here"); got != "claude --resume 'abc-123' 'moved here' --remote-control" {
+		t.Errorf("Claude ResumeWithPrompt = %q", got)
+	}
 
 	bin := fakeCodexOnPath(t)
 	var started string

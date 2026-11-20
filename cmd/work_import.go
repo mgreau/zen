@@ -219,6 +219,9 @@ func runWorkImport(cmd *cobra.Command, args []string) error {
 		"Briefly recap where we left off and the next step, then wait for me.",
 		src.dir, target.worktreePath, target.gitBranch, carryNote, oldLocation)
 	resume := func(a agent.Agent) string {
+		if pr, ok := a.(agent.PromptResumer); ok {
+			return pr.ResumeWithPrompt(newID, workImportModel, handoff)
+		}
 		return a.ResumeCommand(newID, workImportModel) + " " + agent.ShellQuote(handoff)
 	}
 
