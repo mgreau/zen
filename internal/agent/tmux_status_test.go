@@ -164,3 +164,16 @@ func TestTmuxStatusSettingsWithNotify(t *testing.T) {
 		t.Error("settings without zenBin turn off Claude's notifications")
 	}
 }
+
+func TestAgentsCommand(t *testing.T) {
+	if got := New(Claude, "/opt/claude").AgentsCommand(); got != "/opt/claude agents" {
+		t.Errorf("Claude AgentsCommand = %q", got)
+	}
+	if got := New(Codex, "codex").AgentsCommand(); got != "codex agents" {
+		t.Errorf("Codex AgentsCommand = %q", got)
+	}
+	// The agent view is not a session zen opened: no status hooks.
+	if got := WithTmuxStatus(New(Claude, "claude"), "/bin/zen").AgentsCommand(); got != "claude agents" {
+		t.Errorf("AgentsCommand with tmux status = %q", got)
+	}
+}
