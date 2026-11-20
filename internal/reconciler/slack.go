@@ -168,11 +168,15 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 	}
 
 	ag := r.cfg.NewAgent("")
-	launchCmd := ag.StartCommand(renderSlackPrompt(permalink, messages), "")
 	term, err := terminal.NewTerminal(r.cfg.GetTerminal())
 	if err != nil {
 		return fmt.Errorf("resolving terminal: %w", err)
 	}
+	ag, err = ag.PrepareLaunch(worktreePath)
+	if err != nil {
+		logf("Slack: %s remote control unavailable for %s, launching without it: %v", ag.Kind(), worktreeName, err)
+	}
+	launchCmd := ag.StartCommand(renderSlackPrompt(permalink, messages), "")
 	if err := term.OpenTab(worktreePath, launchCmd); err != nil {
 		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
 	}

@@ -142,12 +142,10 @@ func runReview(cmd *cobra.Command, args []string) error {
 	// Ensure the /review-pr prompt is installed for the chosen agent
 	ensureReviewPrompt(ag)
 
-	launchCmd := ag.StartCommand(ag.ReviewPrompt(result.WorktreePath), reviewModel)
-
 	if reviewNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Open manually:"))
-		fmt.Printf("  cd %s && %s\n", result.WorktreePath, launchCmd)
+		fmt.Printf("  cd %s && %s\n", result.WorktreePath, ag.StartCommand(ag.ReviewPrompt(result.WorktreePath), reviewModel))
 		return nil
 	}
 
@@ -157,6 +155,8 @@ func runReview(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	ag = prepareLaunch(ag, result.WorktreePath)
+	launchCmd := ag.StartCommand(ag.ReviewPrompt(result.WorktreePath), reviewModel)
 	if err := term.OpenTab(result.WorktreePath, launchCmd); err != nil {
 		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
 	}
