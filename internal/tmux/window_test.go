@@ -111,20 +111,25 @@ func TestStatusUpdates(t *testing.T) {
 		idle(window{ID: "@8", Worktree: "/w/h3", Status: "stopped", Hooks: true}),                // agent restarted
 		idle(window{ID: "@9", Worktree: "/w/h4", Hooks: true}),                                   // status cleared
 		idle(window{ID: "@10", Worktree: "/w/h5", Status: "running", Hooks: true}),               // turn interrupted
+		idle(window{ID: "@12", Worktree: "/w/h6", Status: "running", Hooks: true}),               // a long, quiet tool
+		idle(window{ID: "@13", Worktree: "/w/h7", Status: "running", Hooks: true}),               // idle past StaleRunning
+		idle(window{ID: "@14", Worktree: "/w/h8", Status: "running", Hooks: true}),               // a long subagent
 		{ID: "@11", Worktree: "/w/x", Status: "running", Command: "sh", PID: "busy", Panes: "1"}, // other agent
 	}
 	got := statusUpdates(windows, map[string]Report{
 		"/w/a": {Status: "running"}, "/w/b": {Status: "waiting"}, "/w/d": {Status: "stopped"},
 		"/w/gone": {Status: "waiting"},
 		"/w/h1":   {Status: "running"}, "/w/h2": {Status: "stopped"}, "/w/h3": {Status: "running"},
-		"/w/h4": {Status: "running"}, "/w/h5": {Status: "waiting", BecameWaiting: true},
-		"/w/x": {Status: "stopped"},
+		"/w/h4": {Status: "running"}, "/w/h5": {Status: "waiting", Interrupted: true}, "/w/h6": {Status: "waiting"},
+		"/w/h7": {Status: "waiting", Idle: StaleRunning},
+		"/w/h8": {Status: "waiting", Idle: 2 * StaleRunning, ToolRunning: true},
+		"/w/x":  {Status: "stopped"},
 	})
 	var gotIDs []string
 	for _, w := range got {
 		gotIDs = append(gotIDs, w.ID+"="+w.Status)
 	}
-	want := []string{"@3=waiting", "@5=stopped", "@7=stopped", "@8=running", "@9=running", "@10=waiting"}
+	want := []string{"@3=waiting", "@5=stopped", "@7=stopped", "@8=running", "@9=running", "@10=waiting", "@13=waiting"}
 	if !slices.Equal(gotIDs, want) {
 		t.Errorf("statusUpdates() = %q, want %q", gotIDs, want)
 	}
@@ -333,14 +338,14 @@ func TestSetStatusesStoppedClearsHooks(t *testing.T) {
 		t.Errorf("daemon overwrote the hooks' status: %q, want waiting", got)
 	}
 
-	// The daemon's running → waiting transition, as after an interrupted
-	// turn, overrides a "running" the hooks left behind.
+	// An interrupted turn, which no hook reports, overrides a "running" the
+	// hooks left behind.
 	tmuxCmd(t, "set-option", "-w", "-t", w.ID, StatusOption, "running")
-	if err := SetStatuses(map[string]Report{workDir: {Status: "waiting", BecameWaiting: true}}); err != nil {
+	if err := SetStatuses(map[string]Report{workDir: {Status: "waiting", Interrupted: true}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := zenWindow(t, workDir).Status; got != "waiting" {
-		t.Errorf("after the daemon saw the agent go idle: %q, want waiting", got)
+		t.Errorf("after an interrupted turn: %q, want waiting", got)
 	}
 
 	waitFor(t, "idle shell", func() bool { return zenWindow(t, workDir).idle() })

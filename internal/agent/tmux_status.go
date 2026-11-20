@@ -22,6 +22,11 @@ func WithTmuxStatus(ag Agent) Agent {
 	return &withHooks
 }
 
+// waitingNotifications matches the Claude notification types that wait on
+// the user. Others, such as a background agent finishing (agent_completed)
+// or a login succeeding, come while Claude may still be working.
+const waitingNotifications = "permission_prompt|idle_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input"
+
 // tmuxStatusSettings returns Claude Code settings, for --settings, whose hooks
 // mark the window "waiting" when Claude starts, finishes a turn, or asks for
 // something (a permission, an answer), and "running" once the user replies.
@@ -47,13 +52,23 @@ func tmuxStatusSettings() string {
 	settings := map[string]any{
 		"hooks": map[string]any{
 			// Not "compact": Claude compacts mid-turn, while still running.
-			"SessionStart":     hook("startup|resume|clear", "waiting"),
-			"Notification":     hook("", "waiting"),
-			"Stop":             hook("", "waiting"),
+			"SessionStart": hook("startup|resume|clear", "waiting"),
+			"Notification": hook(waitingNotifications, "waiting"),
+			"Stop":         hook("", "waiting"),
+			// A turn that ends on an error, such as a rate limit, waits on
+			// the user too, but fires StopFailure instead of Stop.
+			"StopFailure":      hook("", "waiting"),
 			"UserPromptSubmit": hook("", "running"),
 			// A permission prompt is answered without a new prompt, so the
 			// tool finishing is what marks the agent running again.
 			"PostToolUse": hook("", "running"),
+			// An approved tool that fails fires this instead.
+			"PostToolUseFailure": hook("", "running"),
+			// Claude exiting: mark the window stopped, and give up the
+			// status, now that no hook will report it, even with no daemon
+			// running. /clear ends a session too, but SessionStart follows.
+			"SessionEnd": []map[string]any{{"hooks": []map[string]any{{"type": "command", "command": `[ -z "$TMUX_PANE" ] || tmux set-option -w -t "$TMUX_PANE" ` +
+				tmux.StatusOption + ` stopped \; set-option -w -u -t "$TMUX_PANE" ` + tmux.HooksOption + " 2>/dev/null || true"}}}},
 		},
 	}
 	b, err := json.Marshal(settings)

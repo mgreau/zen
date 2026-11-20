@@ -47,11 +47,14 @@ func TestTmuxStatusSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"SessionStart":     "waiting",
-		"Notification":     "waiting",
-		"Stop":             "waiting",
-		"UserPromptSubmit": "running",
-		"PostToolUse":      "running",
+		"SessionStart":       "waiting",
+		"Notification":       "waiting",
+		"Stop":               "waiting",
+		"StopFailure":        "waiting",
+		"UserPromptSubmit":   "running",
+		"PostToolUse":        "running",
+		"PostToolUseFailure": "running",
+		"SessionEnd":         "stopped",
 	}
 	if len(s.Hooks) != len(want) {
 		t.Errorf("hooks for %d events, want %d", len(s.Hooks), len(want))
@@ -62,10 +65,18 @@ func TestTmuxStatusSettings(t *testing.T) {
 			t.Fatalf("%s: %+v, want one hook", event, groups)
 		}
 		h := groups[0].Hooks[0]
-		if h.Type != "command" || !strings.Contains(h.Command, "@zen-status "+status+" ") ||
-			!strings.Contains(h.Command, "@zen-hooks 1") {
-			t.Errorf("%s hook = %+v, want it to set %s and the hooks flag", event, h, status)
+		// SessionEnd gives the status up; the others claim it.
+		flag := "@zen-hooks 1"
+		if status == "stopped" {
+			flag = "-u -t \"$TMUX_PANE\" @zen-hooks"
 		}
+		if h.Type != "command" || !strings.Contains(h.Command, "@zen-status "+status+" ") ||
+			!strings.Contains(h.Command, flag) {
+			t.Errorf("%s hook = %+v, want it to set %s and %s", event, h, status, flag)
+		}
+	}
+	if m := s.Hooks["Notification"][0].Matcher; m != waitingNotifications {
+		t.Errorf("Notification status matcher = %q, want the waiting types", m)
 	}
 	if m := s.Hooks["SessionStart"][0].Matcher; strings.Contains(m, "compact") {
 		t.Errorf("SessionStart matcher %q includes compact, which happens mid-turn", m)

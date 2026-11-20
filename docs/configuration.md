@@ -179,14 +179,21 @@ zen keeps the window option `@zen-status` on each of its windows. The value is
 
 - For Claude, hooks that zen passes with `--settings` when it opens the agent
   in a tmux window. They set the status as soon as Claude starts, finishes a
-  turn or asks for a permission, and when you reply. Nothing is written into
+  turn or asks for a permission, and when you reply, and mark it `stopped`
+  when Claude exits. Nothing is written into
   the worktree, your own hooks still run, and the commands zen prints for
   `--no-terminal` don't include them.
 - The daemon's session scan. This works for every agent, after a delay of up
   to `session_scan_interval` plus the idle threshold. Where Claude's hooks set
   the status, the daemon marks the window `stopped` once Claude exits, and
-  `waiting` when it sends its "Claude is waiting" notification, which covers a
-  turn you interrupted with Esc: no hook reports that.
+  `waiting` after a turn you interrupted with Esc, which no hook reports. It
+  tells that from a long, quiet tool by the interrupt marker Claude records
+  in the session. A session idle for 10 minutes is marked `waiting` whatever
+  the hooks last said, for waits no hook reports, unless its last step is a
+  tool call still running, such as a subagent.
+
+After you approve a permission, the window stays `waiting` until the
+approved tool finishes: no hook fires on the approval itself.
 
 The daemon reaches tmux the way any tmux client does: through `$TMUX` if it
 was started inside tmux, else the default server. If you run tmux on a custom
