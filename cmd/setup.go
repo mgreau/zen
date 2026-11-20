@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -11,7 +12,9 @@ import (
 
 	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/config"
+	"github.com/mgreau/zen/internal/tmux"
 	"github.com/mgreau/zen/internal/ui"
+	"github.com/mgreau/zen/internal/zenbin"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -26,7 +29,23 @@ var setupCmd = &cobra.Command{
 	RunE:  runSetup,
 }
 
+var setupTmuxCmd = &cobra.Command{
+	Use:   "tmux",
+	Short: "Add zen's settings to your tmux config",
+	Long: `Adds a block of settings zen relies on to your tmux config (~/.tmux.conf, or
+~/.config/tmux/tmux.conf if only that exists), and reloads it when run inside
+tmux: focus tracking, so zen doesn't notify you about the window you're
+looking at; a marker on windows whose agent waits on you; and prefix + W to
+pick from them. Running it again updates the block and leaves the rest of the
+file alone.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return setupTmux(nil)
+	},
+}
+
 func init() {
+	setupCmd.AddCommand(setupTmuxCmd)
 	rootCmd.AddCommand(setupCmd)
 }
 
@@ -41,7 +60,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	fmt.Println("Prerequisites:")
 	fmt.Println("  gh auth login         — authenticate GitHub CLI")
-	fmt.Println("  a terminal emulator   — iTerm2, Ghostty, kitty, or macOS Terminal")
+	fmt.Println("  a terminal emulator   — iTerm2, Ghostty, kitty, or macOS Terminal; or tmux")
 	fmt.Println("  claude or codex CLI   — the coding agent zen launches")
 	fmt.Println()
 
@@ -97,11 +116,45 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println()
 
-	terminalChoice := prompt(scanner, "Terminal (iterm, ghostty, kitty, or macos)", "iterm")
+	defaultTerminal := "iterm"
+	if os.Getenv("TMUX") != "" {
+		defaultTerminal = "tmux"
+	}
+	terminalChoice := prompt(scanner, "Terminal (iterm, ghostty, kitty, macos, or tmux)", defaultTerminal)
 	terminalChoice = strings.ToLower(strings.TrimSpace(terminalChoice))
-	if terminalChoice != "iterm" && terminalChoice != "ghostty" && terminalChoice != "kitty" && terminalChoice != "macos" {
-		fmt.Printf("  Unknown terminal %q, defaulting to iterm\n", terminalChoice)
-		terminalChoice = "iterm"
+	switch terminalChoice {
+	case "iterm", "ghostty", "kitty", "macos", "tmux":
+	default:
+		fmt.Printf("  Unknown terminal %q, defaulting to %s\n", terminalChoice, defaultTerminal)
+		terminalChoice = defaultTerminal
+	}
+
+	// New tmux sessions: what zen opens in them (config.TmuxConfig).
+	var tmuxCfg config.TmuxConfig
+	if terminalChoice == "tmux" {
+		fmt.Println()
+		fmt.Println("Each new tmux session can start with a command in its first window, and")
+		fmt.Println("an Agents window. You can change these later in the tmux section of config.yaml.")
+		// The default stays unset, so zen can type its full path when it
+		// isn't on PATH (see TmuxConfig.FirstWindow).
+		switch first := strings.TrimSpace(prompt(scanner, "Command for the first window (none for nothing)", "zen inbox")); {
+		case strings.EqualFold(first, "none"):
+			tmuxCfg.FirstWindowCommand = new(string)
+		case first != "zen inbox":
+			tmuxCfg.FirstWindowCommand = &first
+		}
+		tmuxCfg.AgentsWindow = askYesNo(scanner, "Also open an Agents window in each new session?", false)
+		if tmuxCfg.AgentsWindow {
+			defaultCmd := agent.New(agent.Kind(agentChoice), "").AgentsCommand()
+			// Only a changed command is written, so the default keeps
+			// following the agent if you switch agents later.
+			if cmd := strings.TrimSpace(prompt(scanner, "  Command for the Agents window", defaultCmd)); cmd != defaultCmd {
+				tmuxCfg.AgentsWindowCommand = cmd
+			}
+			if dir := strings.TrimSpace(prompt(scanner, "  Directory for the Agents window", config.DefaultAgentsWindowDir)); dir != config.DefaultAgentsWindowDir {
+				tmuxCfg.AgentsWindowDir = dir
+			}
+		}
 	}
 	fmt.Println()
 
@@ -127,6 +180,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		ClaudeBin:    "claude",
 		CodexBin:     "codex",
 		Terminal:     terminalChoice,
+		Tmux:         tmuxCfg,
 		Watch: config.WatchConfig{
 			DispatchInterval:  "10s",
 			CleanupInterval:   "1h",
@@ -160,6 +214,15 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	installedCount, err := installAgentPrompts(scanner, ag)
 	if err != nil {
 		return err
+	}
+
+	if terminalChoice == "tmux" {
+		// config.yaml is written by now: a tmux config zen can't edit, such
+		// as one a dotfiles manager keeps read-only, is no reason to fail.
+		if err := setupTmux(scanner); err != nil {
+			ui.LogWarn(err.Error())
+			fmt.Println()
+		}
 	}
 
 	fmt.Println("Next steps:")
@@ -264,4 +327,105 @@ func installAgentPrompts(scanner *bufio.Scanner, ag agent.Agent) (int, error) {
 	fmt.Println()
 
 	return installed, nil
+}
+
+// setupTmux adds zen's block to the tmux config and reloads it. With a
+// scanner it asks first; without one (zen setup tmux) it just does it.
+func setupTmux(scanner *bufio.Scanner) error {
+	if !tmux.Installed() {
+		ui.LogWarn("tmux is not installed: skipping its settings. Run `zen setup tmux` once it is.")
+		return nil
+	}
+	path := tmux.ConfPath(homeDir())
+	short := ui.ShortenHome(path, homeDir())
+	zenConf := filepath.Join(config.Dir(), "tmux.conf")
+	shortZen := ui.ShortenHome(zenConf, homeDir())
+	if scanner != nil && !askYesNo(scanner, fmt.Sprintf(
+		"Write zen's tmux settings to %s and read them from %s (window markers, focus tracking, prefix + W, new-session setup)?",
+		shortZen, short), true) {
+		fmt.Println("  Skipped. Run `zen setup tmux` to add them later.")
+		fmt.Println()
+		return nil
+	}
+
+	zenBin, err := zenbin.Path()
+	if err != nil {
+		return fmt.Errorf("finding the zen executable: %w", err)
+	}
+	changed, err := tmux.InstallConf(path, zenConf, zenBin)
+	if userErr := (*tmux.UserConfError)(nil); errors.As(err, &userErr) {
+		// zen's own settings are written and up to date: reading them is
+		// one block in the user's config, the one zen would have written,
+		// so a later zen setup tmux recognises it.
+		block, _ := tmux.ConfBlock(zenConf)
+		return fmt.Errorf("%w. Add these lines to it yourself:\n%s", err, strings.TrimRight(block, "\n"))
+	}
+	if errors.Is(err, tmux.ErrUnquotable) {
+		return fmt.Errorf("%w (zen's executable, or ZEN_HOME)", err)
+	}
+	if err != nil {
+		return fmt.Errorf("writing zen's tmux settings to %s: %w (run `zen setup tmux` once it's fixed)", shortZen, err)
+	}
+	if changed {
+		ui.LogSuccess(fmt.Sprintf("Wrote zen's settings to %s, read from %s", shortZen, short))
+	} else {
+		ui.LogSuccess(short + " already reads zen's settings")
+	}
+	if reloaded, err := tmux.Reload(path); err != nil {
+		ui.LogWarn(fmt.Sprintf("reloading tmux: %v (run: tmux source-file %s)", err, short))
+	} else if reloaded {
+		ui.LogSuccess("Reloaded tmux")
+	} else {
+		fmt.Printf("  tmux reads them when it next starts, or now with: tmux source-file %s\n", short)
+	}
+
+	// What new sessions get. zen setup has just written the config; for zen
+	// setup tmux, it is whatever config.yaml says.
+	if c, err := config.Load(); err == nil {
+		first := c.Tmux.FirstWindow("zen")
+		if first == "" {
+			first = "(nothing)"
+		}
+		agents := "(off)"
+		if cmd := c.Tmux.AgentsWindowCmd(c.NewAgent("")); cmd != "" {
+			agents = fmt.Sprintf("%s, in %s", cmd, ui.ShortenHome(c.Tmux.GetAgentsWindowDir(), homeDir()))
+		}
+		fmt.Println()
+		fmt.Println("Each new tmux session gets:")
+		fmt.Printf("  First window:   %s\n", first)
+		fmt.Printf("  Agents window:  %s\n", agents)
+		fmt.Println("  Change them in the tmux section of ~/.zen/config.yaml; they apply to")
+		fmt.Println("  sessions created after that. Sessions that already exist are left alone.")
+		if unknown := c.Notify.UnknownTerminalEvents(); len(unknown) > 0 {
+			fmt.Println()
+			ui.LogWarn(fmt.Sprintf("notify.terminal_events has values zen doesn't know: %s. Known: %s",
+				strings.Join(unknown, ", "), strings.Join(config.TerminalEvents, ", ")))
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("For notifications on the computer you ssh from:")
+	fmt.Println("  Ghostty  shows them as is.")
+	fmt.Println("  iTerm2   Settings → Profiles → Terminal: turn on Notification Center Alerts,")
+	fmt.Println("           then Filter Alerts → Send escape sequence-generated alerts.")
+	fmt.Println("  Either   needs notification permission in macOS System Settings.")
+	fmt.Println()
+	return nil
+}
+
+// askYesNo asks a yes/no question, where an empty answer means def.
+func askYesNo(scanner *bufio.Scanner, question string, def bool) bool {
+	hint := "[y/N]"
+	if def {
+		hint = "[Y/n]"
+	}
+	fmt.Printf("%s %s: ", question, hint)
+	scanner.Scan()
+	switch strings.ToLower(strings.TrimSpace(scanner.Text())) {
+	case "y", "yes":
+		return true
+	case "n", "no":
+		return false
+	}
+	return def
 }

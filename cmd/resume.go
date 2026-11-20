@@ -106,13 +106,13 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 	home := os.Getenv("HOME")
 	shortPath := ui.ShortenHome(wt.Path, home)
 
-	resumeCmd := ag.ResumeCommand(s.ID, resumeModel)
+	resumeCmd := func(a agent.Agent) string { return a.ResumeCommand(s.ID, resumeModel) }
 
 	// No-iTerm mode
 	if resumeNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Resume command:"))
-		fmt.Printf("  cd %s && %s\n", wt.Path, resumeCmd)
+		fmt.Printf("  cd %s && %s\n", wt.Path, resumeCmd(ag))
 		fmt.Println()
 		fmt.Println(ui.DimText(fmt.Sprintf("Worktree: %s", shortPath)))
 		fmt.Println(ui.DimText(fmt.Sprintf("Session:  %s (%s)", s.ModHuman, s.SizeStr)))
@@ -121,7 +121,7 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 
 	// Open in terminal
 	fmt.Println()
-	fmt.Println(ui.BoldText(fmt.Sprintf("Resuming %s session in new %s tab", ag.Kind(), t.Name())))
+	fmt.Println(ui.BoldText(fmt.Sprintf("Resuming %s session in %s", ag.Kind(), t.Name())))
 	fmt.Printf("  Worktree: %s\n", ui.CyanText(wt.Name))
 	fmt.Printf("  Path:     %s\n", ui.DimText(shortPath))
 	fmt.Printf("  Session:  %s\n", ui.DimText(s.ID))
@@ -131,12 +131,7 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 	}
 	fmt.Println()
 
-	if err := t.OpenTab(wt.Path, resumeCmd); err != nil {
-		return fmt.Errorf("opening %s tab: %w", t.Name(), err)
-	}
-
-	ui.LogSuccess(fmt.Sprintf("%s tab opened", t.Name()))
-	return nil
+	return openTab(t, wt.Path, ag, resumeCmd)
 }
 
 // maybeMigrateSession offers to carry the other agent's most recent session
@@ -211,19 +206,19 @@ func openNewSession(wt worktree.Worktree, t terminal.Terminal, ag agent.Agent) e
 		action = "Starting PR review"
 	}
 
-	launchCmd := ag.StartCommand(initialPrompt, resumeModel)
+	launchCmd := func(a agent.Agent) string { return a.StartCommand(initialPrompt, resumeModel) }
 
 	if resumeNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Start command:"))
-		fmt.Printf("  cd %s && %s\n", wt.Path, launchCmd)
+		fmt.Printf("  cd %s && %s\n", wt.Path, launchCmd(ag))
 		fmt.Println()
 		fmt.Println(ui.DimText(fmt.Sprintf("Worktree: %s", shortPath)))
 		return nil
 	}
 
 	fmt.Println()
-	fmt.Println(ui.BoldText(fmt.Sprintf("%s in new %s tab", action, t.Name())))
+	fmt.Println(ui.BoldText(fmt.Sprintf("%s in %s", action, t.Name())))
 	fmt.Printf("  Worktree: %s\n", ui.CyanText(wt.Name))
 	fmt.Printf("  Path:     %s\n", ui.DimText(shortPath))
 	if resumeModel != "" {
@@ -231,12 +226,7 @@ func openNewSession(wt worktree.Worktree, t terminal.Terminal, ag agent.Agent) e
 	}
 	fmt.Println()
 
-	if err := t.OpenTab(wt.Path, launchCmd); err != nil {
-		return fmt.Errorf("opening %s tab: %w", t.Name(), err)
-	}
-
-	ui.LogSuccess(fmt.Sprintf("%s tab opened", t.Name()))
-	return nil
+	return openTab(t, wt.Path, ag, launchCmd)
 }
 
 // findWorktreeByPR finds a PR review worktree by PR number.

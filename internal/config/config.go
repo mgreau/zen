@@ -6,11 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/mgreau/zen/internal/agent"
+	"github.com/mgreau/zen/internal/notify"
+	"github.com/mgreau/zen/internal/tmux"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,6 +31,141 @@ type Config struct {
 	IgnoreDrafts bool                  `yaml:"ignore_drafts"`
 	Watch        WatchConfig           `yaml:"watch"`
 	Slack        SlackConfig           `yaml:"slack"`
+	Notify       NotifyConfig          `yaml:"notify,omitempty"`
+	Tmux         TmuxConfig            `yaml:"tmux,omitempty"`
+}
+
+// TmuxConfig sets up each new tmux session, through the hook `zen setup
+// tmux` installs. It takes effect for sessions created after a change, with
+// no need to run setup again.
+type TmuxConfig struct {
+	// FirstWindowCommand is typed into the first window of each new
+	// session, such as "zen dashboard". Unset means "zen inbox"; empty
+	// means nothing. See FirstWindow.
+	FirstWindowCommand *string `yaml:"first_window_command,omitempty"`
+	// AgentsWindow also opens an "Agents" window in the background.
+	AgentsWindow bool `yaml:"agents_window,omitempty"`
+	// AgentsWindowCommand runs in the Agents window, such as "claude".
+	// Empty means the agent's view of its sessions: "claude agents", or
+	// "codex agents".
+	AgentsWindowCommand string `yaml:"agents_window_command,omitempty"`
+	// AgentsWindowDir is the Agents window's working directory. Empty means
+	// ~/git, so the agent doesn't ask to trust your home directory each time.
+	AgentsWindowDir string `yaml:"agents_window_dir,omitempty"`
+}
+
+// DefaultAgentsWindowDir is the Agents window's directory unless
+// tmux.agents_window_dir says otherwise.
+const DefaultAgentsWindowDir = "~/git"
+
+// FirstWindow returns the command typed into each new session's first
+// window, or "" for none. zen is how to run zen, for the default.
+func (t TmuxConfig) FirstWindow(zen string) string {
+	if t.FirstWindowCommand == nil {
+		return zen + " inbox"
+	}
+	return strings.TrimSpace(*t.FirstWindowCommand)
+}
+
+// AgentsWindowCmd returns the command for the Agents window, or "" when it
+// is off. ag is the configured agent, for the default.
+func (t TmuxConfig) AgentsWindowCmd(ag agent.Agent) string {
+	if !t.AgentsWindow {
+		return ""
+	}
+	if cmd := strings.TrimSpace(t.AgentsWindowCommand); cmd != "" {
+		return cmd
+	}
+	return ag.AgentsCommand()
+}
+
+// GetAgentsWindowDir returns the Agents window's directory, with a leading
+// "~/" expanded.
+func (t TmuxConfig) GetAgentsWindowDir() string {
+	dir := t.AgentsWindowDir
+	if dir == "" {
+		dir = DefaultAgentsWindowDir
+	}
+	if dir == "~" || strings.HasPrefix(dir, "~/") {
+		dir = filepath.Join(os.Getenv("HOME"), dir[1:])
+	}
+	return dir
+}
+
+// NotifyConfig holds what the daemon does for a notification besides showing
+// it on the desktop (see notify.Configure).
+type NotifyConfig struct {
+	// Command is a shell command run for each notification, such as a curl
+	// to a push service. Empty means none.
+	Command string `yaml:"command,omitempty"`
+	// Events limits Command to these events (see notify.Events). Empty
+	// means all of them.
+	Events []string `yaml:"events,omitempty"`
+
+	// Terminal turns zen's own notifications for Claude in tmux windows on
+	// or off; unset means on. They replace Claude's built-in ones there,
+	// naming the worktree or PR and quoting Claude, and reach the computer
+	// you ssh from through tmux. See TerminalEnabled.
+	Terminal *bool `yaml:"terminal,omitempty"`
+	// TerminalEvents are the Claude events zen notifies about: "stop" (a
+	// turn ended) and Claude's notification types, such as
+	// "permission_prompt". Unset means DefaultTerminalEvents; an empty list
+	// means none.
+	TerminalEvents []string `yaml:"terminal_events,omitempty"`
+	// TerminalSequence is the escape sequence for the notification: "auto"
+	// (the default), "osc777" (Ghostty) or "osc9" (iTerm2 and others).
+	TerminalSequence string `yaml:"terminal_sequence,omitempty"`
+}
+
+// DefaultTerminalEvents are the Claude events zen notifies about unless
+// notify.terminal_events says otherwise. Claude's "idle_prompt" is left out:
+// it repeats "stop", a minute later.
+var DefaultTerminalEvents = []string{"stop", "stop_failure", "permission_prompt", "elicitation_dialog"}
+
+// TerminalEvents lists the values notify.terminal_events takes: zen's
+// names for the end of a turn, and Claude Code's notification types.
+var TerminalEvents = []string{
+	"stop", "stop_failure",
+	"permission_prompt", "idle_prompt", "elicitation_dialog", "elicitation_url_dialog",
+	"elicitation_complete", "elicitation_response", "auth_success", "auth_storage_failure",
+	"agent_needs_input", "agent_completed", "plugin_notification",
+	"quota_auto_resume_fired", "quota_auto_resume_stale", "quota_auto_resume_disabled",
+}
+
+// TerminalEnabled reports whether zen sends its own notifications for
+// Claude in tmux windows.
+func (n NotifyConfig) TerminalEnabled() bool {
+	return n.Terminal == nil || *n.Terminal
+}
+
+// UnknownTerminalEvents returns the notify.terminal_events values zen doesn't
+// know. They are kept, since Claude may have added a notification type since
+// this list was written, but a misspelt one quietly drops its notifications
+// (with Claude's own turned off in zen's windows), so zen warns about them.
+func (n NotifyConfig) UnknownTerminalEvents() []string {
+	var unknown []string
+	for _, e := range n.TerminalEvents {
+		if !slices.Contains(TerminalEvents, e) {
+			unknown = append(unknown, e)
+		}
+	}
+	return unknown
+}
+
+// GetTerminalEvents returns the Claude events zen notifies about.
+func (n NotifyConfig) GetTerminalEvents() []string {
+	if n.TerminalEvents == nil {
+		return DefaultTerminalEvents
+	}
+	return n.TerminalEvents
+}
+
+// GetTerminalSequence returns the notification escape sequence.
+func (n NotifyConfig) GetTerminalSequence() tmux.Sequence {
+	if n.TerminalSequence == "" {
+		return tmux.SequenceAuto
+	}
+	return tmux.Sequence(n.TerminalSequence)
 }
 
 // SlackConfig holds configuration for the Slack task watcher: polling for the
@@ -236,6 +374,14 @@ func Load() (*Config, error) {
 	case "iterm", "ghostty", "kitty", "macos", "tmux":
 	default:
 		return nil, fmt.Errorf("invalid terminal type %q: must be \"iterm\", \"ghostty\", \"kitty\", \"macos\", or \"tmux\"", cfg.Terminal)
+	}
+	for _, e := range cfg.Notify.Events {
+		if !slices.Contains(notify.Events(), e) {
+			return nil, fmt.Errorf("invalid notify event %q: must be one of %s", e, strings.Join(notify.Events(), ", "))
+		}
+	}
+	if seq := cfg.Notify.GetTerminalSequence(); !slices.Contains(tmux.Sequences(), seq) {
+		return nil, fmt.Errorf("invalid notify.terminal_sequence %q: must be auto, osc777, or osc9", seq)
 	}
 	if cfg.Repos == nil {
 		cfg.Repos = make(map[string]RepoConfig)

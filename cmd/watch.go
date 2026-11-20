@@ -282,6 +282,11 @@ func watchDaemon() error {
 	slackQueue := inmem.NewWorkQueue(10)
 	setupRec := reconciler.NewSetupReconciler(cfg)
 	cleanupRec := reconciler.NewCleanupReconciler(cfg)
+	notify.Configure(cfg.Notify.Command, cfg.Notify.Events)
+	if unknown := cfg.Notify.UnknownTerminalEvents(); len(unknown) > 0 {
+		fmt.Printf("[%s] Warning: notify.terminal_events has values zen doesn't know, kept as is: %s (known: %s)\n",
+			time.Now().Format(time.RFC3339), strings.Join(unknown, ", "), strings.Join(config.TerminalEvents, ", "))
+	}
 
 	st := loadCheckState()
 
@@ -431,6 +436,7 @@ func reloadConfig(setupRec *reconciler.SetupReconciler, cleanupRec *reconciler.C
 	}
 
 	cfg = newCfg
+	notify.Configure(newCfg.Notify.Command, newCfg.Notify.Events)
 	setupRec.SetConfig(newCfg)
 	cleanupRec.SetConfig(newCfg)
 	if slackRec != nil {
@@ -503,7 +509,9 @@ func pollOnce(ctx context.Context, st *reconciler.PollMemory, queue workqueue.In
 		if reconciler.ShouldNotifyNew(st.NotifiedNew[key], exists) {
 			fmt.Printf("[%s] New PR review request: #%d - %s (by %s)\n",
 				time.Now().Format(time.RFC3339), pr.Number, pr.Title, pr.Author.Login)
-			notify.PRReview(pr.Number, pr.Title, pr.Author.Login, short)
+			if err := notify.PRReview(pr.Number, pr.Title, pr.Author.Login, short); err != nil {
+				fmt.Printf("[%s] Review notify error for #%d: %v\n", time.Now().Format(time.RFC3339), pr.Number, err)
+			}
 		}
 		if !st.NotifiedNew[key] {
 			st.NotifiedNew[key] = true

@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -531,5 +533,93 @@ watch:
 	}
 	if cfg.Watch.CleanupAfterDays != 7 {
 		t.Errorf("CleanupAfterDays = %d, want 7", cfg.Watch.CleanupAfterDays)
+	}
+}
+
+func TestLoadNotifyEvents(t *testing.T) {
+	for _, tt := range []struct {
+		events  string
+		wantErr bool
+	}{
+		{"[session-waiting, digest]", false},
+		{"[]", false},
+		{"[session-wating]", true},
+	} {
+		dir := t.TempDir()
+		t.Setenv("ZEN_HOME", dir)
+		yml := "notify:\n  command: echo hi\n  events: " + tt.events + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(yml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load()
+		if (err != nil) != tt.wantErr {
+			t.Errorf("events %s: Load() error = %v, wantErr %v", tt.events, err, tt.wantErr)
+		}
+		if err != nil && !strings.Contains(err.Error(), "invalid notify event") {
+			t.Errorf("events %s: Load() error = %v, want an invalid event error", tt.events, err)
+		}
+	}
+}
+
+func TestTmuxConfig(t *testing.T) {
+	t.Setenv("HOME", "/home/u")
+	var c TmuxConfig
+	if got := c.GetAgentsWindowDir(); got != "/home/u/git" {
+		t.Errorf("default agents dir = %q", got)
+	}
+	c.AgentsWindowDir = "~/src/work"
+	if got := c.GetAgentsWindowDir(); got != "/home/u/src/work" {
+		t.Errorf("agents dir = %q", got)
+	}
+	c.AgentsWindowDir = "/srv/code"
+	if got := c.GetAgentsWindowDir(); got != "/srv/code" {
+		t.Errorf("absolute agents dir = %q", got)
+	}
+
+	// An explicit empty first-window command means none, unlike unset.
+	dir := t.TempDir()
+	t.Setenv("ZEN_HOME", dir)
+	yml := "tmux:\n  first_window_command: \"\"\n  agents_window: true\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Tmux.FirstWindow("zen"); got != "" {
+		t.Errorf("first_window_command: \"\" gave %q, want none", got)
+	}
+	if got := (TmuxConfig{}).FirstWindow("zen"); got != "zen inbox" {
+		t.Errorf("unset first window = %q, want zen inbox", got)
+	}
+	if !cfg.Tmux.AgentsWindow {
+		t.Error("agents_window: true did not load")
+	}
+}
+
+func TestLoadTerminalEvents(t *testing.T) {
+	for _, tt := range []struct {
+		events      string
+		wantUnknown []string
+	}{
+		{"[stop, stop_failure, permission_prompt, idle_prompt]", nil},
+		{"[]", nil},
+		// Unknown values load, so a new Claude type works, but are reported.
+		{"[stop, permision_prompt]", []string{"permision_prompt"}},
+	} {
+		dir := t.TempDir()
+		t.Setenv("ZEN_HOME", dir)
+		yml := "notify:\n  terminal_events: " + tt.events + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(yml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("terminal_events %s: Load() = %v", tt.events, err)
+		}
+		if got := cfg.Notify.UnknownTerminalEvents(); !slices.Equal(got, tt.wantUnknown) {
+			t.Errorf("terminal_events %s: unknown = %q, want %q", tt.events, got, tt.wantUnknown)
+		}
 	}
 }
