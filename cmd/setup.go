@@ -209,6 +209,16 @@ func promptRequired(scanner *bufio.Scanner, label string) string {
 	}
 }
 
+// claudeOnlyPrompts are embedded prompts that rely on Claude Code features
+// (such as ${CLAUDE_SESSION_ID} substitution) and are not installed for
+// other agents.
+var claudeOnlyPrompts = map[string]bool{"zen-import.md": true}
+
+// promptSupported reports whether the embedded prompt file works with ag.
+func promptSupported(file string, ag agent.Agent) bool {
+	return ag.Kind() == agent.Claude || !claudeOnlyPrompts[file]
+}
+
 // installAgentPrompts prompts the user and installs embedded slash-command
 // prompt files into the chosen agent's prompts directory.
 func installAgentPrompts(scanner *bufio.Scanner, ag agent.Agent) (int, error) {
@@ -221,7 +231,7 @@ func installAgentPrompts(scanner *bufio.Scanner, ag agent.Agent) (int, error) {
 
 	var names []string
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() && promptSupported(e.Name(), ag) {
 			names = append(names, strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())))
 		}
 	}
@@ -243,7 +253,7 @@ func installAgentPrompts(scanner *bufio.Scanner, ag agent.Agent) (int, error) {
 
 	installed := 0
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() || !promptSupported(e.Name(), ag) {
 			continue
 		}
 		srcData, err := fs.ReadFile(EmbeddedCommands, filepath.Join("commands", e.Name()))

@@ -109,6 +109,23 @@ zen work delete <name>                         # delete worktree (cleans Claude 
 
 Feature branches are prefixed by `branch_prefix` from config — see [docs/configuration.md](docs/configuration.md).
 
+### Promote an exploratory session
+
+Started digging in a regular Claude session and it turned into real work? Move the conversation into its own feature worktree instead of starting over:
+
+```bash
+/zen-import                                    # inside the Claude session: Claude picks the branch name
+/zen-import fix-token-refresh --carry-changes  # name it, and bring uncommitted edits along
+
+zen work import fix-token-refresh              # from a shell: newest session in this directory
+zen work import app fix-token-refresh          # name the repo when it can't be inferred
+zen work import --session <id> fix-token-refresh   # a specific session, from anywhere
+```
+
+zen creates the worktree (as `zen work new` does), copies the conversation into it under a new session id, and resumes it in a new terminal tab with a short hand-off message telling Claude where it now lives. After that it is an ordinary work stream: `zen work resume`, `zen work delete` and `zen status` all see it (with Codex as the configured agent, `resume` and `status` look for Codex sessions; see below). The original session and its checkout are never modified, so you can close the old session once the new tab is up.
+
+The repo is inferred when the session ran in any checkout of a configured repo. Uncommitted changes stay behind unless you pass `--carry-changes`, which applies tracked edits as a patch (3-way, so conflicts are left marked for you) and copies untracked files. `zen setup` installs `/zen-import` when you set it up for Claude; it is Claude-only, because it relies on Claude Code's `${CLAUDE_SESSION_ID}`. The imported conversation is a Claude session, so if your configured agent is Codex, resume it with `zen work resume <name> --agent claude` (or let `zen work resume` migrate it to Codex); `zen work delete` cleans up both agents' sessions either way.
+
 Every delete and cleanup path retains worktrees with local changes or a running
 agent. The delete commands' `--force` flag skips confirmation; it does not
 override those safety checks. The daemon's merged-review cleanup also keeps a

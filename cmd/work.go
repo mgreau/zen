@@ -149,9 +149,6 @@ func validateWorkBranch(branch string) error {
 func runWorkNew(cmd *cobra.Command, args []string) error {
 	repo := args[0]
 	branch := args[1]
-	if err := validateWorkBranch(branch); err != nil {
-		return err
-	}
 	context := ""
 	if len(args) == 3 {
 		context = args[2]
@@ -163,42 +160,14 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-
-	// Validate repo exists in config
-	basePath := cfg.RepoBasePath(repo)
-	if basePath == "" {
-		return fmt.Errorf("unknown repo %q — check ~/.zen/config.yaml", repo)
-	}
-
-	// Construct paths
-	originPath := filepath.Join(basePath, repo)
-	worktreeName := fmt.Sprintf("%s-%s", repo, branch)
-	worktreePath := filepath.Join(basePath, worktreeName)
-	prefix := cfg.GetBranchPrefix()
-	var gitBranch string
-	if prefix != "" {
-		gitBranch = fmt.Sprintf("%s/%s", prefix, branch)
-	} else {
-		gitBranch = branch
-	}
-
-	// Check if worktree already exists
-	if _, err := os.Stat(worktreePath); err == nil {
-		return fmt.Errorf("worktree already exists: %s\n  Resume with: zen work resume %s", worktreePath, branch)
-	}
-
-	ui.LogInfo(fmt.Sprintf("Fetching origin/main in %s...", repo))
-	ui.LogInfo(fmt.Sprintf("Creating worktree %s (branch %s)...", worktreeName, gitBranch))
-	if err := wt.CreateFromMain(originPath, worktreePath, worktreeName, gitBranch); err != nil {
+	target, err := newFeatureTarget(repo, branch)
+	if err != nil {
 		return err
 	}
-
-	home := homeDir()
-	shortPath := ui.ShortenHome(worktreePath, home)
-
-	fmt.Println()
-	ui.LogSuccess(fmt.Sprintf("Created worktree: %s", shortPath))
-	fmt.Printf("  Branch: %s\n", ui.CyanText(gitBranch))
+	if err := target.create(); err != nil {
+		return err
+	}
+	worktreePath := target.worktreePath
 
 	if workNewModel != "" {
 		fmt.Printf("  Model:  %s\n", ui.CyanText(workNewModel))
@@ -206,19 +175,74 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 
 	launchCmd := ag.StartCommand(context, workNewModel)
 
-	if workNewNoITerm {
+	return launchInWorktree(worktreePath, launchCmd, workNewNoITerm)
+}
+
+// featureTarget is where a new feature worktree goes: the paths and branch
+// name derived from a configured repo and a branch suffix.
+type featureTarget struct {
+	repo         string
+	branch       string // the suffix the user typed
+	originPath   string
+	worktreeName string
+	worktreePath string
+	gitBranch    string // branch with branch_prefix applied
+}
+
+// newFeatureTarget validates repo and branch and computes the worktree
+// location. It fails if the worktree already exists.
+func newFeatureTarget(repo, branch string) (featureTarget, error) {
+	if err := validateWorkBranch(branch); err != nil {
+		return featureTarget{}, err
+	}
+	basePath := cfg.RepoBasePath(repo)
+	if basePath == "" {
+		return featureTarget{}, fmt.Errorf("unknown repo %q — check ~/.zen/config.yaml", repo)
+	}
+	t := featureTarget{
+		repo:         repo,
+		branch:       branch,
+		originPath:   filepath.Join(basePath, repo),
+		worktreeName: fmt.Sprintf("%s-%s", repo, branch),
+		gitBranch:    branch,
+	}
+	t.worktreePath = filepath.Join(basePath, t.worktreeName)
+	if prefix := cfg.GetBranchPrefix(); prefix != "" {
+		t.gitBranch = fmt.Sprintf("%s/%s", prefix, branch)
+	}
+	if _, err := os.Stat(t.worktreePath); err == nil {
+		return featureTarget{}, fmt.Errorf("worktree already exists: %s\n  Resume with: zen work resume %s", t.worktreePath, branch)
+	}
+	return t, nil
+}
+
+// create cuts the branch from origin/main and adds the worktree.
+func (t featureTarget) create() error {
+	ui.LogInfo(fmt.Sprintf("Fetching origin/main in %s...", t.repo))
+	ui.LogInfo(fmt.Sprintf("Creating worktree %s (branch %s)...", t.worktreeName, t.gitBranch))
+	if err := wt.CreateFromMain(t.originPath, t.worktreePath, t.worktreeName, t.gitBranch); err != nil {
+		return err
+	}
+	fmt.Println()
+	ui.LogSuccess(fmt.Sprintf("Created worktree: %s", ui.ShortenHome(t.worktreePath, homeDir())))
+	fmt.Printf("  Branch: %s\n", ui.CyanText(t.gitBranch))
+	return nil
+}
+
+// launchInWorktree runs launchCmd in a new terminal tab at worktreePath, or
+// prints it when noTerminal is set.
+func launchInWorktree(worktreePath, launchCmd string, noTerminal bool) error {
+	if noTerminal {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Open manually:"))
-		fmt.Printf("  cd %s && %s\n", worktreePath, launchCmd)
+		fmt.Printf("  cd %s && %s\n", agent.ShellQuote(worktreePath), launchCmd)
 		return nil
 	}
 
-	// Open terminal tab
 	term, err := terminal.NewTerminal(cfg.GetTerminal())
 	if err != nil {
 		return err
 	}
-
 	if err := term.OpenTab(worktreePath, launchCmd); err != nil {
 		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
 	}
