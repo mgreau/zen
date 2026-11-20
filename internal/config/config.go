@@ -1,11 +1,15 @@
 package config
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -202,17 +206,64 @@ func zenHome() string {
 // Load reads the YAML config from ~/.zen/config.yaml.
 // Returns an error if the config file does not exist or is invalid.
 func Load() (*Config, error) {
-	yamlPath := filepath.Join(zenHome(), "config.yaml")
+	yamlPath := Path()
 	data, err := os.ReadFile(yamlPath)
 	if err != nil {
 		return nil, fmt.Errorf("config file not found: %s\nRun 'zen setup' to create it", yamlPath)
 	}
 
-	cfg := &Config{}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	cfg, err := Parse(data)
+	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", yamlPath, err)
 	}
+	return cfg, nil
+}
 
+// Path is the config file zen reads: config.yaml under Dir.
+func Path() string {
+	return filepath.Join(zenHome(), "config.yaml")
+}
+
+// Parse decodes config YAML, applies defaults for optional fields, validates
+// the agent and terminal, and expands ~ in base paths. Load uses it for the
+// config file; zen setup uses it to check a config before writing one.
+func Parse(data []byte) (*Config, error) {
+	cfg := &Config{}
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return nil, err
+	}
+	return finish(cfg)
+}
+
+// ParseStrict is Parse, except that a key zen does not know (a typo such as
+// "authers") is an error instead of being ignored. zen setup uses it for a
+// config it installs; Load stays lenient so the daemon's live reload keeps
+// working while a config is being edited.
+func ParseStrict(data []byte) (*Config, error) {
+	cfg := &Config{}
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	err := dec.Decode(cfg)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	if err == nil {
+		// Load reads only the first document, so a second one would be
+		// installed without ever being checked or used.
+		var extra yaml.Node
+		if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+			if err != nil {
+				return nil, err
+			}
+			return nil, errors.New("config holds more than one YAML document (---); zen reads only the first")
+		}
+	}
+	return finish(cfg)
+}
+
+// finish applies defaults, validates the agent and terminal, and expands
+// paths on a decoded config.
+func finish(cfg *Config) (*Config, error) {
 	// Apply defaults for optional fields
 	if cfg.PollInterval == "" {
 		cfg.PollInterval = "5m"
@@ -243,6 +294,59 @@ func Load() (*Config, error) {
 
 	cfg.expandPaths()
 	return cfg, nil
+}
+
+// repoShortName is what a repo's short name may look like. It names worktree
+// directories (<short>-pr-N), so it cannot hold a path separator or space or
+// start like a flag.
+var repoShortName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// ValidateRepos reports a config zen cannot work with: no repos, a short name
+// that cannot name a worktree directory, or a repo without an owner/name
+// full_name or a base_path. Load does not enforce this
+// (a hand-edited config may be mid-change and the daemon reloads it live);
+// zen setup does, so a provisioned machine starts with a usable config.
+func (c *Config) ValidateRepos() error {
+	if len(c.Repos) == 0 {
+		return fmt.Errorf("no repos configured")
+	}
+	for _, name := range c.sortedRepoNames() {
+		if err := ValidateRepoShortName(name); err != nil {
+			return err
+		}
+		repo := c.Repos[name]
+		if err := ValidateRepoFullName(repo.FullName); err != nil {
+			return fmt.Errorf("repo %q: %w", name, err)
+		}
+		if strings.TrimSpace(repo.BasePath) == "" {
+			return fmt.Errorf("repo %q: base_path is required", name)
+		}
+	}
+	return nil
+}
+
+// ValidateRepoShortName reports a repo short name that cannot name a worktree
+// directory.
+func ValidateRepoShortName(name string) error {
+	if !repoShortName.MatchString(name) {
+		return fmt.Errorf("repo short name %q must be letters, digits, '.', '_' or '-', starting with a letter or digit", name)
+	}
+	return nil
+}
+
+// ValidateRepoFullName reports a full_name that is not owner/name.
+func ValidateRepoFullName(full string) error {
+	owner, rest, ok := strings.Cut(full, "/")
+	if !ok || owner == "" || rest == "" || strings.Contains(rest, "/") {
+		return fmt.Errorf("full_name %q must be owner/name", full)
+	}
+	return nil
+}
+
+func (c *Config) sortedRepoNames() []string {
+	names := c.RepoNames()
+	sort.Strings(names)
+	return names
 }
 
 // GetTerminal returns the configured terminal type.

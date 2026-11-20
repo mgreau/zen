@@ -1,6 +1,6 @@
 # Configuration
 
-Zen reads `~/.zen/config.yaml`. Run `zen setup` for an interactive walkthrough, or edit the file directly.
+Zen reads `~/.zen/config.yaml`. Run `zen setup` for an interactive walkthrough, pass it flags for an [unattended install](#unattended-install), or edit the file directly.
 
 ## Minimal example
 
@@ -212,3 +212,42 @@ Existing review worktrees stay in place. On the next poll they fast-forward if G
 `cleanup_after_days` can stay in `config.yaml`; it is ignored. After the restart, the first cleanup scan (one `cleanup_interval` later) removes every review whose PR merged more than `cleanup_after_merge` ago and passes the checks in [Merged-review cleanup](#merged-review-cleanup).
 
 Older zen wrote `seen_prs` (PR numbers only) in `last_check.json`. The first poll after upgrade absorbs that list into `notified_new` and never writes `seen_prs` again.
+
+## Unattended install
+
+`zen setup` runs without prompting when given the config as flags or as a file, for machine provisioning (cloud-init, Ansible, dotfiles, a Nix activation script):
+
+```bash
+zen setup \
+  --repo 'app=octo-sts/app:~/git/repo-octo-sts-app' \
+  --repo 'wolfi-dev/os:~/git/repo-os' \
+  --author mattmoor,wlynch \
+  --terminal tmux
+
+# or install a config file you manage yourself (comments are kept)
+zen setup --config-file ./zen-config.yaml
+generate-config | zen setup --config-file -
+```
+
+| Flag | Meaning |
+|------|---------|
+| `--repo [short=]owner/name:base_path` | A repository (repeatable). `short` defaults to `name`. Quote the value to keep `~` literal; zen expands it when it loads the config. |
+| `--author <login>` | GitHub username for PR filtering (repeatable or comma-separated) |
+| `--agent claude\|codex` | Coding agent, default `claude` |
+| `--terminal iterm\|ghostty\|kitty\|macos\|tmux` | When omitted, zen picks at runtime: `tmux` inside a tmux session, `iterm` otherwise |
+| `--branch-prefix <prefix>` | Feature branch prefix, default git `user.name` |
+| `--config-file <path>` | Install this file (`-` for stdin) instead of building one from flags. Cannot be combined with the flags above. |
+| `--force` | Replace an existing config that differs |
+| `--skip-prompts` | Do not install the agent's slash-command prompts |
+| `--non-interactive` | Never prompt, even with no other flags (fails instead) |
+
+Behaviour suited to provisioning:
+
+- **Idempotent.** If `~/.zen/config.yaml` already has the same content, setup leaves it alone and exits 0. If the content differs, setup exits 1 without touching it, unless you pass `--force`. Slash-command prompts that are already installed are kept.
+- **Validated up front.** The config is checked with the rules `zen` uses to load it. It also needs at least one repo whose short name is letters, digits, `.`, `_` or `-` (it names worktree directories), with an `owner/name` `full_name` and a `base_path`. Unknown keys such as a misspelt `authers:` are errors too, and so is a file with more than one YAML document (`---`), since zen reads only the first. A bad value fails the install rather than the first command after it. Interactive `zen setup` applies the same rules and asks again on a bad answer.
+- **Atomic.** The file is written to a temporary file, flushed to disk and renamed, so a running daemon never reads a partial config and a crash right after provisioning cannot leave an empty one. If `~/.zen/config.yaml` is a symlink (stow, chezmoi, home-manager), setup writes to the link's target, even one that does not exist yet, and keeps the link and the file's permissions.
+- **No hang without a terminal.** Interactive `zen setup` with stdin closed (for example `</dev/null`) exits with an error instead of waiting forever.
+- **Run it as the user who runs zen.** Setup writes `~/.zen` and the agent's prompts under `$HOME`, and the files it creates belong to whoever runs it. Provisioning that runs as root should switch to the target user first: `sudo -u alice -H zen setup ...`, or `become_user: alice` in Ansible. Pointing `HOME` or `ZEN_HOME` at another user's home from root leaves root-owned files there that the user's daemon cannot write.
+- `ZEN_HOME` moves the config and state directory away from `~/.zen`, for example to test a config without touching your own.
+
+Setup does not authenticate GitHub or start the daemon. Run `gh auth login --with-token` (or set `GH_TOKEN`) and `zen watch start` as separate provisioning steps.

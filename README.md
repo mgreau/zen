@@ -36,6 +36,7 @@ zen inbox                          # see what needs your attention
 ```
 
 - Alternatively, skip `mv zen ~/bin` and [install with Nix](#install-with-nix).
+- Provisioning a machine? `zen setup --repo owner/name:~/git/path --author you` runs unattended. See [docs/configuration.md](docs/configuration.md#unattended-install).
 
 When a PR shows up in your inbox, `zen review <number>` opens that PR in a new terminal tab with Claude pre-armed and the PR context loaded. See [Prerequisites](#prerequisites) for what to install first.
 
@@ -225,7 +226,7 @@ authors:
   - wlynch
 ```
 
-`zen setup` walks you through this interactively. The daemon hot-reloads config on every poll tick — no restart needed.
+`zen setup` walks you through this interactively, or writes it [unattended](docs/configuration.md#unattended-install) from flags or a file. The daemon hot-reloads config on every poll tick — no restart needed.
 
 ### Claude or Codex
 
@@ -309,6 +310,8 @@ environment.systemPackages = [
 ```
 
 **home-manager:** `home.packages = [ inputs.zen.packages.${pkgs.system}.default ];`
+
+To provision the config as well, have your activation run `zen setup --config-file <file>` (or link the file in with `home.file`). See [unattended install](docs/configuration.md#unattended-install).
 
 **Any Nix install:**
 
