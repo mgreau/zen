@@ -283,6 +283,10 @@ func watchDaemon() error {
 	setupRec := reconciler.NewSetupReconciler(cfg)
 	cleanupRec := reconciler.NewCleanupReconciler(cfg)
 	notify.Configure(cfg.Notify.Command, cfg.Notify.Events)
+	if unknown := cfg.Notify.UnknownTerminalEvents(); len(unknown) > 0 {
+		fmt.Printf("[%s] Warning: notify.terminal_events has values zen doesn't know, kept as is: %s (known: %s)\n",
+			time.Now().Format(time.RFC3339), strings.Join(unknown, ", "), strings.Join(config.TerminalEvents, ", "))
+	}
 
 	st := loadCheckState()
 

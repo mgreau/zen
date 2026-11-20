@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -556,6 +557,31 @@ func TestLoadNotifyEvents(t *testing.T) {
 		}
 		if err != nil && !strings.Contains(err.Error(), "invalid notify event") {
 			t.Errorf("events %s: Load() error = %v, want an invalid event error", tt.events, err)
+		}
+	}
+}
+func TestLoadTerminalEvents(t *testing.T) {
+	for _, tt := range []struct {
+		events      string
+		wantUnknown []string
+	}{
+		{"[stop, stop_failure, permission_prompt, idle_prompt]", nil},
+		{"[]", nil},
+		// Unknown values load, so a new Claude type works, but are reported.
+		{"[stop, permision_prompt]", []string{"permision_prompt"}},
+	} {
+		dir := t.TempDir()
+		t.Setenv("ZEN_HOME", dir)
+		yml := "notify:\n  terminal_events: " + tt.events + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(yml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("terminal_events %s: Load() = %v", tt.events, err)
+		}
+		if got := cfg.Notify.UnknownTerminalEvents(); !slices.Equal(got, tt.wantUnknown) {
+			t.Errorf("terminal_events %s: unknown = %q, want %q", tt.events, got, tt.wantUnknown)
 		}
 	}
 }

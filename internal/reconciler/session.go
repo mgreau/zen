@@ -12,6 +12,7 @@ import (
 	"github.com/mgreau/zen/internal/session"
 	"github.com/mgreau/zen/internal/tmux"
 	"github.com/mgreau/zen/internal/worktree"
+	"github.com/mgreau/zen/internal/zenbin"
 )
 
 // prevSessionStatus and lastNotifiedAt track session state across scans
@@ -181,7 +182,7 @@ func ScanSessions(cfg *config.Config, idleThreshold time.Duration) {
 
 // sessionResumeCmd returns the zen command to resume a session in a new terminal tab.
 func sessionResumeCmd(wt worktree.Worktree) string {
-	zenBin, err := os.Executable()
+	zenBin, err := zenbin.Path()
 	if err != nil {
 		zenBin = "zen"
 	}

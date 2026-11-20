@@ -62,12 +62,36 @@ type NotifyConfig struct {
 // DefaultTerminalEvents are the Claude events zen notifies about unless
 // notify.terminal_events says otherwise. Claude's "idle_prompt" is left out:
 // it repeats "stop", a minute later.
-var DefaultTerminalEvents = []string{"stop", "permission_prompt", "elicitation_dialog"}
+var DefaultTerminalEvents = []string{"stop", "stop_failure", "permission_prompt", "elicitation_dialog"}
+
+// TerminalEvents lists the values notify.terminal_events takes: zen's
+// names for the end of a turn, and Claude Code's notification types.
+var TerminalEvents = []string{
+	"stop", "stop_failure",
+	"permission_prompt", "idle_prompt", "elicitation_dialog", "elicitation_url_dialog",
+	"elicitation_complete", "elicitation_response", "auth_success", "auth_storage_failure",
+	"agent_needs_input", "agent_completed", "plugin_notification",
+	"quota_auto_resume_fired", "quota_auto_resume_stale", "quota_auto_resume_disabled",
+}
 
 // TerminalEnabled reports whether zen sends its own notifications for
 // Claude in tmux windows.
 func (n NotifyConfig) TerminalEnabled() bool {
 	return n.Terminal == nil || *n.Terminal
+}
+
+// UnknownTerminalEvents returns the notify.terminal_events values zen doesn't
+// know. They are kept, since Claude may have added a notification type since
+// this list was written, but a misspelt one quietly drops its notifications
+// (with Claude's own turned off in zen's windows), so zen warns about them.
+func (n NotifyConfig) UnknownTerminalEvents() []string {
+	var unknown []string
+	for _, e := range n.TerminalEvents {
+		if !slices.Contains(TerminalEvents, e) {
+			unknown = append(unknown, e)
+		}
+	}
+	return unknown
 }
 
 // GetTerminalEvents returns the Claude events zen notifies about.

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mgreau/zen/internal/zenbin"
 )
 
 // Events zen notifies about. A push command can be limited to some of them
@@ -114,9 +116,10 @@ func push(n note) (bool, error) {
 	return true, nil
 }
 
-// zenBin returns the path to the running zen binary.
+// zenBin returns how to run zen from a notification: a path that survives
+// upgrades (see zenbin.Path).
 func zenBin() string {
-	if bin, err := os.Executable(); err == nil {
+	if bin, err := zenbin.Path(); err == nil {
 		return bin
 	}
 	return "zen"

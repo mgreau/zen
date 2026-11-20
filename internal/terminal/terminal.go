@@ -2,7 +2,6 @@ package terminal
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/config"
@@ -11,6 +10,7 @@ import (
 	"github.com/mgreau/zen/internal/kitty"
 	"github.com/mgreau/zen/internal/macos"
 	"github.com/mgreau/zen/internal/tmux"
+	"github.com/mgreau/zen/internal/zenbin"
 )
 
 // Terminal represents a terminal emulator that can open tabs/windows.
@@ -81,7 +81,7 @@ func AgentFor(t Terminal, ag agent.Agent, n config.NotifyConfig) agent.Agent {
 	}
 	zenBin := ""
 	if n.TerminalEnabled() {
-		if bin, err := os.Executable(); err == nil {
+		if bin, err := zenbin.Path(); err == nil {
 			zenBin = bin
 		}
 	}

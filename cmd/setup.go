@@ -186,8 +186,11 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	}
 
 	if terminalChoice == "tmux" {
+		// config.yaml is written by now: a tmux config zen can't edit, such
+		// as one a dotfiles manager keeps read-only, is no reason to fail.
 		if err := setupTmux(scanner); err != nil {
-			return err
+			ui.LogWarn(err.Error())
+			fmt.Println()
 		}
 	}
 

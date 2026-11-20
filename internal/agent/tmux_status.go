@@ -53,15 +53,21 @@ func tmuxStatusSettings(zenBin string) string {
 		// "\;" reaches tmux as ";", separating its two commands.
 		cmd := `[ -z "$TMUX_PANE" ] || tmux set-option -w -t "$TMUX_PANE" ` + tmux.StatusOption + " " + status +
 			` \; set-option -w -t "$TMUX_PANE" ` + tmux.HooksOption + " 1 2>/dev/null || true"
-		hooks := []map[string]any{{"type": "command", "command": cmd}}
-		if notify && notifyHook != nil {
-			hooks = append(hooks, notifyHook)
-		}
-		group := map[string]any{"hooks": hooks}
+		group := map[string]any{"hooks": []map[string]any{{"type": "command", "command": cmd}}}
+		groups := []map[string]any{group}
 		if matcher != "" {
 			group["matcher"] = matcher
 		}
-		return []map[string]any{group}
+		if notify && notifyHook != nil {
+			// zen filters notifications itself (notify.terminal_events), so
+			// the notify hook sees every event, whatever the status matches.
+			if matcher == "" {
+				group["hooks"] = append(group["hooks"].([]map[string]any), notifyHook)
+			} else {
+				groups = append(groups, map[string]any{"hooks": []map[string]any{notifyHook}})
+			}
+		}
+		return groups
 	}
 	settings := map[string]any{
 		"hooks": map[string]any{
@@ -71,7 +77,7 @@ func tmuxStatusSettings(zenBin string) string {
 			"Stop":         hook("", "waiting", true),
 			// A turn that ends on an error, such as a rate limit, waits on
 			// the user too, but fires StopFailure instead of Stop.
-			"StopFailure":      hook("", "waiting", false),
+			"StopFailure":      hook("", "waiting", true),
 			"UserPromptSubmit": hook("", "running", false),
 			// A permission prompt is answered without a new prompt, so the
 			// tool finishing is what marks the agent running again.

@@ -20,9 +20,13 @@ var confSettings = []string{
 	"# Track which terminals have focus, so zen doesn't notify you about the",
 	"# window you are looking at.",
 	"set -g focus-events on",
-	"# Mark windows whose agent is waiting on you: tmux's default format, with",
-	"# a reverse \"● \" in front.",
-	`set -g window-status-format '#{?#{==:#{@zen-status},waiting},#[reverse]● ,}#I:#W#{?window_flags,#{window_flags}, }#[default]'`,
+	"# Mark windows whose agent is waiting on you: a reverse \"● \" in front of",
+	"# your window-status-format, as set when this block is read. -F expands",
+	"# #{window-status-format} to it now, and ## keeps zen's part for later;",
+	"# %if adds it only once.",
+	`%if "#{?#{m:*@zen-status*,#{window-status-format}},0,1}"`,
+	`set -gF window-status-format '##{?##{==:##{@zen-status},waiting},#[reverse]● #[noreverse],}#{window-status-format}'`,
+	"%endif",
 	"# prefix + W: pick from the windows waiting on you.",
 	`bind W choose-tree -Zw -f '#{==:#{@zen-status},waiting}'`,
 }
@@ -32,14 +36,21 @@ func ConfBlock() string {
 	return confBegin + "\n" + strings.Join(confSettings, "\n") + "\n" + confEnd + "\n"
 }
 
-// ConfPath returns the tmux config file to edit: ~/.tmux.conf, unless only
-// the XDG location, ~/.config/tmux/tmux.conf, exists.
+// ConfPath returns the tmux config file to edit: the first that exists of
+// those tmux reads, in its order (~/.tmux.conf, $XDG_CONFIG_HOME/tmux/tmux.conf,
+// ~/.config/tmux/tmux.conf), else ~/.tmux.conf. Recent tmux reads every one
+// of them that exists, and older tmux fewer, but all read the first: zen's
+// block goes where the user's settings are, and works on any version.
 func ConfPath(home string) string {
 	dot := filepath.Join(home, ".tmux.conf")
-	xdg := filepath.Join(home, ".config", "tmux", "tmux.conf")
-	if _, err := os.Stat(dot); err != nil {
-		if _, err := os.Stat(xdg); err == nil {
-			return xdg
+	candidates := []string{dot}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(xdg) {
+		candidates = append(candidates, filepath.Join(xdg, "tmux", "tmux.conf"))
+	}
+	candidates = append(candidates, filepath.Join(home, ".config", "tmux", "tmux.conf"))
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
 		}
 	}
 	return dot

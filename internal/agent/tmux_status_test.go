@@ -162,12 +162,21 @@ func TestTmuxStatusSettingsWithNotify(t *testing.T) {
 	if s.Channel != "notifications_disabled" {
 		t.Errorf("preferredNotifChannel = %q, want notifications_disabled", s.Channel)
 	}
-	for event, want := range map[string]bool{"Notification": true, "Stop": true, "SessionStart": false, "UserPromptSubmit": false, "PostToolUse": false} {
-		hooks := s.Hooks[event][0].Hooks
-		got := len(hooks) == 2 && hooks[1].Command == `'/opt/my zen/zen' hook notify` && hooks[1].Async
-		if got != want {
-			t.Errorf("%s: notify hook present = %v, want %v (%+v)", event, got, want, hooks)
+	for event, want := range map[string]bool{"Notification": true, "Stop": true, "StopFailure": true, "SessionStart": false, "UserPromptSubmit": false, "PostToolUse": false} {
+		got := false
+		for _, g := range s.Hooks[event] {
+			for _, h := range g.Hooks {
+				got = got || (h.Command == `'/opt/my zen/zen' hook notify` && h.Async)
+			}
 		}
+		if got != want {
+			t.Errorf("%s: notify hook present = %v, want %v (%+v)", event, got, want, s.Hooks[event])
+		}
+	}
+	// The notify hook must not inherit the status hook's matcher, or
+	// notify.terminal_events could not pick other types.
+	if n := s.Hooks["Notification"]; len(n) != 2 || len(n[1].Hooks) != 1 {
+		t.Errorf("Notification groups = %+v, want the notify hook in a group of its own", n)
 	}
 
 	// Without zen's notifications, Claude keeps its own.

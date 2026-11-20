@@ -53,12 +53,9 @@ type hookInput struct {
 	Message              string `json:"message"`
 	NotificationType     string `json:"notification_type"`
 	LastAssistantMessage string `json:"last_assistant_message"`
+	Error                string `json:"error"`
 	StopHookActive       bool   `json:"stop_hook_active"`
 }
-
-// maxHookInput bounds what zen reads from the hook: the last message of a
-// long turn is the largest part, and only its start is shown.
-const maxHookInput = 4 << 20
 
 func runHookNotify(stdin io.Reader) error {
 	pane := os.Getenv("TMUX_PANE")
@@ -66,7 +63,9 @@ func runHookNotify(stdin io.Reader) error {
 		return nil // not in tmux: nowhere to send it
 	}
 	var in hookInput
-	if err := json.NewDecoder(io.LimitReader(stdin, maxHookInput)).Decode(&in); err != nil {
+	// Read it all: cutting it short would leave invalid JSON. Only the start
+	// of the text is shown (see tmux.Clean).
+	if err := json.NewDecoder(stdin).Decode(&in); err != nil {
 		return fmt.Errorf("reading hook input: %w", err)
 	}
 
@@ -88,10 +87,23 @@ func runHookNotify(stdin io.Reader) error {
 }
 
 // hookEvent names the event a hook input reports, as notify.terminal_events
-// lists it: "stop" for the end of a turn, else Claude's notification type.
+// lists it: "stop" for the end of a turn, "stop_failure" for a turn that
+// ended on an error, else Claude's notification type.
 func hookEvent(in hookInput) string {
-	if in.Event == "Stop" {
+	switch in.Event {
+	case "Stop":
 		return "stop"
+	case "StopFailure":
+		return "stop_failure"
+	}
+	if in.NotificationType == "" {
+		// Claude versions that sent no type sent two kinds: the idle notice
+		// after a turn, and requests (permissions, questions). Tell them
+		// apart by the idle notice's text.
+		if strings.Contains(strings.ToLower(in.Message), "waiting for your input") {
+			return "idle_prompt"
+		}
+		return "permission_prompt"
 	}
 	return in.NotificationType
 }
@@ -113,6 +125,11 @@ func hookNotification(in hookInput, events []string, label string) (tmux.Notific
 		body = in.LastAssistantMessage
 		if strings.TrimSpace(body) == "" {
 			body = "Turn finished"
+		}
+	case "StopFailure":
+		body = "Turn failed"
+		if e := strings.TrimSpace(in.Error); e != "" {
+			body += ": " + e
 		}
 	case "Notification":
 		body = in.Message

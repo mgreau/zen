@@ -209,20 +209,31 @@ won't find the windows to update.
 tmux doesn't style windows by user options on its own. `zen setup tmux` adds
 the settings for that to your tmux config, and `zen setup` offers to when you
 pick tmux. It writes them between `# >>> zen >>>` and `# <<< zen <<<` lines in
-`~/.tmux.conf` (or `~/.config/tmux/tmux.conf`, if only that exists), and
-reloads tmux when run inside it. Running it again updates that block and
-leaves the rest of the file alone. The block:
+your tmux config (the first of `~/.tmux.conf`,
+`$XDG_CONFIG_HOME/tmux/tmux.conf` and `~/.config/tmux/tmux.conf` that exists,
+as tmux looks for it, else `~/.tmux.conf`), and reloads tmux when run inside
+it. Running it again updates that block and leaves the rest of the file
+alone. The block:
 
 ```tmux
 # Track which terminals have focus, so zen doesn't notify you about the
 # window you are looking at.
 set -g focus-events on
-# Mark windows whose agent is waiting on you: tmux's default format, with
-# a reverse "● " in front.
-set -g window-status-format '#{?#{==:#{@zen-status},waiting},#[reverse]● ,}#I:#W#{?window_flags,#{window_flags}, }#[default]'
+# Mark windows whose agent is waiting on you: a reverse "● " in front of
+# your window-status-format, as set when this block is read. -F expands
+# #{window-status-format} to it now, and ## keeps zen's part for later;
+# %if adds it only once.
+%if "#{?#{m:*@zen-status*,#{window-status-format}},0,1}"
+set -gF window-status-format '##{?##{==:##{@zen-status},waiting},#[reverse]● #[noreverse],}#{window-status-format}'
+%endif
 # prefix + W: pick from the windows waiting on you.
 bind W choose-tree -Zw -f '#{==:#{@zen-status},waiting}'
 ```
+
+zen's marker goes in front of your own `window-status-format`, or tmux's
+default. The block comes last in your config, so it sees a format your
+config sets above it. If a theme sets the format later, put zen's marker in
+front of it yourself: `#{?#{==:#{@zen-status},waiting},#[reverse]● ,}`.
 
 ### Desktop notifications over ssh
 
@@ -248,13 +259,16 @@ characters from it before it reaches your terminal.
 ```yaml
 notify:
   terminal: true            # false: no zen notifications; Claude keeps its own
-  terminal_events: [stop, permission_prompt, elicitation_dialog]   # the default
+  terminal_events: [stop, stop_failure, permission_prompt, elicitation_dialog]   # the default
   terminal_sequence: auto   # or osc777 (Ghostty), osc9 (iTerm2 and others)
 ```
 
-`terminal_events` takes `stop` (a turn ended) and Claude's notification types,
-such as `permission_prompt`, `elicitation_dialog`, or `idle_prompt`. An empty
-list turns them all off. `auto` sends OSC 777, which has a separate title,
+`terminal_events` takes `stop` (a turn ended), `stop_failure` (a turn ended on
+an error), and Claude's notification types, such as `permission_prompt`,
+`elicitation_dialog`, or `idle_prompt`. A value zen doesn't know is kept, in
+case Claude has added a type since, but `zen setup tmux` and the daemon log
+warn about it, since a misspelt one would quietly drop its notifications. An
+empty list turns them all off. `auto` sends OSC 777, which has a separate title,
 when every terminal attached to the session is Ghostty, and OSC 9, which puts
 the title in front of the text, otherwise.
 

@@ -54,6 +54,7 @@ func TestInstallConf(t *testing.T) {
 
 func TestConfPath(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
 	if got := ConfPath(home); got != filepath.Join(home, ".tmux.conf") {
 		t.Errorf("no config: %s", got)
 	}
@@ -82,5 +83,38 @@ func TestConfBlockLoads(t *testing.T) {
 	out, _ := tmuxOutput(t, "show-options", "-gv", "focus-events")
 	if out != "on" {
 		t.Errorf("focus-events after reload = %q, want on", out)
+	}
+}
+
+// zen's marker goes in front of the user's own window format, once.
+func TestConfKeepsUserFormat(t *testing.T) {
+	startServer(t)
+	tmuxCmd(t, "set-option", "-g", "window-status-format", "#[fg=green]#I|#W")
+	path := filepath.Join(t.TempDir(), "tmux.conf")
+	if _, err := InstallConf(path); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := Reload(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ := tmuxOutput(t, "show-options", "-gv", "window-status-format")
+	if want := "#{?#{==:#{@zen-status},waiting},#[reverse]● #[noreverse],}#[fg=green]#I|#W"; got != want {
+		t.Errorf("window-status-format = %q, want %q", got, want)
+	}
+}
+
+// tmux reads $XDG_CONFIG_HOME/tmux/tmux.conf before ~/.config/tmux/tmux.conf,
+// and only the first it finds: zen must edit that one, not create another.
+func TestConfPathXDGConfigHome(t *testing.T) {
+	home := t.TempDir()
+	xdgHome := filepath.Join(t.TempDir(), "config")
+	t.Setenv("XDG_CONFIG_HOME", xdgHome)
+	conf := filepath.Join(xdgHome, "tmux", "tmux.conf")
+	os.MkdirAll(filepath.Dir(conf), 0o755)
+	os.WriteFile(conf, nil, 0o644)
+	if got := ConfPath(home); got != conf {
+		t.Errorf("ConfPath = %s, want %s", got, conf)
 	}
 }
