@@ -73,6 +73,7 @@ func open(workDir, command string, detached bool) (Outcome, error) {
 		return 0, err
 	}
 	if w, ok := findWindow(windows, workDir); ok {
+		allowPassthrough(w.ID) // for windows opened before zen set it
 		if !w.idle() {
 			if !detached {
 				if err := run("switch-client", "-t", w.ID); err != nil {
@@ -115,7 +116,24 @@ func open(workDir, command string, detached bool) (Outcome, error) {
 		_ = run("kill-window", "-t", id)
 		return 0, err
 	}
+	allowPassthrough(id)
 	return NewWindow, nil
+}
+
+// allowPassthrough lets the panes of window id send escape sequences
+// straight to the terminal tmux runs in, so an agent's desktop notifications
+// (OSC 9, 99 or 777, which Claude Code sends) reach the computer you ssh from.
+// "all" passes them from windows you are not looking at too, which is the
+// point with many agents; tmux 3.3 knows only "on", visible panes only, and
+// older tmux has no passthrough at all. Best effort: a missing notification
+// is not worth failing to open the window for.
+//
+// Passthrough gives programs in these windows the same access to your
+// terminal they would have without tmux.
+func allowPassthrough(id string) {
+	if run("set-option", "-w", "-t", id, "allow-passthrough", "all") != nil {
+		_ = run("set-option", "-w", "-t", id, "allow-passthrough", "on")
+	}
 }
 
 func userShell() string {
