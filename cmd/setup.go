@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/mgreau/zen/internal/config"
 	"github.com/mgreau/zen/internal/tmux"
 	"github.com/mgreau/zen/internal/ui"
+	"github.com/mgreau/zen/internal/zenbin"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -133,11 +135,14 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 		fmt.Println("Each new tmux session can start with a command in its first window, and")
 		fmt.Println("an Agents window. You can change these later in the tmux section of config.yaml.")
-		first := prompt(scanner, "Command for the first window (none for nothing)", "zen inbox")
-		if strings.EqualFold(strings.TrimSpace(first), "none") {
-			first = ""
+		// The default stays unset, so zen can type its full path when it
+		// isn't on PATH (see TmuxConfig.FirstWindow).
+		switch first := strings.TrimSpace(prompt(scanner, "Command for the first window (none for nothing)", "zen inbox")); {
+		case strings.EqualFold(first, "none"):
+			tmuxCfg.FirstWindowCommand = new(string)
+		case first != "zen inbox":
+			tmuxCfg.FirstWindowCommand = &first
 		}
-		tmuxCfg.FirstWindowCommand = &first
 		tmuxCfg.AgentsWindow = askYesNo(scanner, "Also open an Agents window in each new session?", false)
 		if tmuxCfg.AgentsWindow {
 			defaultCmd := agent.New(agent.Kind(agentChoice), "").AgentsCommand()
@@ -146,7 +151,9 @@ func runSetup(cmd *cobra.Command, args []string) error {
 			if cmd := strings.TrimSpace(prompt(scanner, "  Command for the Agents window", defaultCmd)); cmd != defaultCmd {
 				tmuxCfg.AgentsWindowCommand = cmd
 			}
-			tmuxCfg.AgentsWindowDir = prompt(scanner, "  Directory for the Agents window", config.DefaultAgentsWindowDir)
+			if dir := strings.TrimSpace(prompt(scanner, "  Directory for the Agents window", config.DefaultAgentsWindowDir)); dir != config.DefaultAgentsWindowDir {
+				tmuxCfg.AgentsWindowDir = dir
+			}
 		}
 	}
 	fmt.Println()
@@ -210,8 +217,11 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	}
 
 	if terminalChoice == "tmux" {
+		// config.yaml is written by now: a tmux config zen can't edit, such
+		// as one a dotfiles manager keeps read-only, is no reason to fail.
 		if err := setupTmux(scanner); err != nil {
-			return err
+			ui.LogWarn(err.Error())
+			fmt.Println()
 		}
 	}
 
@@ -338,13 +348,23 @@ func setupTmux(scanner *bufio.Scanner) error {
 		return nil
 	}
 
-	zenBin, err := os.Executable()
+	zenBin, err := zenbin.Path()
 	if err != nil {
 		return fmt.Errorf("finding the zen executable: %w", err)
 	}
 	changed, err := tmux.InstallConf(path, zenConf, zenBin)
+	if userErr := (*tmux.UserConfError)(nil); errors.As(err, &userErr) {
+		// zen's own settings are written and up to date: reading them is
+		// one block in the user's config, the one zen would have written,
+		// so a later zen setup tmux recognises it.
+		block, _ := tmux.ConfBlock(zenConf)
+		return fmt.Errorf("%w. Add these lines to it yourself:\n%s", err, strings.TrimRight(block, "\n"))
+	}
+	if errors.Is(err, tmux.ErrUnquotable) {
+		return fmt.Errorf("%w (zen's executable, or ZEN_HOME)", err)
+	}
 	if err != nil {
-		return fmt.Errorf("updating tmux settings: %w", err)
+		return fmt.Errorf("writing zen's tmux settings to %s: %w (run `zen setup tmux` once it's fixed)", shortZen, err)
 	}
 	if changed {
 		ui.LogSuccess(fmt.Sprintf("Wrote zen's settings to %s, read from %s", shortZen, short))
@@ -376,6 +396,11 @@ func setupTmux(scanner *bufio.Scanner) error {
 		fmt.Printf("  Agents window:  %s\n", agents)
 		fmt.Println("  Change them in the tmux section of ~/.zen/config.yaml; they apply to")
 		fmt.Println("  sessions created after that. Sessions that already exist are left alone.")
+		if unknown := c.Notify.UnknownTerminalEvents(); len(unknown) > 0 {
+			fmt.Println()
+			ui.LogWarn(fmt.Sprintf("notify.terminal_events has values zen doesn't know: %s. Known: %s",
+				strings.Join(unknown, ", "), strings.Join(config.TerminalEvents, ", ")))
+		}
 	}
 
 	fmt.Println()

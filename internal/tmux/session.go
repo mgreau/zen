@@ -23,7 +23,26 @@ const AgentsWindowName = "Agents"
 //     shell like the windows zen opens for worktrees, so you stay on the
 //     first window. A missing agentsDir falls back to the session's
 //     directory rather than failing.
+//
+// Only a session a terminal attached to when it was made (tmux new, tmux
+// new -A) is set up. A session a script or tool creates in the background
+// (tmux new -d) is left alone, since the script may type into it too; so
+// is one grouped with another (tmux new -t other), which shares that
+// session's windows, where someone may be typing.
 func SetUpSession(session, first, agents, agentsDir string) error {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", session+":",
+		"#{session_attached}\t#{session_grouped}").Output()
+	if err != nil {
+		return fmt.Errorf("tmux display-message: %w", err)
+	}
+	if !interactive(strings.TrimSpace(string(out))) {
+		return nil
+	}
+	return setUp(session, first, agents, agentsDir)
+}
+
+// setUp does SetUpSession's work, for a session it decided to set up.
+func setUp(session, first, agents, agentsDir string) error {
 	if first != "" {
 		out, err := exec.Command("tmux", "display-message", "-p", "-t", session+":",
 			"#{session_windows}\t#{pane_id}\t#{pane_start_command}").Output()
@@ -50,6 +69,13 @@ func SetUpSession(session, first, agents, agentsDir string) error {
 		}
 	}
 	return nil
+}
+
+// interactive reads "attached clients, grouped" for a new session and
+// reports whether to set it up.
+func interactive(info string) bool {
+	f := strings.Split(info, "\t")
+	return len(f) == 2 && f[0] != "0" && f[0] != "" && f[1] != "1"
 }
 
 // freshShell reads "windows, pane ID, start command" for a session's current

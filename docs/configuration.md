@@ -191,14 +191,21 @@ zen keeps the window option `@zen-status` on each of its windows. The value is
 
 - For Claude, hooks that zen passes with `--settings` when it opens the agent
   in a tmux window. They set the status as soon as Claude starts, finishes a
-  turn or asks for a permission, and when you reply. Nothing is written into
+  turn or asks for a permission, and when you reply, and mark it `stopped`
+  when Claude exits. Nothing is written into
   the worktree, your own hooks still run, and the commands zen prints for
   `--no-terminal` don't include them.
 - The daemon's session scan. This works for every agent, after a delay of up
   to `session_scan_interval` plus the idle threshold. Where Claude's hooks set
   the status, the daemon marks the window `stopped` once Claude exits, and
-  `waiting` when it sends its "Claude is waiting" notification, which covers a
-  turn you interrupted with Esc: no hook reports that.
+  `waiting` after a turn you interrupted with Esc, which no hook reports. It
+  tells that from a long, quiet tool by the interrupt marker Claude records
+  in the session. A session idle for 10 minutes is marked `waiting` whatever
+  the hooks last said, for waits no hook reports, unless its last step is a
+  tool call still running, such as a subagent.
+
+After you approve a permission, the window stays `waiting` until the
+approved tool finishes: no hook fires on the approval itself.
 
 The daemon reaches tmux the way any tmux client does: through `$TMUX` if it
 was started inside tmux, else the default server. If you run tmux on a custom
@@ -212,17 +219,21 @@ do that, as described in [tmux settings](#tmux-settings).
 
 `zen setup tmux` installs zen's tmux settings, and `zen setup` offers to when
 you pick tmux. They live in a file of zen's own, `~/.zen/tmux.conf`, which
-zen rewrites each time, so don't edit it. Your tmux config
-(`~/.tmux.conf`, or `~/.config/tmux/tmux.conf` if only that exists) gets
-one line that reads it, between `# >>> zen >>>` and `# <<< zen <<<` lines.
+zen rewrites each time, so don't edit it. Your tmux config (the first of
+`~/.tmux.conf`, `$XDG_CONFIG_HOME/tmux/tmux.conf` and
+`~/.config/tmux/tmux.conf` that exists, as tmux looks for it, else
+`~/.tmux.conf`) gets one line that reads it, between `# >>> zen >>>` and `# <<< zen <<<` lines.
 Nothing else in your file is changed. Run inside tmux, setup reloads it.
 
 The settings:
 
 - `focus-events on`, so zen doesn't notify you about the window you're
   looking at.
-- A reverse `● ` in front of windows whose agent is waiting on you, in
-  tmux's default window format.
+- A reverse `● ` in front of windows whose agent is waiting on you, added
+  to the front of your own `window-status-format`, or tmux's default. zen's
+  line comes last in your config, so it sees a format your config sets
+  above it. If a theme sets the format later, put zen's marker in front of
+  it yourself: `#{?#{==:#{@zen-status},waiting},#[reverse]● ,}`.
 - `prefix + W`: a picker of just the waiting windows.
 - A `session-created` hook that sets up each new session, as below. It uses
   hook index 100, so your own `session-created` hooks are kept.
@@ -242,8 +253,11 @@ tmux:
 - `first_window_command` is typed into the session's first window, so the
   window stays an ordinary prompt afterwards: `zen inbox` shows what needs
   you, `zen dashboard` everything you have going. It's only typed into a
-  session that is a lone shell: a session created to run a program, such as
-  `tmux new 'vim'`, is left alone.
+  session you open from a terminal (`tmux new`, `tmux new -A`) that is a lone
+  shell. Sessions a script or tool creates in the background (`tmux new -d`)
+  are left alone, since the script may type into them itself; so are a
+  session created to run a program, such as `tmux new 'vim'`, and one grouped
+  with another (`tmux new -t other`), whose windows someone may be using.
 - `agents_window` opens a window named `Agents`, in the background, running
   `agents_window_command` through your login shell. By default that's your
   agent's view of its sessions: `claude agents`, or `codex agents` with
@@ -257,7 +271,8 @@ tmux:
 `zen setup` asks for these when you pick tmux. The hook reads `config.yaml`
 each time, so a change applies to sessions created after it, without
 running setup again. Sessions that already exist, such as one you reattach
-to with `tmux new -A`, are left as they are. This applies to every new
+to with `tmux new -A`, are left as they are. The hook's output would show in
+the new session, so problems go to `~/.zen/state/tmux-hook.log` instead. This applies to every new
 session on the tmux server, not only zen's.
 
 ### Desktop notifications over ssh
@@ -265,7 +280,8 @@ session on the tmux server, not only zen's.
 When you ssh into the host from a Mac, zen sends a desktop notification for
 the Claude in each of its windows, through tmux and ssh to iTerm2 or Ghostty:
 
-- When Claude finishes a turn: the start of its reply, right away.
+- When Claude finishes a turn: the start of its reply, right away. A turn
+  that ends on an error, such as a rate limit, says so.
 - When Claude asks for a permission or an answer: its own text, such as
   "Claude needs your permission to use Bash".
 
@@ -284,13 +300,16 @@ characters from it before it reaches your terminal.
 ```yaml
 notify:
   terminal: true            # false: no zen notifications; Claude keeps its own
-  terminal_events: [stop, permission_prompt, elicitation_dialog]   # the default
+  terminal_events: [stop, stop_failure, permission_prompt, elicitation_dialog]   # the default
   terminal_sequence: auto   # or osc777 (Ghostty), osc9 (iTerm2 and others)
 ```
 
-`terminal_events` takes `stop` (a turn ended) and Claude's notification types,
-such as `permission_prompt`, `elicitation_dialog`, or `idle_prompt`. An empty
-list turns them all off. `auto` sends OSC 777, which has a separate title,
+`terminal_events` takes `stop` (a turn ended), `stop_failure` (a turn ended on
+an error), and Claude's notification types, such as `permission_prompt`,
+`elicitation_dialog`, or `idle_prompt`. A value zen doesn't know is kept, in
+case Claude has added a type since, but `zen setup tmux` and the daemon log
+warn about it, since a misspelt one would quietly drop its notifications. An
+empty list turns them all off. `auto` sends OSC 777, which has a separate title,
 when every terminal attached to the session is Ghostty, and OSC 9, which puts
 the title in front of the text, otherwise.
 

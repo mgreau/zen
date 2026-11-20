@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
 
 // StatusOption is the tmux window option holding the state of the agent in a
@@ -22,13 +23,28 @@ const HooksOption = "@zen-hooks"
 type Report struct {
 	Status string // "running", "waiting", or "stopped"
 
-	// BecameWaiting is set on the scan where the daemon sees the agent go
-	// from running to waiting: its session has been idle past the threshold.
-	// That is the event the daemon's desktop notification fires on, the one
-	// signal every terminal gets. It overrides the hooks' "running", since
-	// no hook reports a turn the user interrupted.
-	BecameWaiting bool
+	// Interrupted is set while the agent waits because the user interrupted
+	// its turn (Esc): its session ends in Claude's interrupt marker. No hook
+	// reports an interrupt, so it overrides the hooks' "running". A session
+	// that is merely quiet, such as while a long tool runs, is not
+	// interrupted, and leaves the hooks' "running" alone.
+	Interrupted bool
+
+	// ToolRunning is set when the agent's last action is a tool call still
+	// running, such as a subagent, which writes to files of its own: then
+	// a quiet session is busy, not waiting, however long Idle grows.
+	ToolRunning bool
+
+	// Idle is how long the session has gone without being written to.
+	// Past StaleRunning, the daemon's "waiting" overrides the hooks'
+	// "running" too, for waits no hook reports (or a hook's failed write).
+	Idle time.Duration
 }
+
+// StaleRunning is how long a session must be idle before the daemon's
+// "waiting" overrides the hooks' "running". Long enough that a quiet tool,
+// such as a test run, is rarely taken for a wait.
+const StaleRunning = 10 * time.Minute
 
 // SetStatuses brings StatusOption up to date on the window zen opened for
 // each worktree path in reports. Worktrees without a window are ignored, and
@@ -37,7 +53,8 @@ type Report struct {
 //
 // On a window whose status the agent's hooks set (HooksOption), the daemon
 // writes only "stopped", which the hooks cannot report once the agent exits,
-// and the "waiting" of Report.BecameWaiting. Writing "stopped" also clears
+// and the "waiting" of an interrupted turn (Report.Interrupted). Writing
+// "stopped" also clears
 // HooksOption, since whatever runs in the window next may have no hooks.
 //
 // "stopped" is written only to a window back at its shell prompt. The daemon
@@ -91,7 +108,7 @@ func statusUpdates(windows []window, reports map[string]Report) []window {
 			if !w.idle() {
 				continue // something still runs there
 			}
-		case hooksOwn && !r.BecameWaiting:
+		case hooksOwn && !(r.Status == "waiting" && w.Status == "running" && (r.Interrupted || (r.Idle >= StaleRunning && !r.ToolRunning))):
 			continue // the hooks know better
 		}
 		w.Status = r.Status

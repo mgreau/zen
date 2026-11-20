@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mgreau/zen/internal/config"
@@ -17,9 +20,12 @@ func TestHookNotification(t *testing.T) {
 		{"turn ended", hookInput{Event: "Stop", LastAssistantMessage: "Done: tests pass."}, "Done: tests pass."},
 		{"turn ended, no text", hookInput{Event: "Stop"}, "Turn finished"},
 		{"stop hook continuing", hookInput{Event: "Stop", StopHookActive: true, LastAssistantMessage: "x"}, ""},
+		{"turn failed", hookInput{Event: "StopFailure", Error: "rate_limit"}, "Turn failed: rate_limit"},
 		{"permission", hookInput{Event: "Notification", NotificationType: "permission_prompt", Message: "Claude needs your permission to use Bash"}, "Claude needs your permission to use Bash"},
 		{"idle, not configured", hookInput{Event: "Notification", NotificationType: "idle_prompt", Message: "Claude is waiting for your input"}, ""},
 		{"empty message", hookInput{Event: "Notification", NotificationType: "permission_prompt"}, ""},
+		{"no type, as older Claude sent", hookInput{Event: "Notification", Message: "Claude needs your permission to use Bash"}, "Claude needs your permission to use Bash"},
+		{"no type, idle notice", hookInput{Event: "Notification", Message: "Claude is waiting for your input"}, ""},
 	}
 	for _, tt := range tests {
 		n, ok := hookNotification(tt.in, events, "app#42 · Fix it")
@@ -83,5 +89,17 @@ func TestSessionCommands(t *testing.T) {
 		if first != tt.wantFirst || agents != tt.wantAgts {
 			t.Errorf("%s: sessionCommands = %q, %q; want %q, %q", tt.name, first, agents, tt.wantFirst, tt.wantAgts)
 		}
+	}
+}
+
+func TestLogHookErrorCapped(t *testing.T) {
+	t.Setenv("ZEN_HOME", t.TempDir())
+	path := filepath.Join(config.StateDir(), "tmux-hook.log")
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	os.WriteFile(path, make([]byte, maxHookLog+1), 0o644)
+	logHookError("session-created", errors.New("boom"))
+	info, err := os.Stat(path)
+	if err != nil || info.Size() > 200 {
+		t.Errorf("log after passing its cap: %v, %v bytes", err, info.Size())
 	}
 }

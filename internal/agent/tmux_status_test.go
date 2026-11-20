@@ -47,11 +47,14 @@ func TestTmuxStatusSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"SessionStart":     "waiting",
-		"Notification":     "waiting",
-		"Stop":             "waiting",
-		"UserPromptSubmit": "running",
-		"PostToolUse":      "running",
+		"SessionStart":       "waiting",
+		"Notification":       "waiting",
+		"Stop":               "waiting",
+		"StopFailure":        "waiting",
+		"UserPromptSubmit":   "running",
+		"PostToolUse":        "running",
+		"PostToolUseFailure": "running",
+		"SessionEnd":         "stopped",
 	}
 	if len(s.Hooks) != len(want) {
 		t.Errorf("hooks for %d events, want %d", len(s.Hooks), len(want))
@@ -62,10 +65,18 @@ func TestTmuxStatusSettings(t *testing.T) {
 			t.Fatalf("%s: %+v, want one hook", event, groups)
 		}
 		h := groups[0].Hooks[0]
-		if h.Type != "command" || !strings.Contains(h.Command, "@zen-status "+status+" ") ||
-			!strings.Contains(h.Command, "@zen-hooks 1") {
-			t.Errorf("%s hook = %+v, want it to set %s and the hooks flag", event, h, status)
+		// SessionEnd gives the status up; the others claim it.
+		flag := "@zen-hooks 1"
+		if status == "stopped" {
+			flag = "-u -t \"$TMUX_PANE\" @zen-hooks"
 		}
+		if h.Type != "command" || !strings.Contains(h.Command, "@zen-status "+status+" ") ||
+			!strings.Contains(h.Command, flag) {
+			t.Errorf("%s hook = %+v, want it to set %s and %s", event, h, status, flag)
+		}
+	}
+	if m := s.Hooks["Notification"][0].Matcher; m != waitingNotifications {
+		t.Errorf("Notification status matcher = %q, want the waiting types", m)
 	}
 	if m := s.Hooks["SessionStart"][0].Matcher; strings.Contains(m, "compact") {
 		t.Errorf("SessionStart matcher %q includes compact, which happens mid-turn", m)
@@ -151,12 +162,21 @@ func TestTmuxStatusSettingsWithNotify(t *testing.T) {
 	if s.Channel != "notifications_disabled" {
 		t.Errorf("preferredNotifChannel = %q, want notifications_disabled", s.Channel)
 	}
-	for event, want := range map[string]bool{"Notification": true, "Stop": true, "SessionStart": false, "UserPromptSubmit": false, "PostToolUse": false} {
-		hooks := s.Hooks[event][0].Hooks
-		got := len(hooks) == 2 && hooks[1].Command == `'/opt/my zen/zen' hook notify` && hooks[1].Async
-		if got != want {
-			t.Errorf("%s: notify hook present = %v, want %v (%+v)", event, got, want, hooks)
+	for event, want := range map[string]bool{"Notification": true, "Stop": true, "StopFailure": true, "SessionStart": false, "UserPromptSubmit": false, "PostToolUse": false} {
+		got := false
+		for _, g := range s.Hooks[event] {
+			for _, h := range g.Hooks {
+				got = got || (h.Command == `'/opt/my zen/zen' hook notify` && h.Async)
+			}
 		}
+		if got != want {
+			t.Errorf("%s: notify hook present = %v, want %v (%+v)", event, got, want, s.Hooks[event])
+		}
+	}
+	// The notify hook must not inherit the status hook's matcher, or
+	// notify.terminal_events could not pick other types.
+	if n := s.Hooks["Notification"]; len(n) != 2 || len(n[1].Hooks) != 1 {
+		t.Errorf("Notification groups = %+v, want the notify hook in a group of its own", n)
 	}
 
 	// Without zen's notifications, Claude keeps its own.

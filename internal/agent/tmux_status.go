@@ -27,6 +27,11 @@ func WithTmuxStatus(ag Agent, zenBin string) Agent {
 	return &withHooks
 }
 
+// waitingNotifications matches the Claude notification types that wait on
+// the user. Others, such as a background agent finishing (agent_completed)
+// or a login succeeding, come while Claude may still be working.
+const waitingNotifications = "permission_prompt|idle_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input"
+
 // tmuxStatusSettings returns Claude Code settings, for --settings, whose hooks
 // mark the window "waiting" when Claude starts, finishes a turn, or asks for
 // something (a permission, an answer), and "running" once the user replies.
@@ -48,26 +53,42 @@ func tmuxStatusSettings(zenBin string) string {
 		// "\;" reaches tmux as ";", separating its two commands.
 		cmd := `[ -z "$TMUX_PANE" ] || tmux set-option -w -t "$TMUX_PANE" ` + tmux.StatusOption + " " + status +
 			` \; set-option -w -t "$TMUX_PANE" ` + tmux.HooksOption + " 1 2>/dev/null || true"
-		hooks := []map[string]any{{"type": "command", "command": cmd}}
-		if notify && notifyHook != nil {
-			hooks = append(hooks, notifyHook)
-		}
-		group := map[string]any{"hooks": hooks}
+		group := map[string]any{"hooks": []map[string]any{{"type": "command", "command": cmd}}}
+		groups := []map[string]any{group}
 		if matcher != "" {
 			group["matcher"] = matcher
 		}
-		return []map[string]any{group}
+		if notify && notifyHook != nil {
+			// zen filters notifications itself (notify.terminal_events), so
+			// the notify hook sees every event, whatever the status matches.
+			if matcher == "" {
+				group["hooks"] = append(group["hooks"].([]map[string]any), notifyHook)
+			} else {
+				groups = append(groups, map[string]any{"hooks": []map[string]any{notifyHook}})
+			}
+		}
+		return groups
 	}
 	settings := map[string]any{
 		"hooks": map[string]any{
 			// Not "compact": Claude compacts mid-turn, while still running.
-			"SessionStart":     hook("startup|resume|clear", "waiting", false),
-			"Notification":     hook("", "waiting", true),
-			"Stop":             hook("", "waiting", true),
+			"SessionStart": hook("startup|resume|clear", "waiting", false),
+			"Notification": hook(waitingNotifications, "waiting", true),
+			"Stop":         hook("", "waiting", true),
+			// A turn that ends on an error, such as a rate limit, waits on
+			// the user too, but fires StopFailure instead of Stop.
+			"StopFailure":      hook("", "waiting", true),
 			"UserPromptSubmit": hook("", "running", false),
 			// A permission prompt is answered without a new prompt, so the
 			// tool finishing is what marks the agent running again.
 			"PostToolUse": hook("", "running", false),
+			// An approved tool that fails fires this instead.
+			"PostToolUseFailure": hook("", "running", false),
+			// Claude exiting: mark the window stopped, and give up the
+			// status, now that no hook will report it, even with no daemon
+			// running. /clear ends a session too, but SessionStart follows.
+			"SessionEnd": []map[string]any{{"hooks": []map[string]any{{"type": "command", "command": `[ -z "$TMUX_PANE" ] || tmux set-option -w -t "$TMUX_PANE" ` +
+				tmux.StatusOption + ` stopped \; set-option -w -u -t "$TMUX_PANE" ` + tmux.HooksOption + " 2>/dev/null || true"}}}},
 		},
 	}
 	if notifyHook != nil {

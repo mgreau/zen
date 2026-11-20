@@ -9,11 +9,13 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/mgreau/zen/internal/config"
 	"github.com/mgreau/zen/internal/prcache"
 	"github.com/mgreau/zen/internal/tmux"
 	"github.com/mgreau/zen/internal/worktree"
+	"github.com/mgreau/zen/internal/zenbin"
 	"github.com/spf13/cobra"
 )
 
@@ -48,11 +50,14 @@ var hookSessionCreatedCmd = &cobra.Command{
 	Long: `Run by the session-created hook in zen's tmux settings (zen setup tmux) for
 each new session. As config.yaml's tmux section says, it types a command,
 "zen inbox" by default, into the session's first window, and opens an Agents
-window. It never fails: problems are reported on stderr.`,
+window. It never fails: tmux discards its output, so problems are appended to
+~/.zen/state/tmux-hook.log.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// tmux runs this in the background with its output discarded, since
+		// it would show in the new session's pane: problems go to a log.
 		if err := runHookSessionCreated(args[0]); err != nil {
-			fmt.Fprintf(os.Stderr, "zen hook session-created: %v\n", err)
+			logHookError("session-created", err)
 		}
 		return nil
 	},
@@ -62,6 +67,30 @@ func init() {
 	hookCmd.AddCommand(hookNotifyCmd)
 	hookCmd.AddCommand(hookSessionCreatedCmd)
 	rootCmd.AddCommand(hookCmd)
+}
+
+// maxHookLog caps tmux-hook.log: a hook that fails for every new session,
+// as with a broken config.yaml, must not grow it forever.
+const maxHookLog = 64 * 1024
+
+// logHookError appends a hook's error to ~/.zen/state/tmux-hook.log, for
+// hooks whose output nobody sees, starting the file afresh once it passes
+// maxHookLog. Best effort.
+func logHookError(hook string, err error) {
+	path := filepath.Join(config.StateDir(), "tmux-hook.log")
+	if os.MkdirAll(filepath.Dir(path), 0o755) != nil {
+		return
+	}
+	flags := os.O_APPEND | os.O_CREATE | os.O_WRONLY
+	if info, serr := os.Stat(path); serr == nil && info.Size() > maxHookLog {
+		flags |= os.O_TRUNC
+	}
+	f, ferr := os.OpenFile(path, flags, 0o644)
+	if ferr != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s zen hook %s: %v\n", time.Now().Format(time.RFC3339), hook, err)
 }
 
 func runHookSessionCreated(session string) error {
@@ -83,20 +112,18 @@ func sessionCommands(c *config.Config, zen string) (first, agents string) {
 // zenCommand returns how to run this zen from a shell: "zen" when that is
 // what PATH finds, so the typed command reads naturally, else its full path.
 func zenCommand() string {
-	self, err := os.Executable()
+	bin, err := zenbin.Path()
 	if err != nil {
 		return "zen"
 	}
-	if onPath, err := exec.LookPath("zen"); err == nil && sameFile(onPath, self) {
-		return "zen"
+	// zenbin.Path prefers the zen on PATH: when that is what it returned,
+	// typing "zen" runs the same one.
+	if onPath, err := exec.LookPath("zen"); err == nil {
+		if abs, err := filepath.Abs(onPath); err == nil && abs == bin {
+			return "zen"
+		}
 	}
-	return "'" + strings.ReplaceAll(self, "'", `'\''`) + "'"
-}
-
-func sameFile(a, b string) bool {
-	ia, errA := os.Stat(a)
-	ib, errB := os.Stat(b)
-	return errA == nil && errB == nil && os.SameFile(ia, ib)
+	return "'" + strings.ReplaceAll(bin, "'", `'\''`) + "'"
 }
 
 // hookInput is the part of a Claude Code hook's input zen reads.
@@ -106,12 +133,9 @@ type hookInput struct {
 	Message              string `json:"message"`
 	NotificationType     string `json:"notification_type"`
 	LastAssistantMessage string `json:"last_assistant_message"`
+	Error                string `json:"error"`
 	StopHookActive       bool   `json:"stop_hook_active"`
 }
-
-// maxHookInput bounds what zen reads from the hook: the last message of a
-// long turn is the largest part, and only its start is shown.
-const maxHookInput = 4 << 20
 
 func runHookNotify(stdin io.Reader) error {
 	pane := os.Getenv("TMUX_PANE")
@@ -119,7 +143,9 @@ func runHookNotify(stdin io.Reader) error {
 		return nil // not in tmux: nowhere to send it
 	}
 	var in hookInput
-	if err := json.NewDecoder(io.LimitReader(stdin, maxHookInput)).Decode(&in); err != nil {
+	// Read it all: cutting it short would leave invalid JSON. Only the start
+	// of the text is shown (see tmux.Clean).
+	if err := json.NewDecoder(stdin).Decode(&in); err != nil {
 		return fmt.Errorf("reading hook input: %w", err)
 	}
 
@@ -141,10 +167,23 @@ func runHookNotify(stdin io.Reader) error {
 }
 
 // hookEvent names the event a hook input reports, as notify.terminal_events
-// lists it: "stop" for the end of a turn, else Claude's notification type.
+// lists it: "stop" for the end of a turn, "stop_failure" for a turn that
+// ended on an error, else Claude's notification type.
 func hookEvent(in hookInput) string {
-	if in.Event == "Stop" {
+	switch in.Event {
+	case "Stop":
 		return "stop"
+	case "StopFailure":
+		return "stop_failure"
+	}
+	if in.NotificationType == "" {
+		// Claude versions that sent no type sent two kinds: the idle notice
+		// after a turn, and requests (permissions, questions). Tell them
+		// apart by the idle notice's text.
+		if strings.Contains(strings.ToLower(in.Message), "waiting for your input") {
+			return "idle_prompt"
+		}
+		return "permission_prompt"
 	}
 	return in.NotificationType
 }
@@ -166,6 +205,11 @@ func hookNotification(in hookInput, events []string, label string) (tmux.Notific
 		body = in.LastAssistantMessage
 		if strings.TrimSpace(body) == "" {
 			body = "Turn finished"
+		}
+	case "StopFailure":
+		body = "Turn failed"
+		if e := strings.TrimSpace(in.Error); e != "" {
+			body += ": " + e
 		}
 	case "Notification":
 		body = in.Message
