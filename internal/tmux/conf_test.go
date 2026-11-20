@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -131,6 +132,58 @@ func TestConfLoads(t *testing.T) {
 		data, _ := os.ReadFile(rec)
 		return strings.HasPrefix(string(data), "hook session-created $")
 	})
+}
+
+func TestWithBlockMissingEnd(t *testing.T) {
+	block, _ := ConfBlock("/home/u/.zen/tmux.conf")
+	// zen's own line goes with the marker; a user's line after it stays.
+	lines := strings.Split(block, "\n")
+	broken := "set -g mouse on\n" + confBegin + "\n" + lines[1] + "\nsource-file -q ~/.tmux/theme.conf\n"
+	want := "set -g mouse on\n" + block + "source-file -q ~/.tmux/theme.conf\n"
+	if got := withBlock(broken, block); got != want {
+		t.Errorf("block without its end marker:\n%q\nwant\n%q", got, want)
+	}
+	// An older zen line, for a settings file that moved, goes too.
+	stale := "set -g mouse on\n" + confBegin + "\nsource-file -q '/home/old/.zen/tmux.conf'\n"
+	if got := withBlock(stale, block); got != "set -g mouse on\n"+block {
+		t.Errorf("stale zen line kept:\n%q", got)
+	}
+	dotfiles := "set -g mouse on\n" + confBegin + "\nsource-file -q '/home/u/dotfiles/tmux/tmux.conf'\n"
+	if got := withBlock(dotfiles, block); !strings.Contains(got, "dotfiles/tmux/tmux.conf") {
+		t.Errorf("repair dropped the user's own tmux.conf line:\n%q", got)
+	}
+	userLine := "set -g mouse on\n" + confBegin + "\nsource-file -q ~/.tmux/theme.conf\n"
+	if got := withBlock(userLine, block); !strings.Contains(got, "theme.conf") {
+		t.Errorf("repair dropped the user's line:\n%q", got)
+	}
+}
+
+// An orphan begin marker before a whole block must not be paired with that
+// block's end, which would delete the user's lines between them.
+func TestWithBlockOrphanBeforeBlock(t *testing.T) {
+	block, _ := ConfBlock("/home/u/.zen/tmux.conf")
+	conf := confBegin + "\nset -g mouse on\nbind r source-file ~/.tmux.conf\n\n" + block
+	got := withBlock(conf, block)
+	if want := "set -g mouse on\nbind r source-file ~/.tmux.conf\n\n" + block; got != want {
+		t.Errorf("withBlock:\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestInstallConfUserError(t *testing.T) {
+	dir := t.TempDir()
+	zenConf := filepath.Join(dir, "zen.conf")
+	readOnly := filepath.Join(dir, "ro")
+	if err := os.Mkdir(readOnly, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	_, err := InstallConf(filepath.Join(readOnly, "tmux.conf"), zenConf, "/usr/bin/zen")
+	var userErr *UserConfError
+	if !errors.As(err, &userErr) {
+		t.Fatalf("InstallConf into a read-only directory = %v, want a UserConfError", err)
+	}
+	if _, err := os.Stat(zenConf); err != nil {
+		t.Errorf("zen's own settings were not written first: %v", err)
+	}
 }
 
 // zen's marker goes in front of the user's own window format, once.

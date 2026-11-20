@@ -253,8 +253,11 @@ tmux:
 - `first_window_command` is typed into the session's first window, so the
   window stays an ordinary prompt afterwards: `zen inbox` shows what needs
   you, `zen dashboard` everything you have going. It's only typed into a
-  session that is a lone shell: a session created to run a program, such as
-  `tmux new 'vim'`, is left alone.
+  session you open from a terminal (`tmux new`, `tmux new -A`) that is a lone
+  shell. Sessions a script or tool creates in the background (`tmux new -d`)
+  are left alone, since the script may type into them itself; so are a
+  session created to run a program, such as `tmux new 'vim'`, and one grouped
+  with another (`tmux new -t other`), whose windows someone may be using.
 - `agents_window` opens a window named `Agents`, in the background, running
   `agents_window_command` through your login shell. By default that's your
   agent's view of its sessions: `claude agents`, or `codex agents` with
@@ -268,7 +271,8 @@ tmux:
 `zen setup` asks for these when you pick tmux. The hook reads `config.yaml`
 each time, so a change applies to sessions created after it, without
 running setup again. Sessions that already exist, such as one you reattach
-to with `tmux new -A`, are left as they are. This applies to every new
+to with `tmux new -A`, are left as they are. The hook's output would show in
+the new session, so problems go to `~/.zen/state/tmux-hook.log` instead. This applies to every new
 session on the tmux server, not only zen's.
 
 ### Desktop notifications over ssh
@@ -276,7 +280,8 @@ session on the tmux server, not only zen's.
 When you ssh into the host from a Mac, zen sends a desktop notification for
 the Claude in each of its windows, through tmux and ssh to iTerm2 or Ghostty:
 
-- When Claude finishes a turn: the start of its reply, right away.
+- When Claude finishes a turn: the start of its reply, right away. A turn
+  that ends on an error, such as a rate limit, says so.
 - When Claude asks for a permission or an answer: its own text, such as
   "Claude needs your permission to use Bash".
 

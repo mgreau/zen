@@ -9,11 +9,13 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/mgreau/zen/internal/config"
 	"github.com/mgreau/zen/internal/prcache"
 	"github.com/mgreau/zen/internal/tmux"
 	"github.com/mgreau/zen/internal/worktree"
+	"github.com/mgreau/zen/internal/zenbin"
 	"github.com/spf13/cobra"
 )
 
@@ -48,11 +50,14 @@ var hookSessionCreatedCmd = &cobra.Command{
 	Long: `Run by the session-created hook in zen's tmux settings (zen setup tmux) for
 each new session. As config.yaml's tmux section says, it types a command,
 "zen inbox" by default, into the session's first window, and opens an Agents
-window. It never fails: problems are reported on stderr.`,
+window. It never fails: tmux discards its output, so problems are appended to
+~/.zen/state/tmux-hook.log.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// tmux runs this in the background with its output discarded, since
+		// it would show in the new session's pane: problems go to a log.
 		if err := runHookSessionCreated(args[0]); err != nil {
-			fmt.Fprintf(os.Stderr, "zen hook session-created: %v\n", err)
+			logHookError("session-created", err)
 		}
 		return nil
 	},
@@ -62,6 +67,30 @@ func init() {
 	hookCmd.AddCommand(hookNotifyCmd)
 	hookCmd.AddCommand(hookSessionCreatedCmd)
 	rootCmd.AddCommand(hookCmd)
+}
+
+// maxHookLog caps tmux-hook.log: a hook that fails for every new session,
+// as with a broken config.yaml, must not grow it forever.
+const maxHookLog = 64 * 1024
+
+// logHookError appends a hook's error to ~/.zen/state/tmux-hook.log, for
+// hooks whose output nobody sees, starting the file afresh once it passes
+// maxHookLog. Best effort.
+func logHookError(hook string, err error) {
+	path := filepath.Join(config.StateDir(), "tmux-hook.log")
+	if os.MkdirAll(filepath.Dir(path), 0o755) != nil {
+		return
+	}
+	flags := os.O_APPEND | os.O_CREATE | os.O_WRONLY
+	if info, serr := os.Stat(path); serr == nil && info.Size() > maxHookLog {
+		flags |= os.O_TRUNC
+	}
+	f, ferr := os.OpenFile(path, flags, 0o644)
+	if ferr != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s zen hook %s: %v\n", time.Now().Format(time.RFC3339), hook, err)
 }
 
 func runHookSessionCreated(session string) error {
@@ -83,20 +112,18 @@ func sessionCommands(c *config.Config, zen string) (first, agents string) {
 // zenCommand returns how to run this zen from a shell: "zen" when that is
 // what PATH finds, so the typed command reads naturally, else its full path.
 func zenCommand() string {
-	self, err := os.Executable()
+	bin, err := zenbin.Path()
 	if err != nil {
 		return "zen"
 	}
-	if onPath, err := exec.LookPath("zen"); err == nil && sameFile(onPath, self) {
-		return "zen"
+	// zenbin.Path prefers the zen on PATH: when that is what it returned,
+	// typing "zen" runs the same one.
+	if onPath, err := exec.LookPath("zen"); err == nil {
+		if abs, err := filepath.Abs(onPath); err == nil && abs == bin {
+			return "zen"
+		}
 	}
-	return "'" + strings.ReplaceAll(self, "'", `'\''`) + "'"
-}
-
-func sameFile(a, b string) bool {
-	ia, errA := os.Stat(a)
-	ib, errB := os.Stat(b)
-	return errA == nil && errB == nil && os.SameFile(ia, ib)
+	return "'" + strings.ReplaceAll(bin, "'", `'\''`) + "'"
 }
 
 // hookInput is the part of a Claude Code hook's input zen reads.

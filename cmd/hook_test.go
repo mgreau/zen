@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mgreau/zen/internal/config"
@@ -86,5 +89,17 @@ func TestSessionCommands(t *testing.T) {
 		if first != tt.wantFirst || agents != tt.wantAgts {
 			t.Errorf("%s: sessionCommands = %q, %q; want %q, %q", tt.name, first, agents, tt.wantFirst, tt.wantAgts)
 		}
+	}
+}
+
+func TestLogHookErrorCapped(t *testing.T) {
+	t.Setenv("ZEN_HOME", t.TempDir())
+	path := filepath.Join(config.StateDir(), "tmux-hook.log")
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	os.WriteFile(path, make([]byte, maxHookLog+1), 0o644)
+	logHookError("session-created", errors.New("boom"))
+	info, err := os.Stat(path)
+	if err != nil || info.Size() > 200 {
+		t.Errorf("log after passing its cap: %v, %v bytes", err, info.Size())
 	}
 }
