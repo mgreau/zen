@@ -165,6 +165,51 @@ to drive. The command runs through your login shell (`$SHELL -l -c`), and the
 window keeps a shell in the worktree when the agent exits. Outside tmux, zen
 reports an error; use `--no-terminal` there instead.
 
+zen tags each window it opens with the window option `@zen-worktree`, so one
+worktree gets one window. Opening a worktree that already has a window, as
+`zen review resume` or `zen work resume` do, reuses it. If the window is at its
+shell prompt, the agent starts there. If something is still running in it, or
+you split it into several panes, zen only switches to it and says so. Windows the daemon opens for Slack tasks open in the
+background, so they don't take focus from the window you're typing in.
+
+### Highlighting windows that need you
+
+zen keeps the window option `@zen-status` on each of its windows. The value is
+`running`, `waiting` (the agent needs you), or `stopped`. Two things set it:
+
+- For Claude, hooks that zen passes with `--settings` when it opens the agent
+  in a tmux window. They set the status as soon as Claude starts, finishes a
+  turn or asks for a permission, and when you reply, and mark it `stopped`
+  when Claude exits. Nothing is written into
+  the worktree, your own hooks still run, and the commands zen prints for
+  `--no-terminal` don't include them.
+- The daemon's session scan. This works for every agent, after a delay of up
+  to `session_scan_interval` plus the idle threshold. Where Claude's hooks set
+  the status, the daemon marks the window `stopped` once Claude exits, and
+  `waiting` after a turn you interrupted with Esc, which no hook reports. It
+  tells that from a long, quiet tool by the interrupt marker Claude records
+  in the session. A session idle for 10 minutes is marked `waiting` whatever
+  the hooks last said, for waits no hook reports, unless its last step is a
+  tool call still running, such as a subagent.
+
+After you approve a permission, the window stays `waiting` until the
+approved tool finishes: no hook fires on the approval itself.
+
+The daemon reaches tmux the way any tmux client does: through `$TMUX` if it
+was started inside tmux, else the default server. If you run tmux on a custom
+socket (`tmux -L` or `-S`), start the daemon from inside that tmux, or it
+won't find the windows to update.
+
+tmux doesn't style windows by user options on its own. Add something like this
+to `~/.tmux.conf`:
+
+```tmux
+# Mark waiting windows in the status line.
+set -g window-status-format '#{?#{==:#{@zen-status},waiting},#[reverse]● ,}#I:#W#F#[default]'
+# prefix + W: pick from the windows waiting on you.
+bind W choose-tree -Zw -f '#{==:#{@zen-status},waiting}'
+```
+
 ## Slack task watcher
 
 An opt-in daemon loop that polls for the user's own emoji reaction (`slack.emoji`, default `claudecode`) via `reactions.list`, then for each new hit: adds an ack reaction in-thread (`slack.ack_reaction`, default `eyes`), fetches the thread, creates a feature worktree in `slack.default_repo` from `origin/main`, and immediately launches the agent in a terminal tab with the thread as the initial prompt — the launched session does all the "figure out what to do" work, not the daemon. Unlike the PR-review flow, this does open a terminal tab automatically: a Slack reaction is a deliberate, comparatively rare signal, not the high-volume PR-review firehose.
