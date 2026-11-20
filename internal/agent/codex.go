@@ -27,7 +27,13 @@ import (
 // To attribute sessions to a worktree we read each rollout's session_meta line
 // and match its recorded cwd.
 type codexAgent struct {
-	bin string
+	bin           string
+	remoteControl bool
+	daemonLog     string
+	// launchBin and workDir are set by PrepareLaunch once the remote-control
+	// daemon is up; only then do commands attach to it.
+	launchBin string
+	workDir   string
 }
 
 // cwdCache caches rollout file path → recorded cwd. It is package-level (not
@@ -39,8 +45,12 @@ var cwdCache sync.Map
 func (a *codexAgent) Kind() Kind  { return Codex }
 func (a *codexAgent) Bin() string { return a.bin }
 
+// StartCommand launches Codex. With remote control on and the daemon readied
+// by PrepareLaunch, the TUI attaches to the remote-control app-server daemon:
+// Codex has no per-session remote-control flag.
 func (a *codexAgent) StartCommand(prompt, model string) string {
-	cmd := a.bin
+	cmd := a.cmdBin()
+	cmd += a.remoteFlags()
 	if model != "" {
 		cmd += " -m " + shellQuote(model)
 	}
@@ -52,8 +62,10 @@ func (a *codexAgent) StartCommand(prompt, model string) string {
 
 // ResumeCommand resumes a recorded session by UUID. Codex restores the model
 // from the session itself; an explicit --model override is forwarded via -m.
+// Remote flags follow the subcommand, which accepts them itself.
 func (a *codexAgent) ResumeCommand(sessionID, model string) string {
-	cmd := fmt.Sprintf("%s resume %s", a.bin, shellQuote(sessionID))
+	cmd := fmt.Sprintf("%s resume %s", a.cmdBin(), shellQuote(sessionID))
+	cmd += a.remoteFlags()
 	if model != "" {
 		cmd += " -m " + shellQuote(model)
 	}

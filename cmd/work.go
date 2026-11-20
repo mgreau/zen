@@ -173,9 +173,9 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Model:  %s\n", ui.CyanText(workNewModel))
 	}
 
-	launchCmd := ag.StartCommand(context, workNewModel)
-
-	return launchInWorktree(worktreePath, launchCmd, workNewNoITerm)
+	return launchInWorktree(ag, worktreePath, func(a agent.Agent) string {
+		return a.StartCommand(context, workNewModel)
+	}, workNewNoITerm)
 }
 
 // featureTarget is where a new feature worktree goes: the paths and branch
@@ -229,13 +229,15 @@ func (t featureTarget) create() error {
 	return nil
 }
 
-// launchInWorktree runs launchCmd in a new terminal tab at worktreePath, or
-// prints it when noTerminal is set.
-func launchInWorktree(worktreePath, launchCmd string, noTerminal bool) error {
+// launchInWorktree runs the command that command builds for ag in a new
+// terminal tab at worktreePath, or prints it when noTerminal is set. The
+// agent is prepared for launch (e.g. Codex's remote-control daemon) only
+// when a tab is actually opened.
+func launchInWorktree(ag agent.Agent, worktreePath string, command func(agent.Agent) string, noTerminal bool) error {
 	if noTerminal {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Open manually:"))
-		fmt.Printf("  cd %s && %s\n", agent.ShellQuote(worktreePath), launchCmd)
+		fmt.Printf("  cd %s && %s\n", agent.ShellQuote(worktreePath), command(ag))
 		return nil
 	}
 
@@ -243,6 +245,8 @@ func launchInWorktree(worktreePath, launchCmd string, noTerminal bool) error {
 	if err != nil {
 		return err
 	}
+
+	launchCmd := command(prepareLaunch(ag, worktreePath))
 	if err := term.OpenTab(worktreePath, launchCmd); err != nil {
 		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
 	}

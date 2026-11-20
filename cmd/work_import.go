@@ -218,12 +218,14 @@ func runWorkImport(cmd *cobra.Command, args []string) error {
 		"From now on, read and edit files only in this worktree: %s. "+
 		"Briefly recap where we left off and the next step, then wait for me.",
 		src.dir, target.worktreePath, target.gitBranch, carryNote, oldLocation)
-	launchCmd := ag.ResumeCommand(newID, workImportModel) + " " + agent.ShellQuote(handoff)
+	resume := func(a agent.Agent) string {
+		return a.ResumeCommand(newID, workImportModel) + " " + agent.ShellQuote(handoff)
+	}
 
-	if err := launchInWorktree(target.worktreePath, launchCmd, workImportNoTerminal); err != nil {
+	if err := launchInWorktree(ag, target.worktreePath, resume, workImportNoTerminal); err != nil {
 		// The worktree and session exist now; show how to reach them rather
 		// than leaving a retry to fail with "worktree already exists".
-		_ = launchInWorktree(target.worktreePath, launchCmd, true)
+		_ = launchInWorktree(ag, target.worktreePath, resume, true)
 		return fmt.Errorf("%w\n  The worktree and session %s are ready; run the command above to continue", err, newID)
 	}
 	ui.Hint(fmt.Sprintf("The original session (%s) is unchanged; close it when you're ready.", src.id))
