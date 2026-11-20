@@ -65,6 +65,8 @@ slack:
   default_repo: mono     # short repo name worktrees are created in
   poll_interval: "5m"
   ack_reaction: eyes      # reaction added on pickup, default "eyes"
+  client_id: "123.456"    # Slack app client ID, for zen slack login
+  redirect_port: 8765     # localhost port for the sign-in redirect, default 8765
 ```
 
 The daemon re-reads `config.yaml` on every poll tick. Changes to `poll_interval`, `authors`, `repos`, and other settings take effect without restarting.
@@ -174,10 +176,25 @@ When that worktree's session later goes idle ("waiting", the same signal that dr
 Setup:
 
 1. `slack.enabled: true` in config, plus `slack.default_repo` (required — no hardcoded default).
-2. Create a Slack app (a dedicated personal one is recommended over reusing a shared org bot) with these token scopes: `reactions:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `chat:write`.
-3. Export the resulting token as `ZEN_SLACK_TOKEN` in the environment the daemon starts in (`zen watch start` inherits your shell's env). The token is never written to `config.yaml` or any state file.
+2. Create a Slack app (a dedicated personal one is recommended over reusing a shared org bot) with these user token scopes: `reactions:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `chat:write`.
+3. Give zen a token, in one of two ways:
+   - **Sign in with OAuth (recommended).** In the app's OAuth settings, turn on PKCE and add the redirect URL `http://localhost:8765/callback`. Put the app's client ID in `slack.client_id`, then run `zen slack login`. No client secret is needed. Turning on PKCE can't be undone from the app settings; reverting it takes a request to Slack support.
+   - **Paste a token.** Export a user token as `ZEN_SLACK_TOKEN` in the environment the daemon starts in (`zen watch start` inherits your shell's env). When set, it takes precedence over a stored sign-in.
 
-If `slack.enabled` is true but `ZEN_SLACK_TOKEN` is unset, or `auth.test` fails at startup, the daemon logs a warning and runs with the Slack watcher disabled rather than failing to start.
+If `slack.enabled` is true but no token is available, or `auth.test` fails at startup, the daemon logs a warning and runs with the Slack watcher disabled rather than failing to start.
+
+### Signing in with `zen slack login`
+
+`zen slack login` prints the Slack sign-in URL (and opens it when a browser is available), then waits for Slack to redirect back to `http://localhost:8765/callback`. It stores the resulting token in `slack_token.json` in the state directory, readable only by you.
+
+On a remote workstation, the browser runs on your laptop, so the redirect goes to the laptop's `localhost`. Either works:
+
+- **Paste-back:** the browser lands on a page that fails to load. Copy its URL from the address bar and paste it into the waiting `zen slack login`.
+- **Port forwarding:** connect with `ssh -L 8765:localhost:8765` (for `cg work ssh`, put `-L 8765:localhost:8765` after the node name), and zen receives the redirect directly.
+
+Use `--port` (or `slack.redirect_port`) for a different port; the redirect URL registered in the Slack app must match it. `--no-listen` skips the local listener and only accepts a pasted URL.
+
+Access tokens last 12 hours, and zen refreshes them automatically, saving each rotated refresh token. Refresh tokens for PKCE apps expire 30 days after sign-in, so run `zen slack login` again about once a month. `zen slack status` shows the date. If a refresh fails while the daemon runs, it logs an error and sends one desktop alert; running `zen slack login` again fixes it without restarting the daemon. `zen slack logout` revokes and deletes the stored token.
 
 ## Environment
 
@@ -196,6 +213,7 @@ All state lives in `~/.zen/state/` (or `$ZEN_HOME/state/`):
 | `sessions.json` | Cached agent session states (updated every 10s by daemon) |
 | `slack_seen.json` | Message keys already processed by the Slack task watcher |
 | `slack_origins.json` | Worktree path → originating Slack thread, for the completion DM |
+| `slack_token.json` | Rotating Slack OAuth token from `zen slack login` (mode 0600) |
 
 ## Upgrading
 

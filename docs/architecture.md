@@ -133,7 +133,7 @@ zen
 │   ├── reconciler/               # Workqueue-based PR setup + cleanup + session scan + Slack task watcher
 │   ├── review/                   # Shared worktree creation logic (CLI + MCP)
 │   ├── session/                  # Shared session types + Claude session detection
-│   ├── slack/                    # Minimal Slack Web API client for the task watcher
+│   ├── slack/                    # Minimal Slack Web API client + OAuth (PKCE) sign-in for the task watcher
 │   ├── terminal/                 # Terminal backend abstraction (iterm/ghostty/kitty/macos)
 │   ├── ui/                       # Terminal formatting
 │   └── worktree/                 # Git worktree discovery + management

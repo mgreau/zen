@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,18 +19,23 @@ import (
 const defaultBaseURL = "https://slack.com/api/"
 
 // Client is a thin wrapper around the Slack Web API, authenticated with a
-// single user token (scopes: reactions:read, channels:history, groups:history,
-// im:history, mpim:history, chat:write).
+// user token (scopes: see UserScopes).
 type Client struct {
-	token   string
+	tokens  TokenSource
 	http    *http.Client
 	baseURL string
 }
 
-// NewClient creates a Slack API client authenticated with token.
+// NewClient creates a Slack API client authenticated with a fixed token.
 func NewClient(token string) *Client {
+	return NewClientWithSource(StaticToken(token))
+}
+
+// NewClientWithSource creates a Slack API client that asks src for the token
+// before every call, so rotating tokens are refreshed transparently.
+func NewClientWithSource(src TokenSource) *Client {
 	return &Client{
-		token:   token,
+		tokens:  src,
 		http:    &http.Client{Timeout: 15 * time.Second},
 		baseURL: defaultBaseURL,
 	}
@@ -46,12 +52,9 @@ func (c *Client) get(ctx context.Context, method string, params url.Values) ([]b
 	if params != nil {
 		u += "?" + params.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	return c.do(req, method)
+	return c.call(ctx, method, func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	})
 }
 
 func (c *Client) post(ctx context.Context, method string, payload any) ([]byte, error) {
@@ -59,13 +62,49 @@ func (c *Client) post(ctx context.Context, method string, payload any) ([]byte, 
 	if err != nil {
 		return nil, fmt.Errorf("encoding %s request: %w", method, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+method, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
+	return c.call(ctx, method, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+method, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json; charset=utf-8")
+		return req, nil
+	})
+}
+
+// call authenticates and sends the request newReq builds. If Slack rejects
+// the token before its recorded expiry (for example because another zen
+// process rotated it), it asks the token source for a new one and retries
+// once.
+func (c *Client) call(ctx context.Context, method string, newReq func() (*http.Request, error)) ([]byte, error) {
+	for attempt := 0; ; attempt++ {
+		token, err := c.tokens.Token(ctx)
+		if err != nil {
+			return nil, err
+		}
+		req, err := newReq()
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		body, err := c.do(req, method)
+		var apiErr *APIError
+		if attempt == 0 && errors.As(err, &apiErr) && retryableAuthError(apiErr.Code) {
+			if inv, ok := c.tokens.(invalidator); ok {
+				inv.Invalidate(token)
+				continue
+			}
+		}
+		return body, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	return c.do(req, method)
+}
+
+func retryableAuthError(code string) bool {
+	switch code {
+	case "token_expired", "token_revoked", "invalid_auth":
+		return true
+	}
+	return false
 }
 
 func (c *Client) do(req *http.Request, method string) ([]byte, error) {
@@ -266,4 +305,32 @@ func (c *Client) HasReaction(ctx context.Context, channel, ts, name string) (boo
 		}
 	}
 	return false, nil
+}
+
+// Revoke revokes the token the client is using.
+func (c *Client) Revoke(ctx context.Context) error {
+	_, err := c.get(ctx, "auth.revoke", nil)
+	return err
+}
+
+// TeamInfo is what auth.test reports about the token's user and workspace.
+type TeamInfo struct {
+	UserID string `json:"user_id"`
+	User   string `json:"user"`
+	TeamID string `json:"team_id"`
+	Team   string `json:"team"`
+}
+
+// Identity calls auth.test and returns the user and workspace the token
+// belongs to.
+func (c *Client) Identity(ctx context.Context) (*TeamInfo, error) {
+	body, err := c.get(ctx, "auth.test", nil)
+	if err != nil {
+		return nil, err
+	}
+	var info TeamInfo
+	if err := json.Unmarshal(body, &info); err != nil {
+		return nil, fmt.Errorf("parsing auth.test response: %w", err)
+	}
+	return &info, nil
 }
