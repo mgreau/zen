@@ -26,6 +26,9 @@ var (
 	resumeNoITerm bool
 	resumeModel   string
 	resumeMigrate bool
+	// resumeDirections is reviewer guidance from `zen review <n> <directions>`.
+	// It is not a flag: zen review sets it before resuming a PR worktree.
+	resumeDirections string
 )
 
 // resumeWorktree handles the core resume logic for a matched worktree.
@@ -106,7 +109,7 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 	home := os.Getenv("HOME")
 	shortPath := ui.ShortenHome(wt.Path, home)
 
-	resumeCmd := ag.ResumeCommand(s.ID, resumeModel)
+	resumeCmd := ag.ResumeCommand(s.ID, resumeModel, agent.DirectionsPrompt(resumeDirections))
 
 	// No-iTerm mode
 	if resumeNoITerm {
@@ -128,6 +131,9 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 	fmt.Printf("  Modified: %s\n", ui.DimText(fmt.Sprintf("%s (%s)", s.ModHuman, s.SizeStr)))
 	if resumeModel != "" {
 		fmt.Printf("  Model:    %s\n", ui.CyanText(resumeModel))
+	}
+	if resumeDirections != "" {
+		fmt.Printf("  Directions: %s\n", ui.DimText(resumeDirections))
 	}
 	fmt.Println()
 
@@ -207,7 +213,7 @@ func openNewSession(wt worktree.Worktree, t terminal.Terminal, ag agent.Agent) e
 	action := "Starting new session"
 	if wt.Type == worktree.TypePRReview {
 		ensureReviewPrompt(ag)
-		initialPrompt = ag.ReviewPrompt(wt.Path)
+		initialPrompt = ag.ReviewPrompt(wt.Path, resumeDirections)
 		action = "Starting PR review"
 	}
 

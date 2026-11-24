@@ -85,6 +85,7 @@ zen review 42 --repo other       # specify repo explicitly
 zen review 42 --no-terminal      # create worktree only, print command
 zen review 42 --model opus       # pick model (agent-specific, e.g. opus or gpt-5-codex)
 zen review 42 --agent codex      # use Codex for this review (overrides config)
+zen review 42 "I've decided not to allow public IPs here"  # give the agent directions
 zen review resume 42             # open existing worktree in new terminal tab
 zen review resume 42 --list      # list available sessions
 zen review resume 42 --session 2 # resume specific session
@@ -92,6 +93,8 @@ zen review delete 42             # remove a PR review worktree (with confirmatio
 ```
 
 If the worktree already exists, zen catches it up to the current PR head and then resumes. It will not merge over local edits or a live agent. If the author force-pushed, you are asked before the checkout is reset. `zen review resume` offers to create the worktree if it is missing.
+
+An optional quoted string after the PR number is passed to the agent as reviewer directions: decisions you've already made, or areas you want examined closely. If the review session already exists, the directions are sent to it as the next message when it resumes.
 
 ## Work on a feature
 

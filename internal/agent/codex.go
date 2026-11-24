@@ -52,10 +52,13 @@ func (a *codexAgent) StartCommand(prompt, model string) string {
 
 // ResumeCommand resumes a recorded session by UUID. Codex restores the model
 // from the session itself; an explicit --model override is forwarded via -m.
-func (a *codexAgent) ResumeCommand(sessionID, model string) string {
+func (a *codexAgent) ResumeCommand(sessionID, model, prompt string) string {
 	cmd := fmt.Sprintf("%s resume %s", a.bin, shellQuote(sessionID))
 	if model != "" {
 		cmd += " -m " + shellQuote(model)
+	}
+	if prompt != "" {
+		cmd += " " + shellQuote(prompt)
 	}
 	return cmd
 }
@@ -128,12 +131,16 @@ func (a *codexAgent) ContextPresent(worktreePath string) bool {
 // "/review-pr" CLI argument would be sent as literal prompt text. The
 // side-file is also not auto-loaded by Codex, so it must be named explicitly;
 // even for AGENTS.md naming it keeps the instruction unambiguous.
-func (a *codexAgent) ReviewPrompt(worktreePath string) string {
+func (a *codexAgent) ReviewPrompt(worktreePath, directions string) string {
 	ref := a.ContextFile()
 	if _, err := os.Stat(filepath.Join(worktreePath, codexSideContextFile)); err == nil {
 		ref = codexSideContextFile
 	}
-	return fmt.Sprintf("Review this pull request. The PR details and review checklist are in %s — read the changed files it lists, then give your review.", ref)
+	prompt := fmt.Sprintf("Review this pull request. The PR details and review checklist are in %s — read the changed files it lists, then give your review.", ref)
+	if directions != "" {
+		prompt += "\n\n" + directionsLabel + directions
+	}
+	return prompt
 }
 
 func (a *codexAgent) PromptsDir() string {

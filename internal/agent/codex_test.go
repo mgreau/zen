@@ -3,6 +3,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -107,11 +108,11 @@ func TestCodexCommands(t *testing.T) {
 	if got := ag.StartCommand("", ""); got != "codex" {
 		t.Errorf("StartCommand(empty) = %q", got)
 	}
-	if got := ag.ResumeCommand("abc-123", ""); got != "codex resume 'abc-123'" {
+	if got := ag.ResumeCommand("abc-123", "", ""); got != "codex resume 'abc-123'" {
 		t.Errorf("ResumeCommand = %q", got)
 	}
 	// An explicit model override on resume is forwarded.
-	if got := ag.ResumeCommand("abc-123", "gpt-5"); got != "codex resume 'abc-123' -m 'gpt-5'" {
+	if got := ag.ResumeCommand("abc-123", "gpt-5", ""); got != "codex resume 'abc-123' -m 'gpt-5'" {
 		t.Errorf("ResumeCommand(model) = %q", got)
 	}
 }
@@ -122,7 +123,7 @@ func TestCommandQuoting(t *testing.T) {
 	if got := ag.StartCommand("review this", "opus"); got != "claude --model 'opus' 'review this'" {
 		t.Errorf("StartCommand = %q", got)
 	}
-	if got := ag.ResumeCommand("abc-123", ""); got != "claude --resume 'abc-123'" {
+	if got := ag.ResumeCommand("abc-123", "", ""); got != "claude --resume 'abc-123'" {
 		t.Errorf("ResumeCommand = %q", got)
 	}
 	// $, backticks, and single quotes in the prompt must be inert in the shell.
@@ -183,5 +184,39 @@ func TestCodexShortenModel(t *testing.T) {
 	ag := New(Codex, "codex")
 	if got := ag.ShortenModel("openai/gpt-5-codex"); got != "gpt-5-codex" {
 		t.Errorf("ShortenModel = %q, want gpt-5-codex", got)
+	}
+}
+
+func TestReviewPromptDirections(t *testing.T) {
+	claude := New(Claude, "claude")
+	if got := claude.ReviewPrompt("", ""); got != "/review-pr" {
+		t.Errorf("Claude ReviewPrompt(no directions) = %q", got)
+	}
+	got := claude.ReviewPrompt("", "no public IPs")
+	if !strings.HasPrefix(got, "/review-pr Reviewer directions") || !strings.HasSuffix(got, ": no public IPs") {
+		t.Errorf("Claude ReviewPrompt(directions) = %q", got)
+	}
+
+	codex := New(Codex, "codex")
+	wt := t.TempDir()
+	base := codex.ReviewPrompt(wt, "")
+	if strings.Contains(base, "Reviewer directions") {
+		t.Errorf("Codex ReviewPrompt(no directions) mentions directions: %q", base)
+	}
+	if got := codex.ReviewPrompt(wt, "no public IPs"); !strings.HasPrefix(got, base+"\n\nReviewer directions") || !strings.HasSuffix(got, ": no public IPs") {
+		t.Errorf("Codex ReviewPrompt(directions) = %q", got)
+	}
+}
+
+func TestResumeCommandPrompt(t *testing.T) {
+	p := DirectionsPrompt("don't allow public IPs")
+	if DirectionsPrompt("") != "" {
+		t.Error("DirectionsPrompt(empty) should be empty")
+	}
+	if got := New(Claude, "claude").ResumeCommand("abc", "", p); got != "claude --resume 'abc' "+shellQuote(p) {
+		t.Errorf("Claude ResumeCommand(prompt) = %q", got)
+	}
+	if got := New(Codex, "codex").ResumeCommand("abc", "gpt-5", p); got != "codex resume 'abc' -m 'gpt-5' "+shellQuote(p) {
+		t.Errorf("Codex ResumeCommand(prompt) = %q", got)
 	}
 }
