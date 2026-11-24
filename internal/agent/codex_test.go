@@ -3,6 +3,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -176,6 +177,55 @@ func TestCodexInjectContextFallsBackToSideFile(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(wt1, "AGENTS.md")); string(data) != "# ctx-v2" {
 		t.Errorf("AGENTS.md not rewritten on refresh: %s", data)
+	}
+}
+
+func TestCodexOwnedContextFiles(t *testing.T) {
+	tests := []struct {
+		name  string
+		files map[string]string
+		want  []string
+	}{
+		{name: "sentinel records AGENTS.md", files: map[string]string{
+			codexContextFile: "generated",
+			codexSentinel:    codexContextFile,
+		}, want: []string{codexContextFile, codexSentinel}},
+		{name: "sentinel records side context", files: map[string]string{
+			codexContextFile:     "user owned",
+			codexSideContextFile: "generated",
+			codexSentinel:        codexSideContextFile,
+		}, want: []string{codexSideContextFile, codexSentinel}},
+		{name: "legacy sentinel claims side context", files: map[string]string{
+			codexSideContextFile: "generated",
+			codexSentinel:        "",
+		}, want: []string{codexSideContextFile, codexSentinel}},
+		{name: "legacy sentinel never claims AGENTS.md", files: map[string]string{
+			codexContextFile:     "user owned",
+			codexSideContextFile: "generated",
+			codexSentinel:        "",
+		}, want: []string{codexSideContextFile, codexSentinel}},
+		{name: "legacy sentinel without side context", files: map[string]string{
+			codexContextFile: "user owned",
+			codexSentinel:    "",
+		}, want: []string{codexSentinel}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			worktreePath := t.TempDir()
+			for name, content := range test.files {
+				path := filepath.Join(worktreePath, filepath.FromSlash(name))
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := OwnedContextFiles(worktreePath); !slices.Equal(got, test.want) {
+				t.Errorf("OwnedContextFiles() = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 
