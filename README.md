@@ -89,6 +89,7 @@ zen review resume 42             # open existing worktree in new terminal tab
 zen review resume 42 --list      # list available sessions
 zen review resume 42 --session 2 # resume specific session
 zen review delete 42             # remove a PR review worktree (with confirmation)
+zen review close 42              # stop the agent, remove the worktree, close its tmux window
 ```
 
 If the worktree already exists, zen catches it up to the current PR head and then resumes. It will not merge over local edits or a live agent. If the author force-pushed, you are asked before the checkout is reset. `zen review resume` offers to create the worktree if it is missing.
@@ -105,9 +106,23 @@ zen work new app my-feature --model opus       # pick Claude model
 zen work resume <name>                         # resume a feature session in new tab
 zen work resume <name> --model opus            # resume with a specific model
 zen work delete <name>                         # delete worktree (cleans Claude sessions too)
+zen work close [name]                          # stop the agent, delete worktree, close its tmux window
 ```
 
 Feature branches are prefixed by `branch_prefix` from config — see [docs/configuration.md](docs/configuration.md).
+
+### Closing finished work
+
+`zen work close` and `zen review close` finish a work item in one step. They
+stop the agent, remove the worktree, and close the tmux window zen opened for
+it. With no argument they close the worktree you are in, so you can tell the
+agent "we're done, run `zen work close --force`" and it closes its own session
+(this form needs the worktree's zen tmux window).
+Run from inside the window it closes, the rest happens in the background; the
+result shows on the tmux status line and in `~/.zen/close.log`. Nothing is
+stopped or closed when the worktree has local changes, commits no branch holds,
+or an agent running outside zen's window. Outside tmux, close removes the worktree only when no agent is
+running, and you close the tab yourself.
 
 Every delete and cleanup path retains worktrees with local changes or a running
 agent. The delete commands' `--force` flag skips confirmation; it does not

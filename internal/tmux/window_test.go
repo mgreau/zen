@@ -11,6 +11,7 @@ func TestWindowArgs(t *testing.T) {
 	want := []string{
 		"new-window", "-n", "mono-fix-x", "-c", "/home/u/git/repo-mono/mono-fix-x",
 		"--", "/bin/bash", "-l", "-c", `claude "review it"; exec "${SHELL:-/bin/sh}"`,
+		";", "set-option", "-w", "@zen-worktree", "/home/u/git/repo-mono/mono-fix-x",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("windowArgs() =\n  %q\nwant\n  %q", got, want)

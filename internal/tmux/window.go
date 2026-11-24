@@ -14,6 +14,10 @@ import (
 // ErrNotInTmux is returned when zen is not running inside a tmux session.
 var ErrNotInTmux = errors.New("not running inside tmux: start zen from a tmux session, or pass --no-terminal")
 
+// WorktreeOption is the window option zen sets on each window it opens, holding
+// the worktree path, so the window can be found again when the work is closed.
+const WorktreeOption = "@zen-worktree"
+
 // OpenWindow opens a new window in the current tmux session, named after the
 // base name of workDir, and runs command there through the user's login shell.
 // When command exits, the window keeps an interactive shell in workDir, so a
@@ -39,9 +43,12 @@ func userShell() string {
 // windowArgs builds the tmux new-window arguments. tmux runs the shell and its
 // arguments directly, so command reaches the shell as one argument and tmux
 // never parses it. A login shell loads the same profile as an ssh session.
+// The chained set-option applies to the window new-window just made, so the
+// window is tagged with its worktree in the same tmux call.
 func windowArgs(workDir, command, shell string) []string {
 	return []string{
 		"new-window", "-n", filepath.Base(workDir), "-c", workDir,
 		"--", shell, "-l", "-c", command + `; exec "${SHELL:-/bin/sh}"`,
+		";", "set-option", "-w", WorktreeOption, workDir,
 	}
 }

@@ -67,6 +67,69 @@ func removeReview(ctx context.Context, originPath, worktreePath string, prNumber
 	})
 }
 
+// RemoveKeepingCommits is Remove that also refuses a worktree whose HEAD has
+// commits no branch, tag or remote-tracking ref holds, such as commits made
+// on a detached HEAD, which git worktree remove would leave unreachable.
+func RemoveKeepingCommits(originPath, worktreePath string) error {
+	return remove(originPath, worktreePath, agent.RunningIn, func() error {
+		return checkHeadReachable(worktreePath)
+	})
+}
+
+// CheckRemovable reports, without changing anything, whether
+// RemoveKeepingCommits would refuse worktreePath for local changes or
+// unreachable commits. It does not check for a running agent: callers use it
+// before stopping one. Removal checks again, so a change made after this
+// check still blocks it. It holds the same locks as Remove, since git status
+// may take the index lock.
+func CheckRemovable(originPath, worktreePath string) error {
+	repoLock, err := AcquireRepoLock(originPath)
+	if err != nil {
+		return err
+	}
+	defer repoLock.Release()
+	GitMu.Lock()
+	defer GitMu.Unlock()
+
+	if _, err := os.Stat(worktreePath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("inspect worktree: %w", err)
+	}
+	owned := make(map[string]struct{})
+	for _, path := range agent.OwnedContextFiles(worktreePath) {
+		owned[filepath.ToSlash(path)] = struct{}{}
+	}
+	dirty, err := removalDirty(worktreePath, owned)
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return ErrWorktreeDirty
+	}
+	return checkHeadReachable(worktreePath)
+}
+
+// checkHeadReachable returns ErrWorktreeLocalCommits when HEAD has commits
+// that no branch, tag or remote-tracking ref holds.
+func checkHeadReachable(worktreePath string) error {
+	cmd := exec.Command("git", "rev-list", "--count", "HEAD", "--not", "--branches", "--tags", "--remotes")
+	cmd.Dir = worktreePath
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("%w: count commits only HEAD holds: %v", ErrWorktreeLocalCommits, err)
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return fmt.Errorf("%w: count commits only HEAD holds: %q", ErrWorktreeLocalCommits, out)
+	}
+	if n > 0 {
+		return fmt.Errorf("%w: HEAD has %d commit(s) no branch holds", ErrWorktreeLocalCommits, n)
+	}
+	return nil
+}
+
 // remove runs verify, when set, after the agent and local-change checks and
 // before anything is deleted, while RepoLock and GitMu are held.
 func remove(originPath, worktreePath string, runningIn func(string) bool, verify func() error) error {

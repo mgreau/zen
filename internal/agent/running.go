@@ -137,6 +137,7 @@ func agentNodeCmdline(cl string) bool {
 }
 
 type procCwd struct {
+	pid int
 	cwd string
 }
 
@@ -149,10 +150,72 @@ var (
 const procCacheTTL = 2 * time.Second
 
 func listAgentCwds() []string {
+	return cwdsOf(listAgentProcs())
+}
+
+// Proc is a running coding-agent process.
+type Proc struct {
+	PID int
+	Cwd string
+}
+
+// Procs returns the coding-agent processes running now and their working
+// directories.
+func Procs() []Proc {
+	list := listAgentProcs()
+	out := make([]Proc, 0, len(list))
+	for _, p := range list {
+		if p.pid > 0 {
+			out = append(out, Proc{PID: p.pid, Cwd: p.cwd})
+		}
+	}
+	return out
+}
+
+// InWorktree reports whether dir is worktreePath or below it.
+func InWorktree(dir, worktreePath string) bool {
+	want, err := canonicalDir(worktreePath)
+	if err != nil {
+		return false
+	}
+	return cwdInWorktree(dir, want)
+}
+
+// SessionPIDs returns the processes whose command line carries the ID of a
+// session recorded for worktreePath, wherever they run. With the processes
+// Procs finds in the worktree, these are what RunningIn counts.
+func SessionPIDs(worktreePath string) []int {
+	self := os.Getpid()
+	seen := map[int]bool{}
+	var pids []int
+	for _, k := range AllKinds() {
+		sessions, err := New(k, "").FindSessions(worktreePath)
+		if err != nil {
+			continue
+		}
+		for _, s := range sessions {
+			if s.ID == "" {
+				continue
+			}
+			out, _ := exec.Command("pgrep", "-f", s.ID).Output()
+			for _, f := range strings.Fields(string(out)) {
+				pid, err := strconv.Atoi(f)
+				if err != nil || pid == self || seen[pid] {
+					continue
+				}
+				seen[pid] = true
+				pids = append(pids, pid)
+			}
+		}
+	}
+	return pids
+}
+
+func listAgentProcs() []procCwd {
 	procMu.Lock()
 	defer procMu.Unlock()
 	if time.Since(procAt) < procCacheTTL && procCache != nil {
-		return cwdsOf(procCache)
+		return procCache
 	}
 	var list []procCwd
 	if runtime.GOOS == "linux" {
@@ -165,7 +228,16 @@ func listAgentCwds() []string {
 	}
 	procCache = list
 	procAt = time.Now()
-	return cwdsOf(list)
+	return list
+}
+
+// ResetProcCache forgets the cached process scan, so the next check sees
+// processes as they are now, such as after an agent was stopped.
+func ResetProcCache() {
+	procMu.Lock()
+	defer procMu.Unlock()
+	procCache = nil
+	procAt = time.Time{}
 }
 
 func cwdsOf(list []procCwd) []string {
@@ -198,7 +270,8 @@ func listAgentCwdsLinux() []procCwd {
 		if err != nil {
 			continue
 		}
-		out = append(out, procCwd{cwd: cwd})
+		pid, _ := strconv.Atoi(name)
+		out = append(out, procCwd{pid: pid, cwd: cwd})
 	}
 	return out
 }
@@ -233,7 +306,7 @@ func listAgentCwdsLsof() []procCwd {
 		if !isAgentProcess(comm, args) {
 			continue
 		}
-		list = append(list, procCwd{cwd: cwd})
+		list = append(list, procCwd{pid: pid, cwd: cwd})
 	}
 	return list
 }
