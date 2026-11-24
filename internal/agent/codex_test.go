@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -114,6 +116,132 @@ func TestCodexCommands(t *testing.T) {
 	if got := ag.ResumeCommand("abc-123", "gpt-5"); got != "codex resume 'abc-123' -m 'gpt-5'" {
 		t.Errorf("ResumeCommand(model) = %q", got)
 	}
+}
+
+func TestRemoteControlCommands(t *testing.T) {
+	claude, err := NewWithOptions(Claude, "claude", Options{RemoteControl: true}).PrepareLaunch("/wt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := claude.StartCommand("/review-pr", "opus"); got != "claude --model 'opus' '/review-pr' --remote-control" {
+		t.Errorf("Claude StartCommand = %q", got)
+	}
+	if got := claude.ResumeCommand("abc-123", ""); got != "claude --resume 'abc-123' --remote-control" {
+		t.Errorf("Claude ResumeCommand = %q", got)
+	}
+
+	bin := fakeCodexOnPath(t)
+	var started string
+	stubCodexDaemonFunc(t, func(b, _ string) error { started = b; return nil })
+	unprepared := NewWithOptions(Codex, testCodexBin, Options{RemoteControl: true})
+	// Print-only commands are built without PrepareLaunch and stay local.
+	if got := unprepared.StartCommand("hi", ""); got != testCodexBin+" 'hi'" {
+		t.Errorf("unprepared Codex StartCommand = %q, want local launch", got)
+	}
+
+	codex, err := unprepared.PrepareLaunch("/wt/it's here")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The daemon and the TUI run the same resolved binary; both it and the
+	// worktree are quoted (the fake binary's directory contains a space).
+	if started != bin {
+		t.Errorf("daemon started with %q, want %q", started, bin)
+	}
+	remote := shellQuote(bin) + ` --remote unix:// -C '/wt/it'\''s here'`
+	if got := codex.StartCommand("/review-pr", "gpt-5-codex"); got != remote+" -m 'gpt-5-codex' '/review-pr'" {
+		t.Errorf("Codex StartCommand = %q", got)
+	}
+	if got := codex.ResumeCommand("abc-123", "gpt-5"); got != shellQuote(bin)+" resume 'abc-123' --remote unix:// -C '/wt/it'\\''s here' -m 'gpt-5'" {
+		t.Errorf("Codex ResumeCommand = %q", got)
+	}
+}
+
+func TestCodexRemoteControlFallsBackWhenDaemonFails(t *testing.T) {
+	fakeCodexOnPath(t)
+	stubCodexDaemonFunc(t, func(string, string) error { return errors.New("no daemon") })
+	codex, err := NewWithOptions(Codex, testCodexBin, Options{RemoteControl: true}).PrepareLaunch("/wt")
+	if err == nil || !strings.Contains(err.Error(), "no daemon") {
+		t.Errorf("err = %v, want the daemon failure reported", err)
+	}
+	if got := codex.StartCommand("hi", ""); got != testCodexBin+" 'hi'" {
+		t.Errorf("StartCommand = %q, want plain codex launch", got)
+	}
+	if got := codex.ResumeCommand("abc-123", ""); got != testCodexBin+" resume 'abc-123'" {
+		t.Errorf("ResumeCommand = %q, want plain codex resume", got)
+	}
+}
+
+func TestCodexRemoteControlFallsBackWhenBinNotExecutable(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	stubCodexDaemonFunc(t, func(string, string) error { t.Error("daemon started"); return nil })
+	codex, err := NewWithOptions(Codex, "npx codex", Options{RemoteControl: true}).PrepareLaunch("/wt")
+	if err == nil || !strings.Contains(err.Error(), "not an executable path") {
+		t.Errorf("err = %v, want a codex_bin error", err)
+	}
+	if got := codex.StartCommand("", ""); got != "npx codex" {
+		t.Errorf("StartCommand = %q, want the configured bin verbatim", got)
+	}
+}
+
+func TestCodexPrepareLaunchExpandsHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	bin := filepath.Join(home, "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var started string
+	stubCodexDaemonFunc(t, func(b, _ string) error { started = b; return nil })
+	if _, err := NewWithOptions(Codex, "~/bin/codex", Options{RemoteControl: true}).PrepareLaunch("/wt"); err != nil {
+		t.Fatal(err)
+	}
+	if started != bin {
+		t.Errorf("daemon started with %q, want %q", started, bin)
+	}
+}
+
+func TestCodexRemoteControlOffNeverTouchesDaemon(t *testing.T) {
+	stubCodexDaemonFunc(t, func(string, string) error { t.Error("daemon started with remote control off"); return nil })
+	ag, err := New(Codex, "codex").PrepareLaunch("/wt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ag.StartCommand("hi", ""); got != "codex 'hi'" {
+		t.Errorf("StartCommand = %q", got)
+	}
+}
+
+// testCodexBin is the configured codex_bin in tests; fakeCodexOnPath puts an
+// executable of that name on PATH.
+const testCodexBin = "zen-test-codex"
+
+// fakeCodexOnPath installs a no-op testCodexBin in a directory whose name
+// contains a space (to exercise quoting), makes it the whole PATH, and
+// returns its absolute path.
+func fakeCodexOnPath(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "has space")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, testCodexBin)
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	return bin
+}
+
+// stubCodexDaemonFunc replaces the daemon starter so tests never launch Codex.
+func stubCodexDaemonFunc(t *testing.T, fn func(bin, logPath string) error) {
+	t.Helper()
+	orig := ensureCodexRemoteDaemon
+	ensureCodexRemoteDaemon = fn
+	t.Cleanup(func() { ensureCodexRemoteDaemon = orig })
 }
 
 func TestCommandQuoting(t *testing.T) {

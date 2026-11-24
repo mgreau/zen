@@ -12,11 +12,17 @@ import (
 // parsing delegate to the internal/session package, which implements Claude's
 // per-project ~/.claude/projects/<encoded-path>/*.jsonl layout.
 type claudeAgent struct {
-	bin string
+	bin           string
+	remoteControl bool
 }
 
 func (a *claudeAgent) Kind() Kind  { return Claude }
 func (a *claudeAgent) Bin() string { return a.bin }
+
+// PrepareLaunch has nothing to do: --remote-control is a plain flag.
+func (a *claudeAgent) PrepareLaunch(string) (Agent, error) { return a, nil }
+
+func (a *claudeAgent) NeedsLaunchPrep() bool { return false }
 
 func (a *claudeAgent) StartCommand(prompt, model string) string {
 	cmd := a.bin
@@ -26,7 +32,7 @@ func (a *claudeAgent) StartCommand(prompt, model string) string {
 	if prompt != "" {
 		cmd += " " + shellQuote(prompt)
 	}
-	return cmd
+	return cmd + a.remoteControlFlag()
 }
 
 func (a *claudeAgent) ResumeCommand(sessionID, model string) string {
@@ -34,7 +40,17 @@ func (a *claudeAgent) ResumeCommand(sessionID, model string) string {
 	if model != "" {
 		cmd += " --model " + shellQuote(model)
 	}
-	return cmd + " --resume " + shellQuote(sessionID)
+	return cmd + " --resume " + shellQuote(sessionID) + a.remoteControlFlag()
+}
+
+// remoteControlFlag is appended last: --remote-control takes an optional
+// session name, so placed before the prompt it would swallow the prompt as
+// that name and start an empty session.
+func (a *claudeAgent) remoteControlFlag() string {
+	if a.remoteControl {
+		return " --remote-control"
+	}
+	return ""
 }
 
 // ContextFile is CLAUDE.local.md so the repo's own CLAUDE.md is never touched.

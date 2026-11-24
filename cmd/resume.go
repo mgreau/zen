@@ -106,13 +106,11 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 	home := os.Getenv("HOME")
 	shortPath := ui.ShortenHome(wt.Path, home)
 
-	resumeCmd := ag.ResumeCommand(s.ID, resumeModel)
-
 	// No-iTerm mode
 	if resumeNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Resume command:"))
-		fmt.Printf("  cd %s && %s\n", wt.Path, resumeCmd)
+		fmt.Printf("  cd %s && %s\n", wt.Path, ag.ResumeCommand(s.ID, resumeModel))
 		fmt.Println()
 		fmt.Println(ui.DimText(fmt.Sprintf("Worktree: %s", shortPath)))
 		fmt.Println(ui.DimText(fmt.Sprintf("Session:  %s (%s)", s.ModHuman, s.SizeStr)))
@@ -131,6 +129,7 @@ func resumeWorktree(wt worktree.Worktree, cmdName string, t terminal.Terminal) e
 	}
 	fmt.Println()
 
+	resumeCmd := prepareLaunch(ag, wt.Path).ResumeCommand(s.ID, resumeModel)
 	if err := t.OpenTab(wt.Path, resumeCmd); err != nil {
 		return fmt.Errorf("opening %s tab: %w", t.Name(), err)
 	}
@@ -211,12 +210,10 @@ func openNewSession(wt worktree.Worktree, t terminal.Terminal, ag agent.Agent) e
 		action = "Starting PR review"
 	}
 
-	launchCmd := ag.StartCommand(initialPrompt, resumeModel)
-
 	if resumeNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Start command:"))
-		fmt.Printf("  cd %s && %s\n", wt.Path, launchCmd)
+		fmt.Printf("  cd %s && %s\n", wt.Path, ag.StartCommand(initialPrompt, resumeModel))
 		fmt.Println()
 		fmt.Println(ui.DimText(fmt.Sprintf("Worktree: %s", shortPath)))
 		return nil
@@ -231,6 +228,7 @@ func openNewSession(wt worktree.Worktree, t terminal.Terminal, ag agent.Agent) e
 	}
 	fmt.Println()
 
+	launchCmd := prepareLaunch(ag, wt.Path).StartCommand(initialPrompt, resumeModel)
 	if err := t.OpenTab(wt.Path, launchCmd); err != nil {
 		return fmt.Errorf("opening %s tab: %w", t.Name(), err)
 	}

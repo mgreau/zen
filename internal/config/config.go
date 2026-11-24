@@ -23,11 +23,15 @@ type Config struct {
 	Agent        string                `yaml:"agent"` // "claude" (default) or "codex"
 	ClaudeBin    string                `yaml:"claude_bin"`
 	CodexBin     string                `yaml:"codex_bin"`
-	Terminal     string                `yaml:"terminal"` // "iterm", "ghostty", "kitty", or "macos"
-	BranchPrefix string                `yaml:"branch_prefix"`
-	IgnoreDrafts bool                  `yaml:"ignore_drafts"`
-	Watch        WatchConfig           `yaml:"watch"`
-	Slack        SlackConfig           `yaml:"slack"`
+	// RemoteControl launches every agent session with remote control enabled
+	// (Claude Code's --remote-control; Codex's remote-control app-server
+	// daemon). Off by default.
+	RemoteControl bool        `yaml:"remote_control"`
+	Terminal      string      `yaml:"terminal"` // "iterm", "ghostty", "kitty", "macos", or "tmux"
+	BranchPrefix  string      `yaml:"branch_prefix"`
+	IgnoreDrafts  bool        `yaml:"ignore_drafts"`
+	Watch         WatchConfig `yaml:"watch"`
+	Slack         SlackConfig `yaml:"slack"`
 }
 
 // SlackConfig holds configuration for the Slack task watcher: polling for the
@@ -279,7 +283,10 @@ func (c *Config) NewAgent(override string) agent.Agent {
 	if kind == "codex" {
 		bin = c.CodexBin
 	}
-	return agent.New(agent.Kind(kind), bin)
+	return agent.NewWithOptions(agent.Kind(kind), bin, agent.Options{
+		RemoteControl: c.RemoteControl,
+		DaemonLog:     filepath.Join(StateDir(), "codex-daemon.log"),
+	})
 }
 
 // GetBranchPrefix returns the prefix for feature branch names.

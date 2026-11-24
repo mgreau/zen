@@ -41,6 +41,17 @@ type Agent interface {
 	// Bin returns the resolved executable name/path.
 	Bin() string
 
+	// PrepareLaunch readies anything a session in workDir needs beyond its
+	// command line (Codex's remote-control daemon) and returns the agent to
+	// build the launch command with. Call it right before opening a terminal
+	// for the command, not when the command is only printed: it may start
+	// processes. The returned agent is always usable; a non-nil error is a
+	// warning that it fell back (e.g. launches without remote control).
+	PrepareLaunch(workDir string) (Agent, error)
+	// NeedsLaunchPrep reports whether PrepareLaunch has work to do and may
+	// take a while.
+	NeedsLaunchPrep() bool
+
 	// StartCommand builds the shell command to launch the agent with an
 	// optional initial prompt and model. An empty prompt or model is omitted.
 	StartCommand(prompt, model string) string
@@ -88,20 +99,38 @@ type Agent interface {
 	ShortenModel(model string) string
 }
 
-// New constructs an Agent for the given kind. bin overrides the default
-// executable name when non-empty. Unknown kinds fall back to Claude so callers
-// never get a nil agent.
+// Options tunes how an agent is launched.
+type Options struct {
+	// RemoteControl launches every session so it can be driven from another
+	// device: Claude Code's --remote-control, or, for Codex, a TUI attached to
+	// the app-server daemon that ensureCodexRemoteDaemon brings up with
+	// `codex app-server daemon enable-remote-control` and `... daemon start`.
+	RemoteControl bool
+	// DaemonLog is where output from Codex daemon management commands, and
+	// anything the daemon itself writes to inherited stdout/stderr, is
+	// appended. Empty discards it.
+	DaemonLog string
+}
+
+// New constructs an Agent for the given kind with default options. bin
+// overrides the default executable name when non-empty. Unknown kinds fall
+// back to Claude so callers never get a nil agent.
 func New(kind Kind, bin string) Agent {
+	return NewWithOptions(kind, bin, Options{})
+}
+
+// NewWithOptions is New with launch options.
+func NewWithOptions(kind Kind, bin string, opts Options) Agent {
 	switch kind {
 	case Codex:
 		if bin == "" {
 			bin = "codex"
 		}
-		return &codexAgent{bin: bin}
+		return &codexAgent{bin: bin, remoteControl: opts.RemoteControl, daemonLog: opts.DaemonLog}
 	default:
 		if bin == "" {
 			bin = "claude"
 		}
-		return &claudeAgent{bin: bin}
+		return &claudeAgent{bin: bin, remoteControl: opts.RemoteControl}
 	}
 }
