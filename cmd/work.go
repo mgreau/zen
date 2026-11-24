@@ -22,12 +22,19 @@ var workCmd = &cobra.Command{
 
 var workNewCmd = &cobra.Command{
 	Use:   "new <repo> <branch> [context]",
-	Short: "Create a new feature worktree and open in iTerm2",
-	Long: `Create a new feature worktree from origin/main and open it in a new iTerm2 tab.
+	Short: "Create a new feature worktree and open it in a terminal",
+	Long: `Create a new feature worktree from origin/main and open the agent in it, in a
+new tab or window of the configured terminal.
 
-The branch will be prefixed with mgreau/ per naming convention. The branch
-name must be a single path segment: no "/", whitespace, or leading "-".
-Optionally provide a context string to use as the initial Claude prompt.`,
+The branch is prefixed with branch_prefix from ~/.zen/config.yaml, or with
+your git user.name when that is unset. The branch name must be a single
+path segment: no "/", whitespace, or leading "-".
+
+Optionally give the agent's initial prompt, either as the context argument
+or with --context-file. Use --context-file for a long prompt such as a
+hand-off: zen copies the file into the worktree (.zen/INITIAL_PROMPT.md) and
+the agent reads it from there, so the prompt never goes on the command line
+that opens the terminal.`,
 	Args: cobra.RangeArgs(2, 3),
 	RunE: runWorkNew,
 }
@@ -51,14 +58,16 @@ var workResumeCmd = &cobra.Command{
 }
 
 var (
-	workNewNoITerm  bool
-	workNewModel    string
-	workDeleteForce bool
+	workNewNoITerm     bool
+	workNewModel       string
+	workNewContextFile string
+	workDeleteForce    bool
 )
 
 func init() {
 	workNewCmd.Flags().BoolVar(&workNewNoITerm, "no-terminal", false, "Create worktree only, don't open terminal tab")
 	workNewCmd.Flags().StringVarP(&workNewModel, "model", "m", "", "Model to use (agent-specific, e.g. opus or gpt-5-codex)")
+	workNewCmd.Flags().StringVar(&workNewContextFile, "context-file", "", "Read the agent's initial prompt from this file (instead of the context argument)")
 	addAgentFlag(workNewCmd)
 	workDeleteCmd.Flags().BoolVarP(&workDeleteForce, "force", "f", false, "Skip confirmation")
 	addResumeFlags(workResumeCmd)
@@ -156,6 +165,22 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 	if len(args) == 3 {
 		context = args[2]
 	}
+	// Read the context file before creating anything, so a bad path fails
+	// before a retry would hit "worktree already exists".
+	var contextFromFile []byte
+	if workNewContextFile != "" {
+		if context != "" {
+			return fmt.Errorf("give the initial prompt as the context argument or with --context-file, not both")
+		}
+		data, err := os.ReadFile(workNewContextFile)
+		if err != nil {
+			return fmt.Errorf("reading --context-file: %w", err)
+		}
+		if strings.TrimSpace(string(data)) == "" {
+			return fmt.Errorf("--context-file %s is empty", workNewContextFile)
+		}
+		contextFromFile = data
+	}
 
 	// Resolve the agent first: a bad --agent must fail before anything is
 	// created, or a retry hits "worktree already exists".
@@ -204,10 +229,20 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Model:  %s\n", ui.CyanText(workNewModel))
 	}
 
+	start := func(a agent.Agent) string { return a.StartCommand(context, workNewModel) }
+	if contextFromFile != nil {
+		promptPath, err := agent.StageInitialPrompt(worktreePath, contextFromFile)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("  Prompt: %s\n", ui.ShortenHome(promptPath, home))
+		start = func(a agent.Agent) string { return a.StartCommandFromFile(promptPath, workNewModel) }
+	}
+
 	if workNewNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Open manually:"))
-		fmt.Printf("  cd %s && %s\n", worktreePath, ag.StartCommand(context, workNewModel))
+		fmt.Printf("  cd %s && %s\n", worktreePath, start(ag))
 		return nil
 	}
 
@@ -217,7 +252,7 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	launchCmd := prepareLaunch(ag, worktreePath).StartCommand(context, workNewModel)
+	launchCmd := start(prepareLaunch(ag, worktreePath))
 	if err := term.OpenTab(worktreePath, launchCmd); err != nil {
 		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
 	}

@@ -11,9 +11,10 @@ const (
 	claudeContextSentinel = ".zen/.claude_context_injected"
 )
 
-// OwnedContextFiles returns context files that a successful Zen injection
-// marked as generated. Files without the corresponding sentinel are not Zen
-// owned, even when their names match Zen's context filenames.
+// OwnedContextFiles returns context files that a successful Zen injection, or
+// zen work new --context-file (see StageInitialPrompt), marked as generated.
+// Files without the corresponding sentinel are not Zen owned, even when their
+// names match Zen's context filenames.
 func OwnedContextFiles(worktreePath string) []string {
 	var paths []string
 	if pathExists(filepath.Join(worktreePath, claudeContextSentinel)) {
@@ -25,7 +26,7 @@ func OwnedContextFiles(worktreePath string) []string {
 		}
 		paths = append(paths, codexSentinel)
 	}
-	return paths
+	return append(paths, ownedInitialPrompt(worktreePath)...)
 }
 
 func codexOwnedContextFile(sentinel string) string {

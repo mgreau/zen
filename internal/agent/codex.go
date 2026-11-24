@@ -49,13 +49,23 @@ func (a *codexAgent) Bin() string { return a.bin }
 // by PrepareLaunch, the TUI attaches to the remote-control app-server daemon:
 // Codex has no per-session remote-control flag.
 func (a *codexAgent) StartCommand(prompt, model string) string {
+	return a.startCommand(quotedPrompt(prompt), model)
+}
+
+func (a *codexAgent) StartCommandFromFile(path, model string) string {
+	return a.startCommand(promptFromFile(path), model)
+}
+
+// startCommand takes the prompt as a shell word that is already quoted, or
+// "" for none.
+func (a *codexAgent) startCommand(promptWord, model string) string {
 	cmd := a.cmdBin()
 	cmd += a.remoteFlags()
 	if model != "" {
 		cmd += " -m " + shellQuote(model)
 	}
-	if prompt != "" {
-		cmd += " " + shellQuote(prompt)
+	if promptWord != "" {
+		cmd += " " + promptWord
 	}
 	return cmd
 }

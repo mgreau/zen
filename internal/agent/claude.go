@@ -25,12 +25,22 @@ func (a *claudeAgent) PrepareLaunch(string) (Agent, error) { return a, nil }
 func (a *claudeAgent) NeedsLaunchPrep() bool { return false }
 
 func (a *claudeAgent) StartCommand(prompt, model string) string {
+	return a.startCommand(quotedPrompt(prompt), model)
+}
+
+func (a *claudeAgent) StartCommandFromFile(path, model string) string {
+	return a.startCommand(promptFromFile(path), model)
+}
+
+// startCommand takes the prompt as a shell word that is already quoted, or
+// "" for none.
+func (a *claudeAgent) startCommand(promptWord, model string) string {
 	cmd := a.bin
 	if model != "" {
 		cmd += " --model " + shellQuote(model)
 	}
-	if prompt != "" {
-		cmd += " " + shellQuote(prompt)
+	if promptWord != "" {
+		cmd += " " + promptWord
 	}
 	return cmd + a.remoteControlFlag()
 }

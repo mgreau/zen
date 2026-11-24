@@ -55,6 +55,11 @@ type Agent interface {
 	// StartCommand builds the shell command to launch the agent with an
 	// optional initial prompt and model. An empty prompt or model is omitted.
 	StartCommand(prompt, model string) string
+	// StartCommandFromFile is StartCommand with the initial prompt read from
+	// the file at path by the shell when the command runs. A long prompt then
+	// never goes on the command line that opens the terminal; tmux, for one,
+	// refuses commands longer than about 16 KB.
+	StartCommandFromFile(path, model string) string
 	// ResumeCommand builds the shell command to resume a recorded session.
 	ResumeCommand(sessionID, model string) string
 

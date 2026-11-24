@@ -79,6 +79,36 @@ func TestRemove(t *testing.T) {
 			writeRemovalFile(t, path, "AGENTS.md", "user owned")
 			writeRemovalFile(t, path, ".zen/.pr_context_injected", "")
 		}, wantErr: ErrWorktreeDirty, preserveAgents: true},
+		{name: "staged initial prompt", prepare: func(t *testing.T, path string) {
+			if _, err := agent.StageInitialPrompt(path, []byte("hand-off")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "staged initial prompt alongside claude context", prepare: func(t *testing.T, path string) {
+			if _, err := agent.StageInitialPrompt(path, []byte("hand-off")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := agent.New(agent.Claude, "").InjectContext(path, "generated"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "staged initial prompt deleted", prepare: func(t *testing.T, path string) {
+			if _, err := agent.StageInitialPrompt(path, []byte("hand-off")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(path, ".zen", "INITIAL_PROMPT.md")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "edited initial prompt", prepare: func(t *testing.T, path string) {
+			if _, err := agent.StageInitialPrompt(path, []byte("hand-off")); err != nil {
+				t.Fatal(err)
+			}
+			writeRemovalFile(t, path, ".zen/INITIAL_PROMPT.md", "hand-off, plus my notes")
+		}, wantErr: ErrWorktreeDirty},
+		{name: "initial prompt without sentinel", prepare: func(t *testing.T, path string) {
+			writeRemovalFile(t, path, ".zen/INITIAL_PROMPT.md", "user owned")
+		}, wantErr: ErrWorktreeDirty},
 		{name: "claude file without sentinel", prepare: func(t *testing.T, path string) {
 			writeRemovalFile(t, path, "CLAUDE.local.md", "user owned")
 		}, wantErr: ErrWorktreeDirty},
