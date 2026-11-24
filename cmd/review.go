@@ -31,7 +31,7 @@ Usage:
 
 var reviewResumeCmd = &cobra.Command{
 	Use:   "resume <pr-number>",
-	Short: "Resume a PR review session in a new iTerm2 tab",
+	Short: "Resume a PR review session in a new terminal tab or window",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runReviewResume,
 }
