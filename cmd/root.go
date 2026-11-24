@@ -35,7 +35,7 @@ Silently prepares worktrees, retries failures, and cleans up after itself.`,
 			os.Setenv("ZEN_DEBUG", "1")
 		}
 
-		if cmd.Name() == "setup" || cmd.Name() == "version" {
+		if cmd.Name() == "setup" || cmd.Name() == "version" || cmd.Name() == "__close-launch" {
 			return nil
 		}
 

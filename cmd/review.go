@@ -24,7 +24,8 @@ var reviewCmd = &cobra.Command{
 Usage:
   zen review <pr-number>           Create worktree + open iTerm tab
   zen review resume <pr-number>    Resume existing session in new tab
-  zen review delete <pr-number>    Delete a PR review worktree`,
+  zen review delete <pr-number>    Delete a PR review worktree
+  zen review close [pr-number]     Stop the agent, delete the worktree, close its tmux window`,
 	DisableFlagParsing: false,
 	RunE:               runReview,
 }

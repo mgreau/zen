@@ -306,3 +306,43 @@ func runRemovalGit(t *testing.T, directory string, args ...string) {
 		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
 }
+
+func TestCheckRemovable(t *testing.T) {
+	origin, path := removalFixture(t)
+	if err := CheckRemovable(origin, path); err != nil {
+		t.Fatalf("CheckRemovable(clean) = %v, want nil", err)
+	}
+	if _, err := agent.New(agent.Claude, "").InjectContext(path, "generated"); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckRemovable(origin, path); err != nil {
+		t.Errorf("CheckRemovable(zen context only) = %v, want nil", err)
+	}
+	writeRemovalFile(t, path, "notes.txt", "keep me")
+	if err := CheckRemovable(origin, path); !errors.Is(err, ErrWorktreeDirty) {
+		t.Errorf("CheckRemovable(untracked file) = %v, want ErrWorktreeDirty", err)
+	}
+	if _, err := os.Stat(filepath.Join(path, "notes.txt")); err != nil {
+		t.Errorf("CheckRemovable changed the worktree: %v", err)
+	}
+	if err := os.Remove(filepath.Join(path, "notes.txt")); err != nil {
+		t.Fatal(err)
+	}
+	runRemovalGit(t, path, "checkout", "-q", "--detach")
+	writeRemovalFile(t, path, "fixup", "x")
+	runRemovalGit(t, path, "add", "fixup")
+	runRemovalGit(t, path, "commit", "-q", "-m", "fixup on a detached HEAD")
+	if err := CheckRemovable(origin, path); !errors.Is(err, ErrWorktreeLocalCommits) {
+		t.Errorf("CheckRemovable(detached commit) = %v, want ErrWorktreeLocalCommits", err)
+	}
+	if err := RemoveKeepingCommits(origin, path); !errors.Is(err, ErrWorktreeLocalCommits) {
+		t.Errorf("RemoveKeepingCommits(detached commit) = %v, want ErrWorktreeLocalCommits", err)
+	}
+	runRemovalGit(t, path, "branch", "keep")
+	if err := RemoveKeepingCommits(origin, path); err != nil {
+		t.Errorf("RemoveKeepingCommits(commit on a branch) = %v, want nil", err)
+	}
+	if err := CheckRemovable(origin, filepath.Join(t.TempDir(), "gone")); err != nil {
+		t.Errorf("CheckRemovable(missing) = %v, want nil", err)
+	}
+}
