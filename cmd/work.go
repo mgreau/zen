@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -194,7 +195,9 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 	// Validate repo exists in config
 	basePath := cfg.RepoBasePath(repo)
 	if basePath == "" {
-		return fmt.Errorf("unknown repo %q — check ~/.zen/config.yaml", repo)
+		names := cfg.RepoNames()
+		sort.Strings(names)
+		return fmt.Errorf("unknown repo %q (configured: %s) — check ~/.zen/config.yaml", repo, strings.Join(names, ", "))
 	}
 
 	// Construct paths
