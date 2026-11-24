@@ -21,12 +21,15 @@ var workCmd = &cobra.Command{
 
 var workNewCmd = &cobra.Command{
 	Use:   "new <repo> <branch> [context]",
-	Short: "Create a new feature worktree and open in iTerm2",
-	Long: `Create a new feature worktree from origin/main and open it in a new iTerm2 tab.
+	Short: "Create a new feature worktree and open it in a terminal",
+	Long: `Create a new feature worktree from origin/main and open the agent in it, in a
+new tab or window of the configured terminal.
 
-The branch will be prefixed with mgreau/ per naming convention. The branch
-name must be a single path segment: no "/", whitespace, or leading "-".
-Optionally provide a context string to use as the initial Claude prompt.`,
+The branch is prefixed with branch_prefix from ~/.zen/config.yaml, or with
+your git user.name when that is unset. The branch name must be a single
+path segment: no "/", whitespace, or leading "-".
+
+Optionally provide a context string to use as the agent's initial prompt.`,
 	Args: cobra.RangeArgs(2, 3),
 	RunE: runWorkNew,
 }
@@ -44,7 +47,7 @@ Shows a summary of what will be removed before confirming.`,
 
 var workResumeCmd = &cobra.Command{
 	Use:   "resume <name>",
-	Short: "Resume a feature work session in a new iTerm2 tab",
+	Short: "Resume a feature work session in a new terminal tab or window",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runWorkResume,
 }

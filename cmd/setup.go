@@ -41,7 +41,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	fmt.Println("Prerequisites:")
 	fmt.Println("  gh auth login         — authenticate GitHub CLI")
-	fmt.Println("  a terminal emulator   — iTerm2, Ghostty, kitty, or macOS Terminal")
+	fmt.Println("  a terminal emulator   — iTerm2, Ghostty, kitty, macOS Terminal, or tmux")
 	fmt.Println("  claude or codex CLI   — the coding agent zen launches")
 	fmt.Println()
 
