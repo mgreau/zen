@@ -10,8 +10,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 // Session represents an agent session file (Claude .jsonl or Codex rollout).
@@ -26,9 +28,14 @@ type Session struct {
 
 // FindSessions finds Claude sessions for a worktree path by scanning
 // ~/.claude/projects/<encoded-path>/*.jsonl files.
+//
+// The directory name is lossy (my_app and my-app share one), so a session
+// whose recorded cwd is outside the worktree is left out. A cwd under it
+// counts (an imported session that was working in a subdirectory), and a
+// session with no recorded cwd yet cannot be told apart and is kept.
 func FindSessions(worktreePath string) ([]Session, error) {
-	projectDirName := pathToClaudeProject(worktreePath)
-	claudeDir := filepath.Join(os.Getenv("HOME"), ".claude", "projects", projectDirName)
+	want := ResolvePath(worktreePath)
+	claudeDir := ProjectDirPath(worktreePath)
 
 	entries, err := os.ReadDir(claudeDir)
 	if err != nil {
@@ -45,6 +52,10 @@ func FindSessions(worktreePath string) ([]Session, error) {
 			continue
 		}
 
+		path := filepath.Join(claudeDir, entry.Name())
+		if cwd, err := SessionCwd(path); err == nil && cwd != "" && !withinDir(want, ResolvePath(cwd)) {
+			continue
+		}
 		id := strings.TrimSuffix(entry.Name(), ".jsonl")
 		sessions = append(sessions, Session{
 			ID:       id,
@@ -81,27 +92,118 @@ func ProjectDirPath(worktreePath string) string {
 	return filepath.Join(os.Getenv("HOME"), ".claude", "projects", pathToClaudeProject(worktreePath))
 }
 
+// maxClaudeProjectName is the longest project directory name Claude Code
+// uses before it truncates the name and appends a hash.
+const maxClaudeProjectName = 200
+
 // pathToClaudeProject converts a worktree path to the Claude projects directory name.
 // Claude Code derives the name from the symlink-resolved path with every
 // non-alphanumeric character replaced by '-' (not just '/' and '.'): on macOS
-// /tmp/foo becomes -private-tmp-foo, and my_branch becomes my-branch. A
-// non-existent path cannot be resolved and is munged literally.
+// /tmp/foo becomes -private-tmp-foo, and my_branch becomes my-branch.
 // /Users/maxime.greau/git/cgr/repo-mono/mono-pr-123
 // -> -Users-maxime-greau-git-cgr-repo-mono-mono-pr-123
+//
+// Symlinks are resolved as far as the path exists (see ResolvePath), so a
+// worktree that was just removed still maps to the directory Claude used.
+//
+// Claude works in UTF-16 code units (it is JavaScript), so a character outside
+// the BMP becomes two dashes. Names longer than 200 are cut to 200 and get
+// "-" plus a hash of the unmunged path appended. Verified against the
+// directory the native (Bun) build of Claude Code 2.1.329 created for a
+// 223-character path.
 func pathToClaudeProject(path string) string {
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
+	b := mungePath(path)
+	if len(b) <= maxClaudeProjectName {
+		return b
 	}
-	var b strings.Builder
-	b.Grow(len(path))
-	for _, r := range path {
-		if ('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || ('0' <= r && r <= '9') {
-			b.WriteRune(r)
-		} else {
-			b.WriteByte('-')
+	return b[:maxClaudeProjectName] + "-" + claudePathHash(utf16.Encode([]rune(ResolvePath(path))))
+}
+
+// withinDir reports whether p is dir or inside it.
+func withinDir(dir, p string) bool {
+	return p == dir || strings.HasPrefix(p, dir+string(filepath.Separator))
+}
+
+// sessionCwdScanLimit bounds how far SessionCwd reads. Claude records the cwd
+// on its first conversation records; a file with none that early has none
+// worth waiting for, and FindSessions runs on hot paths (status, daemon).
+const sessionCwdScanLimit = 1 << 20
+
+// SessionCwd returns the first cwd recorded in a Claude session file,
+// reading only as far as that record (and at most sessionCwdScanLimit
+// bytes), or "" when there is none.
+func SessionCwd(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	r := bufio.NewReader(io.LimitReader(f, sessionCwdScanLimit))
+	for {
+		line, err := r.ReadBytes('\n')
+		var rec struct {
+			Cwd string `json:"cwd"`
+		}
+		if json.Unmarshal(line, &rec) == nil && rec.Cwd != "" {
+			return rec.Cwd, nil
+		}
+		if err == io.EOF {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
 		}
 	}
-	return b.String()
+}
+
+// ResolvePath resolves symlinks in path. When path itself is gone (a
+// worktree just removed, before its sessions are cleaned), the nearest
+// existing ancestor is resolved and the rest appended, so the name still
+// matches the one Claude derived while the directory existed.
+func ResolvePath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	rest := ""
+	for dir := filepath.Clean(path); ; {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+	}
+}
+
+// mungePath is the full, untruncated project name for path.
+func mungePath(path string) string {
+	units := utf16.Encode([]rune(ResolvePath(path)))
+	b := make([]byte, len(units))
+	for i, u := range units {
+		if ('a' <= u && u <= 'z') || ('A' <= u && u <= 'Z') || ('0' <= u && u <= '9') {
+			b[i] = byte(u)
+		} else {
+			b[i] = '-'
+		}
+	}
+	return string(b)
+}
+
+// claudePathHash is Claude Code's short string hash: the 32-bit
+// (h<<5)-h+unit recurrence over UTF-16 units, absolute value, base 36.
+func claudePathHash(units []uint16) string {
+	var h int32
+	for _, u := range units {
+		h = (h << 5) - h + int32(u)
+	}
+	n := int64(h)
+	if n < 0 {
+		n = -n
+	}
+	return strconv.FormatInt(n, 36)
 }
 
 func formatSize(bytes int64) string {

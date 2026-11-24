@@ -27,7 +27,13 @@ import (
 // To attribute sessions to a worktree we read each rollout's session_meta line
 // and match its recorded cwd.
 type codexAgent struct {
-	bin string
+	bin           string
+	remoteControl bool
+	daemonLog     string
+	// launchBin and workDir are set by PrepareLaunch once the remote-control
+	// daemon is up; only then do commands attach to it.
+	launchBin string
+	workDir   string
 }
 
 // cwdCache caches rollout file path → recorded cwd. It is package-level (not
@@ -39,21 +45,37 @@ var cwdCache sync.Map
 func (a *codexAgent) Kind() Kind  { return Codex }
 func (a *codexAgent) Bin() string { return a.bin }
 
+// StartCommand launches Codex. With remote control on and the daemon readied
+// by PrepareLaunch, the TUI attaches to the remote-control app-server daemon:
+// Codex has no per-session remote-control flag.
 func (a *codexAgent) StartCommand(prompt, model string) string {
-	cmd := a.bin
+	return a.startCommand(quotedPrompt(prompt), model)
+}
+
+func (a *codexAgent) StartCommandFromFile(path, model string) string {
+	return a.startCommand(promptFromFile(path), model)
+}
+
+// startCommand takes the prompt as a shell word that is already quoted, or
+// "" for none.
+func (a *codexAgent) startCommand(promptWord, model string) string {
+	cmd := a.cmdBin()
+	cmd += a.remoteFlags()
 	if model != "" {
 		cmd += " -m " + shellQuote(model)
 	}
-	if prompt != "" {
-		cmd += " " + shellQuote(prompt)
+	if promptWord != "" {
+		cmd += " " + promptWord
 	}
 	return cmd
 }
 
 // ResumeCommand resumes a recorded session by UUID. Codex restores the model
 // from the session itself; an explicit --model override is forwarded via -m.
+// Remote flags follow the subcommand, which accepts them itself.
 func (a *codexAgent) ResumeCommand(sessionID, model string) string {
-	cmd := fmt.Sprintf("%s resume %s", a.bin, shellQuote(sessionID))
+	cmd := fmt.Sprintf("%s resume %s", a.cmdBin(), shellQuote(sessionID))
+	cmd += a.remoteFlags()
 	if model != "" {
 		cmd += " -m " + shellQuote(model)
 	}
@@ -175,10 +197,9 @@ func (a *codexAgent) FindSessions(worktreePath string) ([]session.Session, error
 	// Rollouts record the cwd as Codex saw it, which may be a symlinked form
 	// of the worktree path (e.g. /tmp vs /private/tmp on macOS); compare
 	// against the resolved path too.
-	resolvedWT := worktreePath
-	if r, err := filepath.EvalSymlinks(worktreePath); err == nil {
-		resolvedWT = r
-	}
+	// ResolvePath also handles a worktree that was just removed, which
+	// delete cleans up after.
+	resolvedWT := session.ResolvePath(worktreePath)
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

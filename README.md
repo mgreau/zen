@@ -101,6 +101,7 @@ Same isolation model, your own branches. `zen work new` and `zen work resume` op
 zen work                                       # list feature worktrees
 zen work new <repo> <branch>                   # create new feature worktree
 zen work new app my-feature "initial prompt"   # with Claude prompt
+zen work new app my-feature --context-file handoff.md  # long prompt, read from a file
 zen work new app my-feature --model opus       # pick Claude model
 zen work resume <name>                         # resume a feature session in new tab
 zen work resume <name> --model opus            # resume with a specific model
@@ -108,6 +109,22 @@ zen work delete <name>                         # delete worktree (cleans Claude 
 ```
 
 Feature branches are prefixed by `branch_prefix` from config — see [docs/configuration.md](docs/configuration.md).
+
+`--context-file` copies the file into the worktree as `.zen/INITIAL_PROMPT.md` (excluded from git), and the agent reads its first prompt from there. Use it for anything longer than a line or two: a prompt given as an argument goes on the command line that opens the terminal, and tmux refuses commands longer than about 16 KB.
+
+### Split work out of a Claude session
+
+When a long session turns up a piece of work that deserves its own branch, type `/zen-import` in it:
+
+```bash
+/zen-import                                    # Claude works out the sub-task, repo and branch
+/zen-import chatgpt-logging infra              # name the branch and repo
+/zen-import the token refresh fix              # say which piece of work to split out
+```
+
+Claude writes a hand-off for just that sub-task to `~/.zen/handoffs/<repo>-<branch>.md`: the goal, what's confirmed and what's inferred, where things live, the remaining steps and the ground rules. It shows you the hand-off, and once you agree, runs `zen work new --context-file` so a new session starts from it in its own worktree, branch and terminal tab. The new session gets only the hand-off, not the conversation, and the original session carries on with everything else.
+
+zen installs `/zen-import` into `~/.claude/commands` when the daemon starts and on `zen work` and `zen work new`, and `zen setup` installs it when you set zen up for Claude. It is Claude-only. zen never overwrites a command that's already there, so to pick up a newer version, delete `~/.claude/commands/zen-import.md` and run `zen work`.
 
 Every delete and cleanup path retains worktrees with local changes or a running
 agent. The delete commands' `--force` flag skips confirmation; it does not

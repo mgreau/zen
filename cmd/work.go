@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode"
 
+	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
 	wt "github.com/mgreau/zen/internal/worktree"
@@ -21,12 +23,19 @@ var workCmd = &cobra.Command{
 
 var workNewCmd = &cobra.Command{
 	Use:   "new <repo> <branch> [context]",
-	Short: "Create a new feature worktree and open in iTerm2",
-	Long: `Create a new feature worktree from origin/main and open it in a new iTerm2 tab.
+	Short: "Create a new feature worktree and open it in a terminal",
+	Long: `Create a new feature worktree from origin/main and open the agent in it, in a
+new tab or window of the configured terminal.
 
-The branch will be prefixed with mgreau/ per naming convention. The branch
-name must be a single path segment: no "/", whitespace, or leading "-".
-Optionally provide a context string to use as the initial Claude prompt.`,
+The branch is prefixed with branch_prefix from ~/.zen/config.yaml, or with
+your git user.name when that is unset. The branch name must be a single
+path segment: no "/", whitespace, or leading "-".
+
+Optionally give the agent's initial prompt, either as the context argument
+or with --context-file. Use --context-file for a long prompt such as a
+hand-off: zen copies the file into the worktree (.zen/INITIAL_PROMPT.md) and
+the agent reads it from there, so the prompt never goes on the command line
+that opens the terminal.`,
 	Args: cobra.RangeArgs(2, 3),
 	RunE: runWorkNew,
 }
@@ -50,14 +59,16 @@ var workResumeCmd = &cobra.Command{
 }
 
 var (
-	workNewNoITerm  bool
-	workNewModel    string
-	workDeleteForce bool
+	workNewNoITerm     bool
+	workNewModel       string
+	workNewContextFile string
+	workDeleteForce    bool
 )
 
 func init() {
 	workNewCmd.Flags().BoolVar(&workNewNoITerm, "no-terminal", false, "Create worktree only, don't open terminal tab")
 	workNewCmd.Flags().StringVarP(&workNewModel, "model", "m", "", "Model to use (agent-specific, e.g. opus or gpt-5-codex)")
+	workNewCmd.Flags().StringVar(&workNewContextFile, "context-file", "", "Read the agent's initial prompt from this file (instead of the context argument)")
 	addAgentFlag(workNewCmd)
 	workDeleteCmd.Flags().BoolVarP(&workDeleteForce, "force", "f", false, "Skip confirmation")
 	addResumeFlags(workResumeCmd)
@@ -74,6 +85,7 @@ type WorkEntry struct {
 }
 
 func runWork(cmd *cobra.Command, args []string) error {
+	ensureImportPrompt()
 	wts, err := wt.ListAll(cfg)
 	if err != nil {
 		return fmt.Errorf("listing worktrees: %w", err)
@@ -155,11 +167,37 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 	if len(args) == 3 {
 		context = args[2]
 	}
+	// Read the context file before creating anything, so a bad path fails
+	// before a retry would hit "worktree already exists".
+	var contextFromFile []byte
+	if workNewContextFile != "" {
+		if context != "" {
+			return fmt.Errorf("give the initial prompt as the context argument or with --context-file, not both")
+		}
+		data, err := os.ReadFile(workNewContextFile)
+		if err != nil {
+			return fmt.Errorf("reading --context-file: %w", err)
+		}
+		if strings.TrimSpace(string(data)) == "" {
+			return fmt.Errorf("--context-file %s is empty", workNewContextFile)
+		}
+		contextFromFile = data
+	}
+
+	// Resolve the agent first: a bad --agent must fail before anything is
+	// created, or a retry hits "worktree already exists".
+	ag, err := resolveAgent()
+	if err != nil {
+		return err
+	}
+	ensureImportPrompt()
 
 	// Validate repo exists in config
 	basePath := cfg.RepoBasePath(repo)
 	if basePath == "" {
-		return fmt.Errorf("unknown repo %q — check ~/.zen/config.yaml", repo)
+		names := cfg.RepoNames()
+		sort.Strings(names)
+		return fmt.Errorf("unknown repo %q (configured: %s) — check ~/.zen/config.yaml", repo, strings.Join(names, ", "))
 	}
 
 	// Construct paths
@@ -196,16 +234,20 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Model:  %s\n", ui.CyanText(workNewModel))
 	}
 
-	ag, err := resolveAgent()
-	if err != nil {
-		return err
+	start := func(a agent.Agent) string { return a.StartCommand(context, workNewModel) }
+	if contextFromFile != nil {
+		promptPath, err := agent.StageInitialPrompt(worktreePath, contextFromFile)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("  Prompt: %s\n", ui.ShortenHome(promptPath, home))
+		start = func(a agent.Agent) string { return a.StartCommandFromFile(promptPath, workNewModel) }
 	}
-	launchCmd := ag.StartCommand(context, workNewModel)
 
 	if workNewNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Open manually:"))
-		fmt.Printf("  cd %s && %s\n", worktreePath, launchCmd)
+		fmt.Printf("  cd %s && %s\n", worktreePath, start(ag))
 		return nil
 	}
 
@@ -215,6 +257,7 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	launchCmd := start(prepareLaunch(ag, worktreePath))
 	if err := term.OpenTab(worktreePath, launchCmd); err != nil {
 		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
 	}
@@ -262,15 +305,31 @@ func runWorkDelete(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no worktree found matching %q", target)
 	}
 
-	ag, err := resolveAgent()
-	if err != nil {
-		return err
-	}
 	home := homeDir()
 	shortPath := ui.ShortenHome(match.Path, home)
 
-	// Gather info for summary
-	sessions, _ := ag.FindSessions(match.Path)
+	// Sessions of every agent die with the worktree, not just the configured
+	// one: an imported worktree holds a Claude session even when the
+	// configured agent is Codex.
+	type agentSessions struct {
+		ag agent.Agent
+		n  int
+	}
+	var owners []agentSessions
+	total := 0
+	var size int64
+	for _, kind := range agent.AllKinds() {
+		a := cfg.NewAgent(string(kind))
+		s, _ := a.FindSessions(match.Path)
+		if len(s) == 0 {
+			continue
+		}
+		owners = append(owners, agentSessions{a, len(s)})
+		total += len(s)
+		for _, one := range s {
+			size += one.Size
+		}
+	}
 	age := ""
 	if days, err := wt.AgeDays(match.Path); err == nil {
 		if days == 0 {
@@ -290,8 +349,8 @@ func runWorkDelete(cmd *cobra.Command, args []string) error {
 	if age != "" {
 		fmt.Printf("  Age:       %s\n", age)
 	}
-	if len(sessions) > 0 {
-		fmt.Printf("  Sessions:  %d (%s)\n", len(sessions), sessions[0].SizeStr)
+	if total > 0 {
+		fmt.Printf("  Sessions:  %d (%s)\n", total, humanSize(size))
 	}
 	fmt.Println()
 
@@ -316,11 +375,11 @@ func runWorkDelete(cmd *cobra.Command, args []string) error {
 	ui.LogSuccess("Removed worktree")
 
 	// Clean up agent session files
-	if len(sessions) > 0 {
-		if removed, err := ag.CleanSessions(match.Path); err != nil {
-			fmt.Printf("  %s clean session files: %v\n", ui.YellowText("Warning:"), err)
+	for _, o := range owners {
+		if removed, err := o.ag.CleanSessions(match.Path); err != nil {
+			fmt.Printf("  %s clean %s session files: %v\n", ui.YellowText("Warning:"), o.ag.Kind(), err)
 		} else if removed > 0 {
-			ui.LogSuccess(fmt.Sprintf("Cleaned %d session file(s)", removed))
+			ui.LogSuccess(fmt.Sprintf("Cleaned %d %s session file(s)", removed, o.ag.Kind()))
 		}
 	}
 
