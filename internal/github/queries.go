@@ -47,36 +47,92 @@ type ReviewRequest struct {
 	// of its two queries matched. Not part of the GitHub API response.
 	Kind string `json:"-"`
 	// ReviewedOid is the commit the current user's latest review was submitted
-	// against, or "" when GitHub reports no such review or its commit is gone
-	// (force-pushed away). Set by searchReviewRequests.
+	// against, or "" when no such review is known or its commit is gone
+	// (force-pushed away). Replies and pending reviews do not count; see
+	// isRealReview. Set by searchReviewRequests for the re-review query.
 	ReviewedOid string `json:"-"`
 }
 
 // changedSinceReview reports whether the PR head moved after the current
 // user's latest review. An unknown reviewed commit counts as changed, so a
 // PR is only ever dropped from the re-review list on positive evidence that
-// the user has already seen its current head.
+// the user has already reviewed its current head.
 func (rr ReviewRequest) changedSinceReview() bool {
 	return rr.ReviewedOid == "" || rr.ReviewedOid != rr.HeadRefOid
 }
 
-// searchNode is one PR in a reviewRequestSearch response. viewerLatestReview
-// is decoded here rather than on ReviewRequest so it stays out of the JSON
-// that callers such as the MCP inbox tool emit.
-type searchNode struct {
-	ReviewRequest
-	ViewerLatestReview *struct {
-		Commit *struct {
-			Oid string `json:"oid"`
-		} `json:"commit"`
-	} `json:"viewerLatestReview"`
+// viewerReview is one of the current user's reviews on a PR, as fetched by
+// rereviewSearch.
+type viewerReview struct {
+	State  string `json:"state"`
+	Body   string `json:"body"`
+	Commit *struct {
+		Oid string `json:"oid"`
+	} `json:"commit"`
+	Comments struct {
+		Nodes []struct {
+			ReplyTo *struct {
+				ID string `json:"id"`
+			} `json:"replyTo"`
+		} `json:"nodes"`
+	} `json:"comments"`
 }
 
-// reviewRequest returns the node's ReviewRequest with ReviewedOid filled in.
+// isRealReview reports whether r records the user looking at the code at its
+// commit. GitHub stores every review-thread reply as a COMMENTED review with
+// an empty body, attached to whatever the head was when the reply was posted,
+// so a "thanks" after the author pushes would otherwise look like a review
+// of the new commits. A PENDING review has not been submitted.
+//
+// A COMMENTED review counts when it has a body or at least one inline comment
+// that starts a new thread rather than replying to one; that keeps a single
+// new inline comment ("Add single comment") as a review.
+func (r viewerReview) isRealReview() bool {
+	switch r.State {
+	case "PENDING", "":
+		return false
+	case "COMMENTED":
+		if strings.TrimSpace(r.Body) != "" {
+			return true
+		}
+		for _, c := range r.Comments.Nodes {
+			if c.ReplyTo == nil {
+				return true
+			}
+		}
+		return false
+	default: // APPROVED, CHANGES_REQUESTED, DISMISSED
+		return true
+	}
+}
+
+// searchNode is one PR in a search response. The user's reviews are decoded
+// here rather than on ReviewRequest so they stay out of the JSON that callers
+// such as the MCP inbox tool emit.
+type searchNode struct {
+	ReviewRequest
+	ViewerReviews *struct {
+		Nodes []viewerReview `json:"nodes"`
+	} `json:"viewerReviews"`
+}
+
+// reviewRequest returns the node's ReviewRequest with ReviewedOid set to the
+// commit of the user's latest real review. GitHub returns reviews oldest
+// first, so the last real one wins.
 func (n searchNode) reviewRequest() ReviewRequest {
 	rr := n.ReviewRequest
-	if n.ViewerLatestReview != nil && n.ViewerLatestReview.Commit != nil {
-		rr.ReviewedOid = n.ViewerLatestReview.Commit.Oid
+	if n.ViewerReviews == nil {
+		return rr
+	}
+	for i := len(n.ViewerReviews.Nodes) - 1; i >= 0; i-- {
+		r := n.ViewerReviews.Nodes[i]
+		if !r.isRealReview() {
+			continue
+		}
+		if r.Commit != nil {
+			rr.ReviewedOid = r.Commit.Oid
+		}
+		break
 	}
 	return rr
 }
@@ -156,8 +212,7 @@ func (p MyPR) HasReviewRequests() bool {
 func GetCurrentUser(ctx context.Context) (string, error) {
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "gh", "api", "user", "--jq", ".login")
-	out, err := cmd.Output()
+	out, err := runGH(ctx, "api", "user", "--jq", ".login")
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return "", fmt.Errorf("fetching current user timed out after %s", apiTimeout)
@@ -241,14 +296,9 @@ const searchPageSize = 50
 // stall a poll forever. 20 pages is 1000 PRs.
 const maxSearchPages = 20
 
-// reviewRequestSearch is one page of a PR search. `first` is inlined because
-// gh sends -f values as strings and search(first:) needs an Int; `after` is a
-// nullable String, so omitting it on the first page is a valid query.
-const reviewRequestSearch = `query($q: String!, $after: String) {
-  search(query: $q, type: ISSUE, first: 50, after: $after) {
-    pageInfo { hasNextPage endCursor }
-    nodes {
-      ... on PullRequest {
+// prSearchFields are the PR fields both review searches decode into
+// ReviewRequest.
+const prSearchFields = `
         number
         title
         author { login }
@@ -257,22 +307,65 @@ const reviewRequestSearch = `query($q: String!, $after: String) {
         url
         headRefOid
         isDraft
-        closed
-        viewerLatestReview { commit { oid } }
+        closed`
+
+// reviewRequestSearch is one page of a PR search. `first` is inlined because
+// gh sends -f values as strings and search(first:) needs an Int; `after` is a
+// nullable String, so omitting it on the first page is a valid query.
+const reviewRequestSearch = `query($q: String!, $after: String) {
+  search(query: $q, type: ISSUE, first: 50, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      ... on PullRequest {` + prSearchFields + `
       }
     }
   }
 }`
 
+// viewerReviewWindow is how many of the user's most recent reviews per PR the
+// re-review search fetches. If every one of them is a thread reply, no real
+// review is found and the PR stays listed. Each extra review adds a comments
+// connection to the query cost: at 10, a 50-PR page costs 6 rate-limit
+// points, against 1 for reviewRequestSearch.
+const viewerReviewWindow = 10
+
+// rereviewSearch is reviewRequestSearch plus the user's latest reviews, which
+// GetReviewRequests needs to tell whether the head moved since the last real
+// review. viewerLatestReview is not enough: it includes thread replies.
+// `author` takes a login; GitHub does not resolve @me there.
+var rereviewSearch = fmt.Sprintf(`query($q: String!, $after: String, $login: String!) {
+  search(query: $q, type: ISSUE, first: 50, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      ... on PullRequest {%s
+        viewerReviews: reviews(author: $login, last: %d, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
+          nodes {
+            state
+            body
+            commit { oid }
+            comments(first: 10) { nodes { replyTo { id } } }
+          }
+        }
+      }
+    }
+  }
+}`, prSearchFields, viewerReviewWindow)
+
 // searchReviewRequests runs one search query, following pagination to the end.
 // Without this a 50-result page silently truncates: review requests in other
 // repositories occupy slots and a configured repository's PR disappears from
 // the poll, so it is neither set up nor refreshed.
-func searchReviewRequests(ctx context.Context, query string) ([]ReviewRequest, error) {
+//
+// gqlQuery is reviewRequestSearch or rereviewSearch; vars are extra
+// "name=value" GraphQL variables, such as rereviewSearch's login.
+func searchReviewRequests(ctx context.Context, gqlQuery, query string, vars ...string) ([]ReviewRequest, error) {
 	var all []ReviewRequest
 	cursor := ""
 	for page := 0; page < maxSearchPages; page++ {
-		args := []string{"api", "graphql", "-f", "query=" + reviewRequestSearch, "-f", "q=" + query}
+		args := []string{"api", "graphql", "-f", "query=" + gqlQuery, "-f", "q=" + query}
+		for _, v := range vars {
+			args = append(args, "-f", v)
+		}
 		if cursor != "" {
 			args = append(args, "-f", "after="+cursor)
 		}
@@ -313,9 +406,10 @@ func searchReviewRequests(ctx context.Context, query string) ([]ReviewRequest, e
 
 // GetReviewRequests fetches PRs where the user is a requested reviewer,
 // including re-reviews: PRs by someone else that the user has reviewed, that
-// still need an approval, and whose head has moved since that review. A PR
-// the user reviewed at its current head is not waiting on them, so it is
-// left out unless they are explicitly requested again.
+// still need an approval, and whose head has moved since the user's latest
+// real review (see isRealReview). A PR the user reviewed at its current head
+// is not waiting on them, so it is left out unless they are explicitly
+// requested again.
 // Uses GraphQL via `gh api graphql`. When ignoreDrafts
 // is true, draft PRs are filtered out at the GitHub search layer. An empty
 // repoFilter searches every repository the user can see, which is only safe
@@ -325,12 +419,25 @@ func GetReviewRequests(ctx context.Context, repoFilter string, ignoreDrafts bool
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
 
-	q1, q2 := buildReviewRequestQueries(repoFilter, ignoreDrafts)
-	requested, err := searchReviewRequests(ctx, q1)
+	login, err := GetCurrentUser(ctx)
 	if err != nil {
 		return nil, err
 	}
-	reviewed, err := searchReviewRequests(ctx, q2)
+	return getReviewRequests(ctx, login, repoFilter, ignoreDrafts)
+}
+
+// getReviewRequests is GetReviewRequests for a known login, so
+// GetReviewRequestsForRepos looks the user up once rather than per repository.
+func getReviewRequests(ctx context.Context, login, repoFilter string, ignoreDrafts bool) ([]ReviewRequest, error) {
+	if login == "" {
+		return nil, errors.New("fetching current user: gh returned an empty login")
+	}
+	q1, q2 := buildReviewRequestQueries(repoFilter, ignoreDrafts)
+	requested, err := searchReviewRequests(ctx, reviewRequestSearch, q1)
+	if err != nil {
+		return nil, err
+	}
+	reviewed, err := searchReviewRequests(ctx, rereviewSearch, q2, "login="+login)
 	if err != nil {
 		return nil, err
 	}
@@ -356,11 +463,20 @@ func GetReviewRequestsForRepos(ctx context.Context, repoFullNames []string, igno
 	seen := make(map[string]bool)
 	var all []ReviewRequest
 	var errs []error
+	login := ""
 	for _, full := range repoFullNames {
 		if full == "" {
 			continue
 		}
-		reqs, err := GetReviewRequests(ctx, full, ignoreDrafts)
+		if login == "" {
+			var err error
+			if login, err = GetCurrentUser(ctx); err != nil {
+				return nil, err
+			}
+		}
+		rctx, cancel := withTimeout(ctx)
+		reqs, err := getReviewRequests(rctx, login, full, ignoreDrafts)
+		cancel()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", full, err))
 			continue
