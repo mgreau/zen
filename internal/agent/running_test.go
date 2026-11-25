@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -30,11 +31,70 @@ func TestIsAgentProcess(t *testing.T) {
 		{"Google Chrome", "https://claude.ai", false},
 		{"", "claude", false},
 		{"zsh", "cd /tmp && claude", false},
+
+		// Nix wrappers: bin/claude execs bin/.claude-wrapped.
+		{".claude-wrapped", "claude --session-id abc", true},
+		{".codex-wrapped", "codex resume abc", true},
+		{".aider-wrapped", "aider --chat-mode ask", true},
+		{".claude-wrapped\n", "", true}, // raw /proc/<pid>/comm
+		{".CLAUDE-WRAPPED", "", true},
+		{"/nix/store/lagbrqv5hda6xjf0qbxl3g0d4h4h97ls-claude-code-2.1.319/bin/.claude-wrapped", "", true},
+		{"/nix/store/0000000000000000000000000000000a-codex-0.50.0/bin/.codex-wrapped", "", true},
+		{"/nix/store/0000000000000000000000000000000b-aider-chat-0.86.0/bin/.aider-wrapped", "", true},
+		{"node", "node /nix/store/x-foo/bin/.claude-wrapped /review-pr", true},
+		{".claude-foo", "", false},
+		{".claude", "", false},
+		{"claude-wrapped", "", false},
+		{".claude-wrapped-extra", "", false},
+		{"claudette", "", false},
+		{".zen-wrapped", "", false},
+		{".node-wrapped", "next-server", false},
 	}
 	for _, tt := range tests {
 		got := isAgentProcess(tt.comm, tt.cmdline)
 		if got != tt.want {
 			t.Errorf("isAgentProcess(%q, %q) = %v, want %v", tt.comm, tt.cmdline, got, tt.want)
+		}
+	}
+}
+
+// Linux truncates /proc/<pid>/comm to 15 characters. Every wrapped name must
+// fit, or unwrapNixName would need to match the truncated form instead.
+func TestNixWrappedNamesFitLinuxComm(t *testing.T) {
+	for _, a := range nixWrappedAgents {
+		if n := "." + a + "-wrapped"; len(n) > 15 {
+			t.Errorf("%q is %d chars; Linux comm would truncate it to %q", n, len(n), n[:15])
+		}
+	}
+}
+
+func TestLsofAgentArgsIncludesWrappedNames(t *testing.T) {
+	args := lsofAgentArgs()
+	names := map[string]bool{}
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "-c" {
+			names[args[i+1]] = true
+		}
+	}
+	for _, want := range []string{
+		"claude", "codex", "aider",
+		".claude", ".codex", ".aider",
+		"node", "nodejs", "python", "python3", "uv", "pipx",
+	} {
+		if !names[want] {
+			t.Errorf("lsof args %v missing -c %s", args, want)
+		}
+	}
+	for _, a := range nixWrappedAgents {
+		wrapped := "." + a + "-wrapped"
+		matched := false
+		for n := range names {
+			if strings.HasPrefix(wrapped, n) {
+				matched = true
+			}
+		}
+		if !matched {
+			t.Errorf("no -c prefix in %v matches %q", args, wrapped)
 		}
 	}
 }

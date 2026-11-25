@@ -192,22 +192,35 @@ func hasProcessWithCwd(binName, dir string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, "pgrep", "-x", binName).Output()
-	if err != nil {
-		return false
-	}
-
 	resolvedDir := dir
 	if r, rerr := filepath.EvalSymlinks(dir); rerr == nil {
 		resolvedDir = r
 	}
 
-	for _, pid := range strings.Fields(string(out)) {
-		if cwd := processCwd(ctx, pid); cwd != "" && (cwd == dir || cwd == resolvedDir) {
-			return true
+	for _, name := range processNames(binName) {
+		out, err := exec.CommandContext(ctx, "pgrep", "-x", name).Output()
+		if err != nil {
+			continue
+		}
+		for _, pid := range strings.Fields(string(out)) {
+			if cwd := processCwd(ctx, pid); cwd != "" && (cwd == dir || cwd == resolvedDir) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// processNames lists the process names binName can run under: the name
+// itself and its Nix wrapper form. Nix installs bin/claude as a script that
+// execs bin/.claude-wrapped; Linux /proc/<pid>/comm (which pgrep -x matches)
+// then reads ".claude-wrapped", and so does macOS when the wrapped binary is
+// launched without argv0 set to "claude".
+func processNames(binName string) []string {
+	if binName == "" || strings.HasPrefix(binName, ".") {
+		return []string{binName}
+	}
+	return []string{binName, "." + binName + "-wrapped"}
 }
 
 // processCwd returns the current working directory of pid via lsof, or "" if
