@@ -2,7 +2,10 @@ package reconciler
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"chainguard.dev/driftlessaf/workqueue"
@@ -205,6 +208,111 @@ func TestSlackReconcile_UnknownRepo(t *testing.T) {
 	}
 	if workqueue.GetNonRetriableDetails(err) == nil {
 		t.Error("expected NonRetriableError for unknown repo")
+	}
+}
+
+func TestSlackReconcile_BadStackFailsBeforeCreatingWorktree(t *testing.T) {
+	base := t.TempDir()
+	cfg := &config.Config{
+		Repos: map[string]config.RepoConfig{
+			"mono": {FullName: "chainguard-dev/mono", BasePath: base, Stack: filepath.Join(base, "missing-stack")},
+		},
+		Slack: config.SlackConfig{DefaultRepo: "mono"},
+	}
+	rec := NewSlackReconciler(cfg, &fakeSlackAPI{}, "U1")
+
+	err := rec.Reconcile(context.Background(), "C1:1700000000.1", workqueue.Options{})
+	if err == nil || !strings.Contains(err.Error(), "repos.mono.stack") {
+		t.Fatalf("Reconcile() error = %v, want one naming repos.mono.stack", err)
+	}
+	if workqueue.GetNonRetriableDetails(err) == nil {
+		t.Error("a bad stack should not be retried: retries run out before config reloads")
+	}
+	if entries, _ := os.ReadDir(base); len(entries) != 0 {
+		t.Errorf("worktree directory created despite bad stack: %v", entries)
+	}
+}
+
+func TestSlackReconcile_BadStackDMsOncePerError(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("PATH", base)
+	cfg := &config.Config{
+		Repos: map[string]config.RepoConfig{
+			"mono": {FullName: "chainguard-dev/mono", BasePath: base, Stack: "app-work"},
+		},
+		Slack: config.SlackConfig{DefaultRepo: "mono"},
+	}
+	var dms []struct{ channel, text string }
+	api := &fakeSlackAPI{
+		permalinkFn: func(_ context.Context, _, _ string) (string, error) {
+			return "https://slack.example/archives/C1/p1", nil
+		},
+		postMessageFn: func(_ context.Context, channel, text string) error {
+			dms = append(dms, struct{ channel, text string }{channel, text})
+			return nil
+		},
+	}
+	rec := NewSlackReconciler(cfg, api, "U1")
+	reconcile := func(key string) {
+		t.Helper()
+		if err := rec.Reconcile(context.Background(), key, workqueue.Options{}); err == nil {
+			t.Fatal("Reconcile() succeeded with a stack that is not on PATH")
+		}
+	}
+
+	// The dispatcher retries a failing key; the user hears about it once.
+	reconcile("C1:1700000000.1")
+	reconcile("C1:1700000000.1")
+	if len(dms) != 1 {
+		t.Fatalf("sent %d DMs for one failing task, want 1", len(dms))
+	}
+	if dms[0].channel != "U1" {
+		t.Errorf("DM sent to %q, want the user U1", dms[0].channel)
+	}
+	for _, want := range []string{"`app-work`", "`repos.mono.stack`", "not found on PATH", "absolute path", "https://slack.example/archives/C1/p1"} {
+		if !strings.Contains(dms[0].text, want) {
+			t.Errorf("DM %q does not mention %q", dms[0].text, want)
+		}
+	}
+
+	// A different error for the same task is new information.
+	rec.SetConfig(&config.Config{
+		Repos: map[string]config.RepoConfig{
+			"mono": {FullName: "chainguard-dev/mono", BasePath: base, Stack: filepath.Join(base, "missing")},
+		},
+		Slack: config.SlackConfig{DefaultRepo: "mono"},
+	})
+	reconcile("C1:1700000000.1")
+	if len(dms) != 2 || !strings.Contains(dms[1].text, "does not exist") {
+		t.Fatalf("after the error changed, DMs = %d (last %q), want a second one naming the new error", len(dms), dms[len(dms)-1].text)
+	}
+
+	// Another task failing the same way gets its own DM.
+	reconcile("C1:1700000001.1")
+	if len(dms) != 3 {
+		t.Errorf("sent %d DMs, want a third for a second task", len(dms))
+	}
+}
+
+func TestSlackReconcile_BadStackDMFailureStillReturnsError(t *testing.T) {
+	base := t.TempDir()
+	cfg := &config.Config{
+		Repos: map[string]config.RepoConfig{
+			"mono": {FullName: "chainguard-dev/mono", BasePath: base, Stack: filepath.Join(base, "missing")},
+		},
+		Slack: config.SlackConfig{DefaultRepo: "mono"},
+	}
+	api := &fakeSlackAPI{
+		permalinkFn: func(_ context.Context, _, _ string) (string, error) {
+			return "", errors.New("permalink unavailable")
+		},
+		postMessageFn: func(_ context.Context, _, _ string) error {
+			return errors.New("slack down")
+		},
+	}
+	err := NewSlackReconciler(cfg, api, "U1").Reconcile(context.Background(), "C1:1700000000.1", workqueue.Options{})
+	if err == nil || !strings.Contains(err.Error(), "resolving stack") {
+		t.Fatalf("Reconcile() error = %v, want the stack error", err)
 	}
 }
 

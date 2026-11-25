@@ -247,6 +247,10 @@ When the selected agent has no session for the worktree but the other agent does
 
 Both directions are lossy where the agents' formats don't overlap — treat the migrated session as carried-over context, not a bit-perfect transcript. Full mechanics in [docs/session-migration.md](docs/session-migration.md).
 
+### Agent stacks
+
+To start each session through an agent stack (an executable launcher that brings its own harness and plugins), set `stack` / `review_stack` in config or pass `--stack` to `zen review` and `zen work`. They can differ per repo and between reviews and feature work. See [docs/configuration.md](docs/configuration.md#agent-stacks).
+
 Full reference (poll intervals, terminal selection, branch prefix, multi-repo disambiguation, state file paths) in [docs/configuration.md](docs/configuration.md).
 
 ## MCP server

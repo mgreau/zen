@@ -12,14 +12,21 @@ import (
 // parsing delegate to the internal/session package, which implements Claude's
 // per-project ~/.claude/projects/<encoded-path>/*.jsonl layout.
 type claudeAgent struct {
-	bin string
+	bin   string
+	stack *Stack
 }
 
 func (a *claudeAgent) Kind() Kind  { return Claude }
 func (a *claudeAgent) Bin() string { return a.bin }
 
+func (a *claudeAgent) WithStack(st *Stack) Agent {
+	c := *a
+	c.stack = st
+	return &c
+}
+
 func (a *claudeAgent) StartCommand(prompt, model string) string {
-	cmd := a.bin
+	cmd := a.stack.launchPrefix(a.bin)
 	if model != "" {
 		cmd += " --model " + shellQuote(model)
 	}
@@ -30,7 +37,7 @@ func (a *claudeAgent) StartCommand(prompt, model string) string {
 }
 
 func (a *claudeAgent) ResumeCommand(sessionID, model string) string {
-	cmd := a.bin
+	cmd := a.stack.launchPrefix(a.bin)
 	if model != "" {
 		cmd += " --model " + shellQuote(model)
 	}

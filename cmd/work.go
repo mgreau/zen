@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/mgreau/zen/internal/config"
 	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
 	wt "github.com/mgreau/zen/internal/worktree"
@@ -59,6 +60,7 @@ func init() {
 	workNewCmd.Flags().BoolVar(&workNewNoITerm, "no-terminal", false, "Create worktree only, don't open terminal tab")
 	workNewCmd.Flags().StringVarP(&workNewModel, "model", "m", "", "Model to use (agent-specific, e.g. opus or gpt-5-codex)")
 	addAgentFlag(workNewCmd)
+	addStackFlag(workNewCmd)
 	workDeleteCmd.Flags().BoolVarP(&workDeleteForce, "force", "f", false, "Skip confirmation")
 	addResumeFlags(workResumeCmd)
 	workCmd.AddCommand(workNewCmd)
@@ -179,6 +181,11 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("worktree already exists: %s\n  Resume with: zen work resume %s", worktreePath, branch)
 	}
 
+	stack, err := resolveStack(config.WorkStack, repo)
+	if err != nil {
+		return err
+	}
+
 	ui.LogInfo(fmt.Sprintf("Fetching origin/main in %s...", repo))
 	ui.LogInfo(fmt.Sprintf("Creating worktree %s (branch %s)...", worktreeName, gitBranch))
 	if err := wt.CreateFromMain(originPath, worktreePath, worktreeName, gitBranch); err != nil {
@@ -200,7 +207,8 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	launchCmd := ag.StartCommand(context, workNewModel)
+	printStack(stack)
+	launchCmd := stack.Apply(ag, worktreePath).StartCommand(context, workNewModel)
 
 	if workNewNoITerm {
 		fmt.Println()

@@ -3,6 +3,7 @@ package reconciler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -107,6 +108,11 @@ type SlackReconciler struct {
 	cfg        *config.Config
 	client     slackAPI
 	selfUserID string
+
+	// stackFailures maps a Slack key to the stack error last DMed for it, so
+	// the dispatcher's retries of one task send one DM per distinct error.
+	stackFailuresMu sync.Mutex
+	stackFailures   map[string]string
 }
 
 // NewSlackReconciler creates a new SlackReconciler.
@@ -141,6 +147,19 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 		)
 	}
 
+	// Checked before anything is created so a bad stack leaves no worktree. The
+	// error is not retried: the dispatcher's retries run out long before the
+	// daemon next reloads config, so retrying only delays the dead letter. The
+	// DM tells the user what to fix.
+	stack, err := r.cfg.ResolveStack(config.WorkStack, repo, "")
+	if err != nil {
+		r.notifyStackFailure(ctx, key, channelID, messageTS, err)
+		return workqueue.NonRetriableError(
+			fmt.Errorf("resolving stack: %w", err),
+			"stack does not resolve",
+		)
+	}
+
 	messages, err := r.client.ConversationsReplies(ctx, channelID, messageTS)
 	if err != nil {
 		return fmt.Errorf("fetching thread: %w", err)
@@ -167,7 +186,7 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 		}
 	}
 
-	ag := r.cfg.NewAgent("")
+	ag := stack.Apply(r.cfg.NewAgent(""), worktreePath)
 	launchCmd := ag.StartCommand(renderSlackPrompt(permalink, messages), "")
 	term, err := terminal.NewTerminal(r.cfg.GetTerminal())
 	if err != nil {
@@ -191,6 +210,56 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 
 	logf("Slack task started for %s (worktree: %s)", key, worktreePath)
 	return nil
+}
+
+// notifyStackFailure DMs the user that a Slack task could not start because
+// its stack does not resolve. The daemon log is the only other record, and a
+// value that works from the shell can fail here: the daemon resolves bare
+// names on its own PATH and relative paths against its own working
+// directory. Sent once per task and distinct error, since the dispatcher
+// retries the task on every dispatch tick until it succeeds or runs out of
+// retries.
+func (r *SlackReconciler) notifyStackFailure(ctx context.Context, key, channelID, messageTS string, err error) {
+	r.stackFailuresMu.Lock()
+	if r.stackFailures == nil {
+		r.stackFailures = make(map[string]string)
+	}
+	if r.stackFailures[key] == err.Error() {
+		r.stackFailuresMu.Unlock()
+		return
+	}
+	r.stackFailures[key] = err.Error()
+	r.stackFailuresMu.Unlock()
+
+	if err := r.client.PostMessage(ctx, r.selfUserID, stackFailureMessage(r.permalink(ctx, channelID, messageTS), err)); err != nil {
+		logf("Warning: failed to send Slack DM about the stack failure for %s: %v", key, err)
+	}
+}
+
+// permalink returns the thread's permalink, or "" if it cannot be fetched.
+func (r *SlackReconciler) permalink(ctx context.Context, channelID, messageTS string) string {
+	link, err := r.client.Permalink(ctx, channelID, messageTS)
+	if err != nil {
+		return ""
+	}
+	return link
+}
+
+// stackFailureMessage renders the DM for a stack that does not resolve.
+func stackFailureMessage(permalink string, err error) string {
+	var b strings.Builder
+	b.WriteString(":x: zen could not start a Slack task")
+	var serr *config.StackError
+	if errors.As(err, &serr) {
+		fmt.Fprintf(&b, ": stack `%s` (from `%s`): %v.", serr.Value, serr.Source, serr.Err)
+	} else {
+		fmt.Fprintf(&b, ": %v.", err)
+	}
+	b.WriteString("\n\nThe watch daemon resolves a bare name on its own PATH and a relative path against its own working directory, so a value that works in your shell can fail here. Set an absolute path or `~/...` for that key.")
+	if permalink != "" {
+		fmt.Fprintf(&b, "\nThread: %s", permalink)
+	}
+	return b.String()
 }
 
 // NotifyReady sends a Slack DM back to the user when a Slack-originated

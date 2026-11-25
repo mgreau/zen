@@ -23,7 +23,9 @@ type Config struct {
 	Agent        string                `yaml:"agent"` // "claude" (default) or "codex"
 	ClaudeBin    string                `yaml:"claude_bin"`
 	CodexBin     string                `yaml:"codex_bin"`
-	Terminal     string                `yaml:"terminal"` // "iterm", "ghostty", "kitty", or "macos"
+	Stack        string                `yaml:"stack"`        // agent-stack launcher for all sessions
+	ReviewStack  string                `yaml:"review_stack"` // agent-stack launcher for PR reviews, ahead of stack
+	Terminal     string                `yaml:"terminal"`     // "iterm", "ghostty", "kitty", or "macos"
 	BranchPrefix string                `yaml:"branch_prefix"`
 	IgnoreDrafts bool                  `yaml:"ignore_drafts"`
 	Watch        WatchConfig           `yaml:"watch"`
@@ -181,8 +183,10 @@ func (w WatchConfig) SessionScanIntervalDuration() time.Duration {
 
 // RepoConfig holds per-repository configuration.
 type RepoConfig struct {
-	FullName string `yaml:"full_name"`
-	BasePath string `yaml:"base_path"`
+	FullName    string `yaml:"full_name"`
+	BasePath    string `yaml:"base_path"`
+	Stack       string `yaml:"stack"`        // overrides the top-level stack for this repo
+	ReviewStack string `yaml:"review_stack"` // overrides stack for PR reviews in this repo
 }
 
 // Dir is the zen config and state directory. ZEN_HOME overrides the default
