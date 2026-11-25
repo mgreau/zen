@@ -214,5 +214,6 @@ func deleteWorktree(s staleWorktree) bool {
 	}
 
 	fmt.Printf("    %s\n", ui.GreenText("✓ Removed worktree"))
+	forgetTerminalSession(s.Path)
 	return true
 }

@@ -10,6 +10,7 @@ import (
 	"chainguard.dev/driftlessaf/workqueue"
 	"github.com/mgreau/zen/internal/config"
 	ghpkg "github.com/mgreau/zen/internal/github"
+	"github.com/mgreau/zen/internal/terminal"
 	wt "github.com/mgreau/zen/internal/worktree"
 )
 
@@ -95,6 +96,12 @@ func (r *CleanupReconciler) Reconcile(ctx context.Context, key string, _ workque
 			return nil
 		}
 		return fmt.Errorf("remove worktree: %w", err)
+	}
+
+	if removed, err := terminal.ForgetSession(r.cfg.GetTerminal(), worktreePath); err != nil {
+		logf("Cleanup for %s left its agent-deck session: %v", label, err)
+	} else if removed {
+		logf("Removed agent-deck session for %s", label)
 	}
 
 	logf("Cleanup complete for %s", label)

@@ -173,10 +173,15 @@ after the worktree directory. agent-deck recognises a leading `claude` or
 `codex` and tracks the session as that tool, keeping zen's model and prompt
 arguments; a launch through an env prefix runs as a shell session. Set
 `AGENTDECK_PROFILE` to pick the agent-deck profile. agent-deck allows one
-session per worktree: resuming replaces a stopped or errored one and refuses
-to start a second agent beside a live one, printing the
-`agent-deck session attach` command instead. Needs `agent-deck` on `PATH`;
-works wherever agent-deck does, macOS and Linux.
+session per worktree: resuming replaces one whose process has exited and
+refuses to start a second agent beside a live one, printing the
+`agent-deck session attach` command instead. Deleting a worktree (`zen review
+delete`, `zen work delete`, `zen cleanup`, or the daemon's merged-review
+cleanup) also removes its agent-deck session, if the session's process has
+exited; a session still running is left in place with a warning. Only the
+session zen opened is touched: group `zen`, titled after the worktree
+directory, at the worktree path. Needs `agent-deck` on `PATH`; works wherever
+agent-deck does, macOS and Linux.
 
 ## Slack task watcher
 

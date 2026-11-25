@@ -41,6 +41,12 @@ const (
 	dead     = `{"id": "old-1", "status": "error"}`
 	stopped  = `{"id": "old-1", "status": "stopped"}`
 	live     = `{"id": "old-1", "status": "waiting"}`
+	// exitedShell is what agent-deck v1.16.36 reports for a shell session
+	// whose command exited 0: idle, like a running shell, but with substate
+	// process-exited and an exit code.
+	exitedShell  = `{"id": "old-1", "tool": "shell", "status": "idle", "substate": "process-exited", "exit_code": 0}`
+	runningShell = `{"id": "old-1", "tool": "shell", "status": "idle"}`
+	vanished     = `{"success": false, "code": "NOT_FOUND", "error": "session 'old-1' not found"}`
 )
 
 func launchArgs(workDir, command string) []string {
@@ -62,7 +68,7 @@ func TestOpenTabLaunches(t *testing.T) {
 }
 
 func TestOpenTabReplacesDeadSession(t *testing.T) {
-	for _, status := range []string{dead, stopped} {
+	for _, status := range []string{dead, stopped, exitedShell} {
 		f := &fakeRun{t: t, replies: []string{exists, status, removed, launched}}
 		f.install()
 
@@ -83,7 +89,7 @@ func TestOpenTabReplacesDeadSession(t *testing.T) {
 }
 
 func TestOpenTabLeavesLiveSessionAlone(t *testing.T) {
-	for _, status := range []string{live, `{"id": "old-1", "status": "running"}`, `{"id": "old-1", "status": "starting"}`, `{"id": "old-1"}`} {
+	for _, status := range []string{live, runningShell, `{"id": "old-1", "status": "running"}`, `{"id": "old-1", "status": "starting"}`, `{"id": "old-1"}`} {
 		f := &fakeRun{t: t, replies: []string{exists, status}}
 		f.install()
 
@@ -99,6 +105,42 @@ func TestOpenTabLeavesLiveSessionAlone(t *testing.T) {
 		if len(f.calls) != 2 {
 			t.Errorf("with %s: made %d calls, want launch then show only: %q", status, len(f.calls), f.calls)
 		}
+	}
+}
+
+// TestOpenTabRelaunchesVanishedSession covers a session removed between the
+// launch that reported it and the show: it is absent, not live, so zen
+// launches again without a remove.
+func TestOpenTabRelaunchesVanishedSession(t *testing.T) {
+	f := &fakeRun{t: t, replies: []string{exists, vanished, launched}}
+	f.install()
+
+	if err := OpenTab("/src/zen-pr-32", "claude"); err != nil {
+		t.Fatalf("OpenTab: %v", err)
+	}
+	want := [][]string{
+		launchArgs("/src/zen-pr-32", "claude"),
+		{"session", "show", "-json", "old-1"},
+		launchArgs("/src/zen-pr-32", "claude"),
+	}
+	if !reflect.DeepEqual(f.calls, want) {
+		t.Errorf("calls = %q, want %q", f.calls, want)
+	}
+}
+
+func TestOpenTabReportsFailedShow(t *testing.T) {
+	f := &fakeRun{t: t, replies: []string{exists, `{"success": false, "code": "STORAGE", "error": "database locked"}`}}
+	f.install()
+
+	err := OpenTab("/src/zen-pr-32", "claude")
+	if err == nil || !strings.Contains(err.Error(), "database locked") {
+		t.Fatalf("OpenTab error = %v, want the show failure", err)
+	}
+	if strings.Contains(err.Error(), "live session") {
+		t.Errorf("a failed show was reported as a live session: %v", err)
+	}
+	if len(f.calls) != 2 {
+		t.Errorf("made %d calls, want launch then show only: %q", len(f.calls), f.calls)
 	}
 }
 
@@ -168,5 +210,91 @@ func TestOpenTabMissingBinary(t *testing.T) {
 	err := OpenTab("/src/x", "claude")
 	if err == nil {
 		t.Fatal("OpenTab succeeded without a binary")
+	}
+}
+
+func listing(rows ...string) string {
+	return "[" + strings.Join(rows, ",") + "]"
+}
+
+const (
+	zenRow       = `{"id": "old-1", "title": "zen-pr-32", "path": "/src/zen-pr-32", "group": "zen", "status": "error"}`
+	otherGroup   = `{"id": "mine-1", "title": "zen-pr-32", "path": "/src/zen-pr-32", "group": "my-sessions", "status": "error"}`
+	otherPath    = `{"id": "mine-2", "title": "zen-pr-32", "path": "/elsewhere/zen-pr-32", "group": "zen", "status": "error"}`
+	otherTitle   = `{"id": "mine-3", "title": "renamed", "path": "/src/zen-pr-32", "group": "zen", "status": "error"}`
+	unrelatedRow = `{"id": "mine-4", "title": "zen-pr-33", "path": "/src/zen-pr-33", "group": "zen", "status": "error"}`
+)
+
+func TestForgetRemovesOnlyZensExitedSession(t *testing.T) {
+	for _, status := range []string{dead, stopped, exitedShell} {
+		f := &fakeRun{t: t, replies: []string{listing(otherGroup, otherPath, otherTitle, unrelatedRow, zenRow), status, removed}}
+		f.install()
+
+		got, err := Forget("/src/zen-pr-32/")
+		if err != nil || !got {
+			t.Fatalf("Forget with %s = %v, %v; want true, nil", status, got, err)
+		}
+		want := [][]string{
+			{"list", "-json"},
+			{"session", "show", "-json", "old-1"},
+			{"session", "remove", "-force", "-json", "old-1"},
+		}
+		if !reflect.DeepEqual(f.calls, want) {
+			t.Errorf("with %s: calls = %q, want %q", status, f.calls, want)
+		}
+	}
+}
+
+func TestForgetLeavesLiveSession(t *testing.T) {
+	for _, status := range []string{live, runningShell, `{"id": "old-1", "status": "starting"}`} {
+		f := &fakeRun{t: t, replies: []string{listing(zenRow), status}}
+		f.install()
+
+		got, err := Forget("/src/zen-pr-32")
+		if err == nil || got || !strings.Contains(err.Error(), "still running") {
+			t.Fatalf("Forget with %s = %v, %v; want false and a still-running error", status, got, err)
+		}
+		if len(f.calls) != 2 {
+			t.Errorf("with %s: made %d calls, want list then show only: %q", status, len(f.calls), f.calls)
+		}
+	}
+}
+
+func TestForgetWithoutMatch(t *testing.T) {
+	for _, out := range []string{"[]", "", listing(otherGroup, otherPath, otherTitle, unrelatedRow)} {
+		f := &fakeRun{t: t, replies: []string{out}}
+		f.install()
+
+		got, err := Forget("/src/zen-pr-32")
+		if err != nil || got {
+			t.Fatalf("Forget with list %q = %v, %v; want false, nil", out, got, err)
+		}
+		if len(f.calls) != 1 {
+			t.Errorf("with list %q: made %d calls, want list only: %q", out, len(f.calls), f.calls)
+		}
+	}
+}
+
+func TestForgetSkipsVanishedSession(t *testing.T) {
+	f := &fakeRun{t: t, replies: []string{listing(zenRow), vanished}}
+	f.install()
+
+	got, err := Forget("/src/zen-pr-32")
+	if err != nil || got {
+		t.Fatalf("Forget = %v, %v; want false, nil", got, err)
+	}
+}
+
+func TestForgetReportsFailures(t *testing.T) {
+	for name, replies := range map[string][]string{
+		"unreadable list": {"No sessions"},
+		"failed remove":   {listing(zenRow), dead, `{"success": false, "error": "locked"}`},
+	} {
+		f := &fakeRun{t: t, replies: replies}
+		f.install()
+
+		if got, err := Forget("/src/zen-pr-32"); err == nil || got {
+			t.Errorf("%s: Forget = %v, %v; want false and an error", name, got, err)
+		}
 	}
 }

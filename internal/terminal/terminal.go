@@ -107,3 +107,15 @@ func (t *AgentDeckTerminal) Name() string {
 func (t *AgentDeckTerminal) OpenTab(workDir, command string) error {
 	return agentdeck.OpenTab(workDir, command)
 }
+
+// ForgetSession removes the record terminalType keeps of the session zen
+// opened for workDir. Call it once the worktree is deleted. Only agent-deck
+// keeps such a record, and only an exited session is removed (see
+// agentdeck.Forget); every other terminal is a no-op. It reports whether a
+// session was removed.
+func ForgetSession(terminalType, workDir string) (bool, error) {
+	if terminalType != "agent-deck" {
+		return false, nil
+	}
+	return agentdeck.Forget(workDir)
+}

@@ -314,6 +314,7 @@ func runWorkDelete(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	ui.LogSuccess("Removed worktree")
+	forgetTerminalSession(match.Path)
 
 	// Clean up agent session files
 	if len(sessions) > 0 {

@@ -1,7 +1,10 @@
 package terminal
 
 import (
+	"reflect"
 	"testing"
+
+	"github.com/mgreau/zen/internal/agentdeck/agentdecktest"
 )
 
 func TestNewTerminal(t *testing.T) {
@@ -63,5 +66,26 @@ func TestMacOSTerminalName(t *testing.T) {
 	term := &MacOSTerminal{}
 	if got := term.Name(); got != "Terminal" {
 		t.Errorf("MacOSTerminal.Name() = %q, want %q", got, "Terminal")
+	}
+}
+
+func TestForgetSession(t *testing.T) {
+	calls := agentdecktest.Install(t, "/src/zen-pr-32")
+
+	for _, other := range []string{"iterm", "ghostty", "kitty", "macos", "tmux"} {
+		if removed, err := ForgetSession(other, "/src/zen-pr-32"); err != nil || removed {
+			t.Errorf("ForgetSession(%q) = %v, %v; want a no-op", other, removed, err)
+		}
+	}
+	if got := calls(); got != nil {
+		t.Fatalf("non-agent-deck terminals called agent-deck: %q", got)
+	}
+
+	removed, err := ForgetSession("agent-deck", "/src/zen-pr-32")
+	if err != nil || !removed {
+		t.Fatalf("ForgetSession(agent-deck) = %v, %v; want true, nil", removed, err)
+	}
+	if got := calls(); !reflect.DeepEqual(got, agentdecktest.Removed) {
+		t.Errorf("agent-deck calls = %q, want %q", got, agentdecktest.Removed)
 	}
 }
