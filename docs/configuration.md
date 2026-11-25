@@ -166,6 +166,8 @@ The first value set wins, highest first:
 
 With nothing set, zen launches `claude_bin` / `codex_bin` exactly as before. When a stack is used, `zen review` and `zen work` print a `Stack: <value>` line. A value that does not exist, is not executable, or is not on `PATH` fails the command before any worktree or terminal tab is created, naming the value and the flag or key it came from.
 
+The watch daemon resolves a stack itself when it launches a Slack task, so a bare name is looked up on the daemon's `PATH` and a relative path is resolved against the daemon's working directory, not your current shell's. `zen watch start` runs the daemon in your home directory with the environment of the shell that started it, and that `PATH` stays fixed until the daemon restarts. A value that works from your shell can therefore fail every Slack task. When the Slack watcher is on, set `stack` (and `repos.<name>.stack` for `slack.default_repo`) to an absolute path or a `~/...` path. If a Slack task's stack does not resolve, the daemon creates no worktree, logs the error, and DMs you the value, the key it came from, and a link to the thread, once per task and error.
+
 The model, prompt and `--resume <id>` arguments reach the stack unchanged. The stack runs in place of the agent binary, so the harness behind it must match `agent:`. zen builds the command in the configured agent's syntax and discovers sessions, token usage and the context file per agent, so a Claude Code stack under `agent: codex` gets Codex flags and resume never finds its sessions.
 
 A stack stages its plugins in `./.agent-stacks/` in the current directory by default, which would land inside the worktree and make zen refuse to remove it. zen therefore exports `AGENT_STACKS_DIR=<zen home>/stacks/<worktree directory name>` (`~/.zen/stacks/` unless `ZEN_HOME` is set) so staging happens outside the worktree. zen deletes that directory when it removes the worktree, and a failure to delete it never fails the removal.
@@ -236,6 +238,8 @@ Setup:
 1. `slack.enabled: true` in config, plus `slack.default_repo` (required — no hardcoded default).
 2. Create a Slack app (a dedicated personal one is recommended over reusing a shared org bot) with these token scopes: `reactions:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `chat:write`.
 3. Export the resulting token as `ZEN_SLACK_TOKEN` in the environment the daemon starts in (`zen watch start` inherits your shell's env). The token is never written to `config.yaml` or any state file.
+
+Slack tasks launch through the work-session stack (`repos.<name>.stack`, then `stack`), like `zen work new`; see [Agent stacks](#agent-stacks) for why the value should be an absolute or `~/...` path here.
 
 If `slack.enabled` is true but `ZEN_SLACK_TOKEN` is unset, or `auth.test` fails at startup, the daemon logs a warning and runs with the Slack watcher disabled rather than failing to start.
 

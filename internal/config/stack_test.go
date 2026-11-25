@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,6 +175,10 @@ func TestResolveStackErrors(t *testing.T) {
 			ref, err := tt.cfg.ResolveStack(tt.mode, "app", tt.flag)
 			if err == nil {
 				t.Fatalf("ResolveStack() = %+v, want an error", ref)
+			}
+			var serr *StackError
+			if !errors.As(err, &serr) || serr.Value == "" || serr.Source == "" {
+				t.Errorf("error %v is not a *StackError with a value and source", err)
 			}
 			for _, w := range tt.wants {
 				if !strings.Contains(err.Error(), w) {

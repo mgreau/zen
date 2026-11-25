@@ -28,6 +28,20 @@ type StackRef struct {
 	Launcher string // absolute path of the executable
 }
 
+// StackError reports a configured stack that cannot run, naming the value
+// and the flag or config key it came from.
+type StackError struct {
+	Value  string // as configured or passed
+	Source string // "--stack", or the config key that supplied Value
+	Err    error  // why it cannot run
+}
+
+func (e *StackError) Error() string {
+	return fmt.Sprintf("stack %q (from %s): %v", e.Value, e.Source, e.Err)
+}
+
+func (e *StackError) Unwrap() error { return e.Err }
+
 // StacksDir is where a worktree's stack stages its plugins, outside the
 // worktree so they never count as local changes there.
 func StacksDir(worktreePath string) string {
@@ -60,7 +74,7 @@ func (c *Config) ResolveStack(mode StackMode, repo, flag string) (*StackRef, err
 		}
 		launcher, err := findStackExecutable(value)
 		if err != nil {
-			return nil, fmt.Errorf("stack %q (from %s): %w", value, cand.source, err)
+			return nil, &StackError{Value: value, Source: cand.source, Err: err}
 		}
 		return &StackRef{Value: value, Source: cand.source, Launcher: launcher}, nil
 	}
