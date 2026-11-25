@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
 	wt "github.com/mgreau/zen/internal/worktree"
@@ -156,6 +157,13 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		context = args[2]
 	}
 
+	// Resolve the agent first: a bad --agent must fail before anything is
+	// created, or a retry hits "worktree already exists".
+	ag, err := resolveAgent()
+	if err != nil {
+		return err
+	}
+
 	// Validate repo exists in config
 	basePath := cfg.RepoBasePath(repo)
 	if basePath == "" {
@@ -196,10 +204,6 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Model:  %s\n", ui.CyanText(workNewModel))
 	}
 
-	ag, err := resolveAgent()
-	if err != nil {
-		return err
-	}
 	launchCmd := ag.StartCommand(context, workNewModel)
 
 	if workNewNoITerm {
@@ -262,15 +266,31 @@ func runWorkDelete(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no worktree found matching %q", target)
 	}
 
-	ag, err := resolveAgent()
-	if err != nil {
-		return err
-	}
 	home := homeDir()
 	shortPath := ui.ShortenHome(match.Path, home)
 
-	// Gather info for summary
-	sessions, _ := ag.FindSessions(match.Path)
+	// Sessions of every agent die with the worktree, not just the configured
+	// one: an imported worktree holds a Claude session even when the
+	// configured agent is Codex.
+	type agentSessions struct {
+		ag agent.Agent
+		n  int
+	}
+	var owners []agentSessions
+	total := 0
+	var size int64
+	for _, kind := range agent.AllKinds() {
+		a := cfg.NewAgent(string(kind))
+		s, _ := a.FindSessions(match.Path)
+		if len(s) == 0 {
+			continue
+		}
+		owners = append(owners, agentSessions{a, len(s)})
+		total += len(s)
+		for _, one := range s {
+			size += one.Size
+		}
+	}
 	age := ""
 	if days, err := wt.AgeDays(match.Path); err == nil {
 		if days == 0 {
@@ -290,8 +310,8 @@ func runWorkDelete(cmd *cobra.Command, args []string) error {
 	if age != "" {
 		fmt.Printf("  Age:       %s\n", age)
 	}
-	if len(sessions) > 0 {
-		fmt.Printf("  Sessions:  %d (%s)\n", len(sessions), sessions[0].SizeStr)
+	if total > 0 {
+		fmt.Printf("  Sessions:  %d (%s)\n", total, humanSize(size))
 	}
 	fmt.Println()
 
@@ -316,11 +336,11 @@ func runWorkDelete(cmd *cobra.Command, args []string) error {
 	ui.LogSuccess("Removed worktree")
 
 	// Clean up agent session files
-	if len(sessions) > 0 {
-		if removed, err := ag.CleanSessions(match.Path); err != nil {
-			fmt.Printf("  %s clean session files: %v\n", ui.YellowText("Warning:"), err)
+	for _, o := range owners {
+		if removed, err := o.ag.CleanSessions(match.Path); err != nil {
+			fmt.Printf("  %s clean %s session files: %v\n", ui.YellowText("Warning:"), o.ag.Kind(), err)
 		} else if removed > 0 {
-			ui.LogSuccess(fmt.Sprintf("Cleaned %d session file(s)", removed))
+			ui.LogSuccess(fmt.Sprintf("Cleaned %d %s session file(s)", removed, o.ag.Kind()))
 		}
 	}
 
