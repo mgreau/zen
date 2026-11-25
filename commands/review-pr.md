@@ -9,6 +9,7 @@ You are conducting a comprehensive code review of a GitHub Pull Request. Follow 
 First, determine which PR to review:
 - Check if the current branch is named `pr-<number>` - if so, extract the PR number
 - Otherwise, look for a PR number in the command arguments
+- If the arguments contain "Reviewer directions", treat that text as guidance from the reviewer: decisions they have already made and areas they want examined closely. Follow it over the default checklist below — do not flag something the reviewer has already decided, and give the areas they named extra scrutiny. Call out in your summary how the directions shaped the review.
 - Use `gh pr view <number>` to get PR metadata (title, description, author, status)
 - Use `gh pr diff <number>` to get the full diff
 - Use `gh pr view <number> --json files -q '.files[].path'` to list changed files

@@ -44,8 +44,10 @@ type Agent interface {
 	// StartCommand builds the shell command to launch the agent with an
 	// optional initial prompt and model. An empty prompt or model is omitted.
 	StartCommand(prompt, model string) string
-	// ResumeCommand builds the shell command to resume a recorded session.
-	ResumeCommand(sessionID, model string) string
+	// ResumeCommand builds the shell command to resume a recorded session,
+	// optionally sending prompt as the first new message. An empty prompt is
+	// omitted.
+	ResumeCommand(sessionID, model, prompt string) string
 
 	// ContextFile returns the default filename the agent reads project context
 	// from inside a worktree (e.g. "CLAUDE.local.md", "AGENTS.md").
@@ -62,8 +64,9 @@ type Agent interface {
 	// implementation); Codex uses a sentinel to disambiguate AGENTS.md.
 	ContextPresent(worktreePath string) bool
 	// ReviewPrompt returns the initial prompt used to start a PR review in a
-	// worktree whose context has already been injected.
-	ReviewPrompt(worktreePath string) string
+	// worktree whose context has already been injected. Non-empty directions
+	// (the reviewer's own focus areas or decisions) are included in it.
+	ReviewPrompt(worktreePath, directions string) string
 
 	// PromptsDir returns the directory custom slash-command prompts live in.
 	PromptsDir() string
