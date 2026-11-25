@@ -148,11 +148,16 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 	}
 
 	// Checked before anything is created so a bad stack leaves no worktree. The
-	// error is retriable: the daemon hot-reloads config, so a fix is picked up.
+	// error is not retried: the dispatcher's retries run out long before the
+	// daemon next reloads config, so retrying only delays the dead letter. The
+	// DM tells the user what to fix.
 	stack, err := r.cfg.ResolveStack(config.WorkStack, repo, "")
 	if err != nil {
 		r.notifyStackFailure(ctx, key, channelID, messageTS, err)
-		return fmt.Errorf("resolving stack: %w", err)
+		return workqueue.NonRetriableError(
+			fmt.Errorf("resolving stack: %w", err),
+			"stack does not resolve",
+		)
 	}
 
 	messages, err := r.client.ConversationsReplies(ctx, channelID, messageTS)

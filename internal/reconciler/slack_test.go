@@ -225,8 +225,8 @@ func TestSlackReconcile_BadStackFailsBeforeCreatingWorktree(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "repos.mono.stack") {
 		t.Fatalf("Reconcile() error = %v, want one naming repos.mono.stack", err)
 	}
-	if workqueue.GetNonRetriableDetails(err) != nil {
-		t.Error("a bad stack should be retriable: a config fix is hot-reloaded")
+	if workqueue.GetNonRetriableDetails(err) == nil {
+		t.Error("a bad stack should not be retried: retries run out before config reloads")
 	}
 	if entries, _ := os.ReadDir(base); len(entries) != 0 {
 		t.Errorf("worktree directory created despite bad stack: %v", entries)
