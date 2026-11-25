@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"chainguard.dev/driftlessaf/workqueue"
 	"chainguard.dev/driftlessaf/workqueue/inmem"
 	"github.com/mgreau/zen/internal/agent"
+	"github.com/mgreau/zen/internal/agentdeck/agentdecktest"
 	"github.com/mgreau/zen/internal/config"
 	ghpkg "github.com/mgreau/zen/internal/github"
 )
@@ -103,6 +105,42 @@ func TestCleanupReconcile_RemovesMergedReviewWithOnlyZenContext(t *testing.T) {
 	}
 	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
 		t.Fatal("merged review with only zen-owned files was not removed")
+	}
+}
+
+func TestCleanupReconcile_ForgetsAgentDeckSession(t *testing.T) {
+	cfg, worktreePath, prHead := cleanupFixture(t)
+	cfg.Terminal = "agent-deck"
+	calls := agentdecktest.Install(t, worktreePath)
+
+	rec := NewCleanupReconciler(cfg)
+	rec.prMergeInfo = mergedInfo(prHead, 2*time.Hour)
+	if err := rec.Reconcile(context.Background(), "testrepo:999", workqueue.Options{}); err != nil {
+		t.Fatalf("Reconcile() error: %v", err)
+	}
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
+		t.Fatal("merged review was not removed")
+	}
+	if got := calls(); !reflect.DeepEqual(got, agentdecktest.Removed) {
+		t.Errorf("agent-deck calls = %q, want %q", got, agentdecktest.Removed)
+	}
+}
+
+func TestCleanupReconcile_KeepsAgentDeckSessionWhenRemovalRefused(t *testing.T) {
+	cfg, worktreePath, prHead := cleanupFixture(t)
+	cfg.Terminal = "agent-deck"
+	calls := agentdecktest.Install(t, worktreePath)
+	if err := os.WriteFile(filepath.Join(worktreePath, "tracked"), []byte("edited"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := NewCleanupReconciler(cfg)
+	rec.prMergeInfo = mergedInfo(prHead, 2*time.Hour)
+	if err := rec.Reconcile(context.Background(), "testrepo:999", workqueue.Options{}); err != nil {
+		t.Fatalf("Reconcile() error: %v", err)
+	}
+	if got := calls(); got != nil {
+		t.Errorf("agent-deck was called for a worktree that was kept: %q", got)
 	}
 }
 

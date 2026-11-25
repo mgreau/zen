@@ -200,6 +200,7 @@ func runReviewDelete(cmd *cobra.Command, args []string) error {
 	}
 
 	ui.LogSuccess(fmt.Sprintf("Deleted worktree: %s", shortPath))
+	forgetTerminalSession(match.Path)
 	return nil
 }
 

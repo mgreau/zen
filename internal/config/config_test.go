@@ -196,6 +196,7 @@ func TestLoadTerminal(t *testing.T) {
 		{"kitty", "kitty", "", "kitty", false},
 		{"macos", "macos", "", "macos", false},
 		{"tmux", "tmux", "", "tmux", false},
+		{"agent-deck", "agent-deck", "", "agent-deck", false},
 		{"invalid", "konsole", "", "", true},
 	}
 

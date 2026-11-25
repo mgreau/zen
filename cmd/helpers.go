@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/mgreau/zen/internal/agent"
+	"github.com/mgreau/zen/internal/terminal"
 	"github.com/mgreau/zen/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -53,5 +54,20 @@ func ensureReviewPrompt(ag agent.Agent) {
 	}
 	if installed {
 		ui.LogInfo(fmt.Sprintf("Installed /review-pr prompt for %s", ag.Kind()))
+	}
+}
+
+// forgetTerminalSession removes the configured terminal's record of the session
+// zen opened in a worktree that has just been deleted, so agent-deck does not
+// keep listing a dead session. Best effort: a failure is a warning, since the
+// worktree is already gone.
+func forgetTerminalSession(worktreePath string) {
+	removed, err := terminal.ForgetSession(cfg.GetTerminal(), worktreePath)
+	if err != nil {
+		ui.LogWarn(fmt.Sprintf("agent-deck session not removed: %v", err))
+		return
+	}
+	if removed {
+		ui.LogSuccess("Removed agent-deck session")
 	}
 }
