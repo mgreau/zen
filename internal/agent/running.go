@@ -97,7 +97,7 @@ func cwdInWorktree(cwd, worktree string) bool {
 func isAgentProcess(comm, cmdline string) bool {
 	comm = strings.ToLower(strings.TrimSpace(comm))
 	comm = strings.TrimSuffix(comm, "\n")
-	comm = filepath.Base(comm)
+	comm = unwrapNixName(filepath.Base(comm))
 	if comm == "" {
 		return false
 	}
@@ -118,6 +118,24 @@ func isAgentProcess(comm, cmdline string) bool {
 	return false
 }
 
+// nixWrappedAgents are the agent binaries Nix may install behind a wrapper.
+var nixWrappedAgents = []string{"claude", "codex", "aider"}
+
+// unwrapNixName maps a Nix wrapper's inner executable name back to the agent
+// it wraps: Nix installs bin/claude as a script that execs bin/.claude-wrapped,
+// so lsof, /proc/<pid>/comm and (when argv0 is not overridden) ps report
+// ".claude-wrapped". Only the exact ".<agent>-wrapped" form of a known agent
+// is unwrapped; every other name is returned unchanged. All three wrapped
+// names fit the 15-character Linux comm limit, so no truncated form arises.
+func unwrapNixName(name string) string {
+	for _, a := range nixWrappedAgents {
+		if name == "."+a+"-wrapped" {
+			return a
+		}
+	}
+	return name
+}
+
 func agentNodeCmdline(cl string) bool {
 	if strings.Contains(cl, "@anthropic-ai/claude") || strings.Contains(cl, "claude-code") {
 		return true
@@ -128,7 +146,7 @@ func agentNodeCmdline(cl string) bool {
 	// pipx/npm shims: ".../bin/claude" or ".../bin/codex" as argv0 or an arg.
 	fields := strings.Fields(cl)
 	for _, f := range fields {
-		base := filepath.Base(f)
+		base := unwrapNixName(filepath.Base(f))
 		if base == "claude" || base == "codex" || base == "aider" {
 			return true
 		}
@@ -215,12 +233,26 @@ func isAllDigits(s string) bool {
 	return true
 }
 
+// lsofAgentArgs is the lsof prefilter for candidate agent processes. lsof -c
+// matches a prefix of the command name, which for a Nix-wrapped agent is
+// ".claude-wrapped" (etc.), so the dotted names are listed alongside the plain
+// ones. isAgentProcess makes the final decision on every match.
+func lsofAgentArgs() []string {
+	args := []string{"-nP", "-a", "-d", "cwd", "-Fn"}
+	for _, c := range []string{
+		"claude", "codex", "aider",
+		".claude", ".codex", ".aider",
+		"node", "nodejs",
+		"python", "python3",
+		"uv", "pipx",
+	} {
+		args = append(args, "-c", c)
+	}
+	return args
+}
+
 func listAgentCwdsLsof() []procCwd {
-	cmd := exec.Command("lsof", "-nP", "-a", "-d", "cwd", "-Fn",
-		"-c", "claude", "-c", "codex", "-c", "aider",
-		"-c", "node", "-c", "nodejs",
-		"-c", "python", "-c", "python3",
-		"-c", "uv", "-c", "pipx")
+	cmd := exec.Command("lsof", lsofAgentArgs()...)
 	out, err := cmd.Output()
 	if err != nil && len(out) == 0 {
 		// lsof exits 1 when nothing matches; missing binary also errors with no output.

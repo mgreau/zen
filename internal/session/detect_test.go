@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -257,6 +258,24 @@ func TestFormatAge(t *testing.T) {
 		got := FormatAge(tt.t)
 		if got != tt.want {
 			t.Errorf("FormatAge(%v) = %q, want %q", tt.t, got, tt.want)
+		}
+	}
+}
+
+func TestProcessNames(t *testing.T) {
+	tests := []struct {
+		bin  string
+		want []string
+	}{
+		{"claude", []string{"claude", ".claude-wrapped"}},
+		{"codex", []string{"codex", ".codex-wrapped"}},
+		{".claude-wrapped", []string{".claude-wrapped"}},
+		{"", []string{""}},
+	}
+	for _, tt := range tests {
+		got := processNames(tt.bin)
+		if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+			t.Errorf("processNames(%q) = %q, want %q", tt.bin, got, tt.want)
 		}
 	}
 }
