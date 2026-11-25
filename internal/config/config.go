@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -294,6 +295,65 @@ func finish(cfg *Config) (*Config, error) {
 
 	cfg.expandPaths()
 	return cfg, nil
+}
+
+// Equivalent reports whether c and o configure zen the same way once every
+// default is applied: an unset field and one set to its default compare
+// equal, as do "1h" and "60m". zen setup uses it to decide that re-running
+// the same install changes nothing, even after an upgrade adds config keys or
+// when the file was written by a version that spelled defaults out. Both
+// configs must come from Parse or ParseStrict.
+func (c *Config) Equivalent(o *Config) bool {
+	return reflect.DeepEqual(c.effective(), o.effective())
+}
+
+// effective is a copy of c with each default resolved the way the daemon and
+// commands resolve it, so two configs can be compared by value.
+func (c *Config) effective() Config {
+	e := *c
+	e.PollInterval = normalizeDuration(e.PollInterval)
+	if len(e.WatchPaths) == 0 {
+		e.WatchPaths = nil
+	}
+	if len(e.Authors) == 0 {
+		e.Authors = nil
+	}
+
+	w := c.Watch
+	digest := ""
+	if d, ok := w.DigestIntervalDuration(); ok {
+		digest = d.String()
+	}
+	e.Watch = WatchConfig{
+		DispatchInterval:    w.DispatchIntervalDuration().String(),
+		CleanupInterval:     w.CleanupIntervalDuration().String(),
+		SessionScanInterval: w.SessionScanIntervalDuration().String(),
+		CleanupAfterMerge:   w.CleanupAfterMergeDuration().String(),
+		Concurrency:         w.GetConcurrency(),
+		MaxRetries:          w.GetMaxRetries(),
+		DigestInterval:      digest,
+		// CleanupAfterDays is deprecated and read by nothing.
+	}
+
+	sl := c.Slack
+	e.Slack = SlackConfig{
+		Enabled:      sl.Enabled,
+		Emoji:        sl.GetEmoji(),
+		DefaultRepo:  sl.DefaultRepo,
+		PollInterval: sl.PollIntervalDuration().String(),
+		AckReaction:  sl.GetAckReaction(),
+		DoneEmoji:    sl.GetDoneEmoji(),
+	}
+	return e
+}
+
+// normalizeDuration rewrites a parsable duration in canonical form ("60m" and
+// "1h" both become "1h0m0s") and leaves anything else as it is.
+func normalizeDuration(s string) string {
+	if d, err := time.ParseDuration(s); err == nil {
+		return d.String()
+	}
+	return s
 }
 
 // repoShortName is what a repo's short name may look like. It names worktree

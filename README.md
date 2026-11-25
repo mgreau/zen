@@ -311,7 +311,7 @@ environment.systemPackages = [
 
 **home-manager:** `home.packages = [ inputs.zen.packages.${pkgs.system}.default ];`
 
-To provision the config as well, have your activation run `zen setup --config-file <file>` (or link the file in with `home.file`). See [unattended install](docs/configuration.md#unattended-install).
+To provision the config as well, have your activation run `zen setup --config-file <file> --force` (or link the file in with `home.file`). The managed file is the source of truth: without `--force`, setup exits 1 every time that file changes, and with it, edits made to `~/.zen/config.yaml` by hand are replaced. See [unattended install](docs/configuration.md#unattended-install).
 
 **Any Nix install:**
 

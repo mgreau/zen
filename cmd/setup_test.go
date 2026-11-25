@@ -11,6 +11,7 @@ import (
 	"testing/fstest"
 
 	"github.com/mgreau/zen/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 // setupTestHome points HOME and ZEN_HOME at temp dirs and embeds one prompt.
@@ -391,5 +392,102 @@ func TestPromptValidReasksOnBadAnswer(t *testing.T) {
 	scanner = bufio.NewScanner(strings.NewReader("../x\n"))
 	if _, err := promptValid(scanner, "Short name", "apko", config.ValidateRepoShortName); !errors.Is(err, errStdinClosed) {
 		t.Fatalf("promptValid with only bad answers = %v, want errStdinClosed", err)
+	}
+}
+
+func TestUnattendedSetupWritesOnlyGivenValues(t *testing.T) {
+	setupTestHome(t)
+	opts := setupOptions{repos: []string{"o/a:/p"}, authors: []string{"alice"}, skipPrompts: true}
+	if err := runUnattendedSetup(opts, nil, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(config.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "repos:\n    a:\n        full_name: o/a\n        base_path: /p\nauthors:\n    - alice\n"
+	if string(got) != want {
+		t.Errorf("config =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestUnattendedSetupRerunAfterUpgrade(t *testing.T) {
+	setupTestHome(t)
+	path := config.Path()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// An older zen wrote every field, defaults spelled out and zero values
+	// included. The same flags today produce different bytes but the same
+	// configuration, so the re-run must not ask for --force.
+	old := newSetupConfig(map[string]config.RepoConfig{"a": {FullName: "o/a", BasePath: "/p"}}, []string{"alice"}, "claude", "")
+	oldData, err := yaml.Marshal(&old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(oldData, []byte("watch_paths: []")) || !bytes.Contains(oldData, []byte("concurrency: 2")) {
+		t.Fatalf("old-style config is not the full form this test needs:\n%s", oldData)
+	}
+	if err := os.WriteFile(path, oldData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	opts := setupOptions{repos: []string{"o/a:/p"}, authors: []string{"alice"}, skipPrompts: true}
+	if err := runUnattendedSetup(opts, nil, &out); err != nil {
+		t.Fatalf("re-run against an older config: %v", err)
+	}
+	if !strings.Contains(out.String(), "Config unchanged") {
+		t.Errorf("output = %q, want Config unchanged", out.String())
+	}
+	if got, _ := os.ReadFile(path); !bytes.Equal(got, oldData) {
+		t.Error("an equivalent config was rewritten")
+	}
+
+	// A real difference (a hand edit, or new flags) still needs --force.
+	opts.authors = []string{"bob"}
+	if err := runUnattendedSetup(opts, nil, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("different authors: error = %v, want a --force hint", err)
+	}
+}
+
+func TestUnattendedSetupConfigFileComparesBytes(t *testing.T) {
+	setupTestHome(t)
+	data := "repos:\n  a:\n    full_name: o/a\n    base_path: /p\n"
+	opts := setupOptions{configFile: "-", skipPrompts: true}
+	if err := runUnattendedSetup(opts, strings.NewReader(data), &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	// Same configuration, new comment: the file is installed as given, so it
+	// differs.
+	if err := runUnattendedSetup(opts, strings.NewReader("# updated\n"+data), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("comment change: error = %v, want a --force hint", err)
+	}
+}
+
+func TestUnattendedSetupRootRefusesForeignSymlink(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("needs a symlink not owned by root; the test runs as root")
+	}
+	home := setupTestHome(t)
+	saved := geteuid
+	t.Cleanup(func() { geteuid = saved })
+	geteuid = func() int { return 0 }
+
+	target := filepath.Join(home, "elsewhere.yaml")
+	link := config.Path()
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	opts := setupOptions{repos: []string{"o/a:/p"}, skipPrompts: true}
+	err := runUnattendedSetup(opts, nil, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "not owned by root") {
+		t.Fatalf("error = %v, want a refusal to follow the symlink", err)
+	}
+	if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("symlink target was written as root")
 	}
 }

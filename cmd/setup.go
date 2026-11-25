@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/config"
@@ -40,11 +41,13 @@ as flags or as a file and setup runs without prompting:
 
 A --repo value is [short=]owner/name:base_path; short defaults to name.
 
-Unattended setup is idempotent. When ~/.zen/config.yaml already holds the
-same content it is left alone, and when it differs setup fails unless you
-pass --force. Prompts that are already installed are kept. The config is
-checked with the same rules zen uses when it loads it, so a bad value fails
-the install instead of the first zen command after it.`,
+Unattended setup is idempotent. When ~/.zen/config.yaml already configures
+zen the same way it is left alone (for --config-file, only an identical file
+counts), and when it differs setup fails unless you pass --force. Setup from
+flags writes only the values you give; everything else takes zen's
+defaults. Prompts that are already installed are kept. The config is checked
+with the same rules zen uses when it loads it, so a bad value fails the
+install instead of the first zen command after it.`,
 	Args: cobra.NoArgs,
 	RunE: runSetup,
 }
@@ -110,8 +113,20 @@ func runUnattendedSetup(opts setupOptions, stdin io.Reader, out io.Writer) error
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
+	// A --config-file is installed exactly, so any byte change (comments
+	// included) counts. A config built from flags counts as unchanged when it
+	// configures zen the same way as the file already there, so re-running the
+	// same install still succeeds after an upgrade adds config keys.
+	var same func([]byte) bool
+	if opts.configFile == "" {
+		same = func(existing []byte) bool {
+			old, err := config.Parse(existing)
+			return err == nil && old.Equivalent(parsed)
+		}
+	}
+
 	configPath := config.Path()
-	wrote, err := writeConfig(configPath, data, opts.force)
+	wrote, err := writeConfig(configPath, data, opts.force, same)
 	if err != nil {
 		return err
 	}
@@ -193,18 +208,67 @@ func unattendedConfigData(opts setupOptions, stdin io.Reader) ([]byte, error) {
 		}
 	}
 
-	agentKind := strings.ToLower(strings.TrimSpace(opts.agent))
-	if agentKind == "" {
-		agentKind = "claude"
+	// Write only what was given. Everything else takes zen's defaults when it
+	// loads the config, so a later release that changes a default changes
+	// this machine too, instead of the old value being pinned in the file.
+	cfg := config.Config{
+		Repos:        repos,
+		Authors:      authors,
+		Agent:        strings.ToLower(strings.TrimSpace(opts.agent)),
+		Terminal:     strings.ToLower(strings.TrimSpace(opts.terminal)),
+		BranchPrefix: strings.TrimSpace(opts.branchPrefix),
 	}
+	return marshalConfig(&cfg)
+}
 
-	cfg := newSetupConfig(repos, authors, agentKind, strings.ToLower(strings.TrimSpace(opts.terminal)))
-	cfg.BranchPrefix = strings.TrimSpace(opts.branchPrefix)
-	data, err := yaml.Marshal(&cfg)
+// marshalConfig renders cfg as YAML without the keys left at their zero value
+// (empty strings and lists, false, 0, and sections with nothing set).
+func marshalConfig(cfg *config.Config) ([]byte, error) {
+	var doc yaml.Node
+	if err := doc.Encode(cfg); err != nil {
+		return nil, fmt.Errorf("marshalling config: %w", err)
+	}
+	pruneZero(&doc)
+	data, err := yaml.Marshal(&doc)
 	if err != nil {
 		return nil, fmt.Errorf("marshalling config: %w", err)
 	}
 	return data, nil
+}
+
+// pruneZero drops mapping entries whose value is a zero scalar or an empty
+// sequence or mapping, recursively, and reports whether n is empty itself.
+func pruneZero(n *yaml.Node) bool {
+	switch n.Kind {
+	case yaml.DocumentNode:
+		for _, c := range n.Content {
+			pruneZero(c)
+		}
+		return false
+	case yaml.MappingNode:
+		kept := n.Content[:0]
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if !pruneZero(n.Content[i+1]) {
+				kept = append(kept, n.Content[i], n.Content[i+1])
+			}
+		}
+		n.Content = kept
+		return len(n.Content) == 0
+	case yaml.SequenceNode:
+		return len(n.Content) == 0
+	case yaml.ScalarNode:
+		switch n.Tag {
+		case "!!null":
+			return true
+		case "!!str":
+			return n.Value == ""
+		case "!!bool":
+			return n.Value == "false"
+		case "!!int":
+			return n.Value == "0"
+		}
+	}
+	return false
 }
 
 // parseRepoFlag parses a --repo value, [short=]owner/name:base_path. The short
@@ -257,14 +321,14 @@ func newSetupConfig(repos map[string]config.RepoConfig, authors []string, agentK
 	}
 }
 
-// writeConfig writes data to path. An existing file with the same content is
-// left alone (wrote is false); one with different content is replaced only
-// when force is set. The write goes through a temporary file and a rename so
+// writeConfig writes data to path. An existing file with the same bytes, or
+// one that same (if not nil) accepts, is left alone (wrote is false); any
+// other existing file is replaced only when force is set. The write goes through a temporary file and a rename so
 // a running daemon, which reloads config on every poll, never reads half a
 // file. A symlinked config (stow, chezmoi, home-manager) is written through
 // to its target, even one that does not exist yet, so the link survives, and
 // a replaced file keeps its mode.
-func writeConfig(path string, data []byte, force bool) (wrote bool, err error) {
+func writeConfig(path string, data []byte, force bool, same func(existing []byte) bool) (wrote bool, err error) {
 	target, err := resolveSymlinks(path)
 	if err != nil {
 		return false, fmt.Errorf("resolving %s: %w", path, err)
@@ -273,7 +337,7 @@ func writeConfig(path string, data []byte, force bool) (wrote bool, err error) {
 	existing, err := os.ReadFile(target)
 	switch {
 	case err == nil:
-		if bytes.Equal(existing, data) {
+		if bytes.Equal(existing, data) || (same != nil && same(existing)) {
 			return false, nil
 		}
 		if !force {
@@ -295,6 +359,9 @@ func writeConfig(path string, data []byte, force bool) (wrote bool, err error) {
 	return true, nil
 }
 
+// geteuid is os.Geteuid, replaceable in tests.
+var geteuid = os.Geteuid
+
 // resolveSymlinks follows path through any chain of symlinks to the file it
 // names. Unlike filepath.EvalSymlinks it succeeds when the final target does
 // not exist yet (a dotfiles link created before its source), returning where
@@ -312,6 +379,13 @@ func resolveSymlinks(path string) (string, error) {
 		if info.Mode()&fs.ModeSymlink == 0 {
 			return p, nil
 		}
+		// Running as root, a link another user could have planted would let
+		// them point root's write anywhere. Only follow links root owns.
+		if geteuid() == 0 {
+			if uid, ok := ownerUID(info); !ok || uid != 0 {
+				return "", fmt.Errorf("refusing to follow %s as root: the symlink is not owned by root; run zen setup as the user who runs zen", p)
+			}
+		}
 		link, err := os.Readlink(p)
 		if err != nil {
 			return "", err
@@ -328,6 +402,15 @@ func resolveSymlinks(path string) (string, error) {
 		p = link
 	}
 	return "", fmt.Errorf("too many levels of symbolic links")
+}
+
+// ownerUID returns the uid that owns the file info describes.
+func ownerUID(info fs.FileInfo) (uint32, bool) {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return st.Uid, true
 }
 
 // replaceFile atomically replaces path with data: it writes a temporary file
@@ -478,9 +561,9 @@ func runInteractiveSetup(opts setupOptions) error {
 	}
 
 	cfg := newSetupConfig(repoMap, authorList, agentChoice, terminalChoice)
-	data, err := yaml.Marshal(&cfg)
+	data, err := marshalConfig(&cfg)
 	if err != nil {
-		return fmt.Errorf("marshalling config: %w", err)
+		return err
 	}
 	// Answers are checked as they are given; this applies the same final check
 	// as an unattended install so the two can never write different things.
@@ -488,7 +571,7 @@ func runInteractiveSetup(opts setupOptions) error {
 		return err
 	}
 	// The user already confirmed overwriting an existing config above.
-	if _, err := writeConfig(configPath, data, true); err != nil {
+	if _, err := writeConfig(configPath, data, true, nil); err != nil {
 		return err
 	}
 
