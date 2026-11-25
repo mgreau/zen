@@ -2,6 +2,7 @@ package board
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -57,9 +58,12 @@ type Model struct {
 	myRows      []MyPRRow
 	reviewRows  []ReviewRow
 
-	focus       Focus
-	loading     bool
-	err         error
+	focus   Focus
+	loading bool
+	err     error
+	// warning is set when the last refresh succeeded with incomplete
+	// results (see FetchMyPRs); the tables still show what came back.
+	warning     error
 	statusMsg   string
 	lastUpdated time.Time
 	width       int
@@ -113,11 +117,13 @@ const (
 	defaultTableHeight = 8
 )
 
-// dataMsg carries the result of a fetch.
+// dataMsg carries the result of a fetch. err means nothing usable came back;
+// warning means the rows are usable but incomplete.
 type dataMsg struct {
 	myRows     []MyPRRow
 	reviewRows []ReviewRow
 	err        error
+	warning    error
 }
 
 // tickMsg fires the periodic auto-refresh.
@@ -147,13 +153,24 @@ func fetchCmd(cfg *config.Config) tea.Cmd {
 			reviewRows, err2 = FetchReviewRequests(ctx, cfg)
 		}()
 		wg.Wait()
-
-		err := err1
-		if err == nil {
-			err = err2
-		}
-		return dataMsg{myRows: myRows, reviewRows: reviewRows, err: err}
+		return newDataMsg(myRows, err1, reviewRows, err2)
 	}
+}
+
+// newDataMsg combines the two fetches' results. A partial result from
+// FetchMyPRs (an error wrapping *github.PartialError) becomes a warning so its
+// rows are still shown; any other error from either fetch is a failure.
+func newDataMsg(myRows []MyPRRow, myErr error, reviewRows []ReviewRow, reviewErr error) dataMsg {
+	var warning error
+	var partial *github.PartialError
+	if errors.As(myErr, &partial) {
+		warning, myErr = myErr, nil
+	}
+	err := myErr
+	if err == nil {
+		err = reviewErr
+	}
+	return dataMsg{myRows: myRows, reviewRows: reviewRows, err: err, warning: warning}
 }
 
 func tickCmd() tea.Cmd {
@@ -204,6 +221,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = nil
+		m.warning = msg.warning
 		m.myRows = msg.myRows
 		m.reviewRows = msg.reviewRows
 		// Row counts just changed, so table heights (computed from row

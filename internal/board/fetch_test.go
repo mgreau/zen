@@ -2,6 +2,8 @@ package board
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/mgreau/zen/internal/config"
@@ -97,3 +99,74 @@ func TestMyPRRows_sameRepoNameUnderTwoOwnersStaysDistinct(t *testing.T) {
 		}
 	}
 }
+
+func useGetMyOpenPRs(t *testing.T, prs []github.MyPR, err error) {
+	t.Helper()
+	old := getMyOpenPRs
+	getMyOpenPRs = func(context.Context, string) ([]github.MyPR, error) { return prs, err }
+	t.Cleanup(func() { getMyOpenPRs = old })
+}
+
+func TestFetchMyPRs_partialResultKeepsRows(t *testing.T) {
+	useGetMyOpenPRs(t,
+		[]github.MyPR{{Number: 7, Repository: github.RepoInfo{NameWithOwner: "me/tools"}}},
+		&github.PartialError{Errors: []github.GraphQLError{{Type: "FORBIDDEN", Message: "SAML enforcement"}}},
+	)
+
+	rows, err := FetchMyPRs(context.Background(), &config.Config{})
+
+	var partial *github.PartialError
+	if !errors.As(err, &partial) {
+		t.Fatalf("err = %v, want it to wrap *github.PartialError", err)
+	}
+	if len(rows) != 1 || rows[0].Number != 7 {
+		t.Fatalf("rows = %+v, want PR #7 despite the partial error", rows)
+	}
+}
+
+func TestFetchMyPRs_totalFailureReturnsNoRows(t *testing.T) {
+	useGetMyOpenPRs(t, nil, errors.New("GraphQL query failed: HTTP 401"))
+
+	rows, err := FetchMyPRs(context.Background(), &config.Config{})
+
+	if err == nil || rows != nil {
+		t.Fatalf("got %v, %v; want nil rows and an error", rows, err)
+	}
+}
+
+func TestBoard_partialResultShowsRowsAndWarning(t *testing.T) {
+	partial := &github.PartialError{Errors: []github.GraphQLError{{Message: "Resource protected by organization SAML enforcement."}}}
+	rows := []MyPRRow{{Number: 7, Repo: "me/tools", Title: "mine"}}
+
+	msg := newDataMsg(rows, wrapFetchErr(partial), nil, nil)
+	if msg.err != nil {
+		t.Fatalf("partial result reported as failure: %v", msg.err)
+	}
+	updated, _ := NewModel(&config.Config{}).Update(msg)
+	m := updated.(Model)
+
+	if len(m.myRows) != 1 {
+		t.Fatalf("board shows %d rows, want the 1 that came back", len(m.myRows))
+	}
+	view := m.View()
+	if !strings.Contains(view, "Warning:") || !strings.Contains(view, "SAML") {
+		t.Errorf("view does not surface the partial-result warning:\n%s", view)
+	}
+	if strings.Contains(view, "Error:") {
+		t.Errorf("partial result rendered as an error:\n%s", view)
+	}
+}
+
+func TestBoard_totalFailureShowsError(t *testing.T) {
+	msg := newDataMsg(nil, errors.New("fetching your PRs: GraphQL query failed: HTTP 401"), nil, nil)
+	if msg.err == nil || msg.warning != nil {
+		t.Fatalf("total failure: err = %v, warning = %v; want an error and no warning", msg.err, msg.warning)
+	}
+	updated, _ := NewModel(&config.Config{}).Update(msg)
+	if view := updated.(Model).View(); !strings.Contains(view, "Error:") {
+		t.Errorf("view does not report the failure:\n%s", view)
+	}
+}
+
+// wrapFetchErr wraps err the way FetchMyPRs does.
+func wrapFetchErr(err error) error { return errors.Join(errors.New("fetching your PRs"), err) }

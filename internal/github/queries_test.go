@@ -102,12 +102,12 @@ func TestBuildMyOpenPRsQuery(t *testing.T) {
 	}{
 		{
 			name: "no repo",
-			want: "is:pr is:open author:@me",
+			want: "is:pr is:open author:@me sort:created-asc",
 		},
 		{
 			name:       "with repo",
 			repoFilter: "owner/repo",
-			want:       "is:pr is:open author:@me repo:owner/repo",
+			want:       "is:pr is:open author:@me repo:owner/repo sort:created-asc",
 		},
 	}
 	for _, tt := range tests {
@@ -537,5 +537,143 @@ func TestGetReviewRequestsForRepos_noRepos(t *testing.T) {
 	}
 	if len(f.queries) != 0 {
 		t.Fatalf("queried GitHub with no configured repos: %v", f.queries)
+	}
+}
+
+// myPRPages serves n PRs, searchPageSize at a time, the way GitHub paginates
+// a search; it records each request's cursor and query.
+type myPRPages struct {
+	n       int
+	afters  []string
+	queries []string
+}
+
+func (f *myPRPages) run(_ context.Context, args ...string) ([]byte, error) {
+	var q, after string
+	for _, a := range args {
+		if v, ok := strings.CutPrefix(a, "q="); ok {
+			q = v
+		}
+		if v, ok := strings.CutPrefix(a, "after="); ok {
+			after = v
+		}
+	}
+	f.queries = append(f.queries, q)
+	f.afters = append(f.afters, after)
+	start := 0
+	if after != "" {
+		start, _ = strconv.Atoi(after)
+	}
+	end := min(start+searchPageSize, f.n)
+	nodes := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		nodes = append(nodes, fmt.Sprintf(`{"number":%d,"repository":{"nameWithOwner":"owner/r%d"}}`, i+1, i%3))
+	}
+	return fmt.Appendf(nil, `{"data":{"search":{"pageInfo":{"hasNextPage":%t,"endCursor":"%d"},"nodes":[%s]}}}`,
+		end < f.n, end, strings.Join(nodes, ",")), nil
+}
+
+func useRunGH(t *testing.T, f func(context.Context, ...string) ([]byte, error)) {
+	t.Helper()
+	old := runGH
+	runGH = f
+	t.Cleanup(func() { runGH = old })
+}
+
+func TestGetMyOpenPRs_returnsEveryPage(t *testing.T) {
+	// 130 PRs is three pages; the old single first:100 query returned 100.
+	f := &myPRPages{n: 130}
+	useRunGH(t, f.run)
+
+	got, err := GetMyOpenPRs(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 130 {
+		t.Fatalf("got %d PRs, want 130 (pagination stopped early)", len(got))
+	}
+	for i, pr := range got {
+		if pr.Number != i+1 {
+			t.Fatalf("result %d is #%d, want #%d (order not preserved across pages)", i, pr.Number, i+1)
+		}
+	}
+	if want := []string{"", "50", "100"}; fmt.Sprint(f.afters) != fmt.Sprint(want) {
+		t.Fatalf("cursors = %q, want %q", f.afters, want)
+	}
+	for _, q := range f.queries {
+		if !strings.Contains(q, "sort:created-asc") {
+			t.Fatalf("query %q has no deterministic sort", q)
+		}
+	}
+}
+
+// samlPartialResponse is what `gh api graphql` prints on stdout, while exiting
+// 1, when a search hits a PR in an organization that enforces SAML SSO the
+// token is not authorized for: data with that node nulled, plus a FORBIDDEN
+// error. The envelope matches gh 2.96's real output for a partial NOT_FOUND
+// error; the error entry follows GitHub's documented SAML failure.
+const samlPartialResponse = `{"data":{"search":{"pageInfo":{"hasNextPage":false,"endCursor":"Y3Vyc29yOjM="},"nodes":[` +
+	`{"number":7,"title":"mine","repository":{"nameWithOwner":"me/tools"}},` +
+	`null,` +
+	`{"number":9,"title":"also mine","repository":{"nameWithOwner":"open/source"}}]}},` +
+	`"errors":[{"type":"FORBIDDEN","path":["search","nodes",1],"extensions":{"saml_failure":true},` +
+	`"locations":[{"line":6,"column":7}],"message":"Resource protected by organization SAML enforcement. ` +
+	`You must grant your OAuth token access to this organization."}]}`
+
+func TestGetMyOpenPRs_partialErrorKeepsResults(t *testing.T) {
+	useRunGH(t, func(context.Context, ...string) ([]byte, error) {
+		return []byte(samlPartialResponse), errors.New("exit status 1")
+	})
+
+	got, err := GetMyOpenPRs(context.Background(), "")
+
+	var partial *PartialError
+	if !errors.As(err, &partial) {
+		t.Fatalf("err = %v, want a *PartialError", err)
+	}
+	if !strings.Contains(err.Error(), "SAML") {
+		t.Errorf("error %q does not say what was withheld", err)
+	}
+	if len(got) != 2 || got[0].Number != 7 || got[1].Number != 9 {
+		t.Fatalf("got %+v, want PRs #7 and #9 (the withheld node dropped)", got)
+	}
+}
+
+func TestGetMyOpenPRs_totalFailureReturnsError(t *testing.T) {
+	for name, stdout := range map[string]string{
+		"errors only": `{"errors":[{"type":"FORBIDDEN","message":"Resource not accessible by integration"}]}`,
+		"no output":   ``,
+		"null search": `{"data":{"search":null},"errors":[{"type":"FORBIDDEN","message":"nope"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			useRunGH(t, func(context.Context, ...string) ([]byte, error) {
+				return []byte(stdout), errors.New("exit status 1")
+			})
+
+			got, err := GetMyOpenPRs(context.Background(), "")
+
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			var partial *PartialError
+			if errors.As(err, &partial) {
+				t.Fatalf("err = %v, a total failure must not look partial", err)
+			}
+			if got != nil {
+				t.Fatalf("got %+v, want no results", got)
+			}
+		})
+	}
+}
+
+func TestSearchReviewRequests_partialErrorStillFails(t *testing.T) {
+	// The daemon acts on review requests, so it keeps failing closed.
+	useRunGH(t, func(context.Context, ...string) ([]byte, error) {
+		return []byte(samlPartialResponse), errors.New("exit status 1")
+	})
+
+	got, err := searchReviewRequests(context.Background(), "is:pr is:open review-requested:@me")
+	if err == nil || got != nil {
+		t.Fatalf("got %v, %v; want nil results and an error", got, err)
 	}
 }

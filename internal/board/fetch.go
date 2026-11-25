@@ -2,6 +2,7 @@ package board
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -82,16 +83,31 @@ func ageOf(createdAt string) (string, int) {
 // status bucket and ordered by dependency chain (a PR immediately followed by
 // anything stacked on top of it), with chains and independent PRs ranked by
 // status priority then age (oldest first).
+//
+// When GitHub returns some PRs and some errors, for example FORBIDDEN on PRs
+// in an organization whose SAML SSO the gh token is not authorized for,
+// FetchMyPRs returns the rows it got together with an error wrapping a
+// *github.PartialError. Callers should show those rows and treat the error as
+// a warning. Any other error comes with nil rows.
 func FetchMyPRs(ctx context.Context, cfg *config.Config) ([]MyPRRow, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 
-	prs, err := github.GetMyOpenPRs(ctx, "")
-	if err != nil {
+	prs, err := getMyOpenPRs(ctx, "")
+	var partial *github.PartialError
+	if err != nil && !errors.As(err, &partial) {
 		return nil, fmt.Errorf("fetching your PRs: %w", err)
 	}
-	return orderWithDependencies(myPRRows(cfg, prs)), nil
+	rows := orderWithDependencies(myPRRows(cfg, prs))
+	if err != nil {
+		return rows, fmt.Errorf("fetching your PRs: %w", err)
+	}
+	return rows, nil
 }
+
+// getMyOpenPRs is github.GetMyOpenPRs, swappable so tests can feed FetchMyPRs
+// canned results and errors.
+var getMyOpenPRs = github.GetMyOpenPRs
 
 // myPRRows turns search results into table rows. A PR in a configured repo is
 // labelled with its config short name; one anywhere else keeps its
