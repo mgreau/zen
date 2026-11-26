@@ -2,12 +2,16 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"embed"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/config"
@@ -16,117 +20,297 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// EmbeddedCommands holds the embedded Claude Code command files.
-// Set by main.go before Execute().
-var EmbeddedCommands embed.FS
+// EmbeddedCommands holds the embedded slash-command prompt files under
+// commands/. Set by main.go before Execute().
+var EmbeddedCommands fs.FS = embed.FS{}
 
 var setupCmd = &cobra.Command{
 	Use:   "setup",
-	Short: "Interactive setup to create ~/.zen/config.yaml",
-	RunE:  runSetup,
+	Short: "Create ~/.zen/config.yaml (interactive, or unattended with flags)",
+	Long: `Create ~/.zen/config.yaml and install the agent's slash-command prompts.
+
+With no flags, setup asks for each value on the terminal.
+
+For unattended installs (machine provisioning, dotfiles, CI), pass the config
+as flags or as a file and setup runs without prompting:
+
+  zen setup --repo app=octo-sts/app:~/git/repo-octo-sts-app \
+            --author mattmoor --author wlynch --terminal tmux
+
+  zen setup --config-file ./zen-config.yaml     # or - to read stdin
+
+A --repo value is [short=]owner/name:base_path; short defaults to name.
+
+Unattended setup is idempotent. When ~/.zen/config.yaml already configures
+zen the same way it is left alone (for --config-file, only an identical file
+counts), and when it differs setup fails unless you pass --force. Setup from
+flags writes only the values you give; everything else takes zen's
+defaults. Prompts that are already installed are kept. The config is checked
+with the same rules zen uses when it loads it, so a bad value fails the
+install instead of the first zen command after it.`,
+	Args: cobra.NoArgs,
+	RunE: runSetup,
 }
 
+var setupOpts setupOptions
+
 func init() {
+	f := setupCmd.Flags()
+	f.BoolVar(&setupOpts.nonInteractive, "non-interactive", false, "Never prompt; fail if required values are missing")
+	f.StringVar(&setupOpts.configFile, "config-file", "", "Install this config file (- reads stdin) instead of building one from flags")
+	f.StringArrayVar(&setupOpts.repos, "repo", nil, "Repository as [short=]owner/name:base_path (repeatable)")
+	f.StringSliceVar(&setupOpts.authors, "author", nil, "GitHub username for PR filtering (repeatable or comma-separated)")
+	f.StringVar(&setupOpts.agent, "agent", "", `Coding agent: "claude" (default) or "codex"`)
+	f.StringVar(&setupOpts.terminal, "terminal", "", `Terminal: "iterm", "ghostty", "kitty", "macos", or "tmux" (default: tmux inside tmux, else iterm)`)
+	f.StringVar(&setupOpts.branchPrefix, "branch-prefix", "", "Prefix for feature branch names (default: git user.name)")
+	f.BoolVar(&setupOpts.force, "force", false, "Overwrite an existing config that differs")
+	f.BoolVar(&setupOpts.skipPrompts, "skip-prompts", false, "Do not install the agent's slash-command prompts")
 	rootCmd.AddCommand(setupCmd)
 }
 
+// setupOptions are the flags of zen setup.
+type setupOptions struct {
+	nonInteractive bool
+	configFile     string
+	repos          []string
+	authors        []string
+	agent          string
+	terminal       string
+	branchPrefix   string
+	force          bool
+	skipPrompts    bool
+}
+
+// hasConfigFlags reports whether any flag that builds the config was given.
+func (o setupOptions) hasConfigFlags() bool {
+	return len(o.repos) > 0 || len(o.authors) > 0 || o.agent != "" || o.terminal != "" || o.branchPrefix != ""
+}
+
+// unattended reports whether setup runs without prompting.
+func (o setupOptions) unattended() bool {
+	return o.nonInteractive || o.configFile != "" || o.hasConfigFlags()
+}
+
 func runSetup(cmd *cobra.Command, args []string) error {
-	scanner := bufio.NewScanner(os.Stdin)
+	if setupOpts.unattended() {
+		return runUnattendedSetup(setupOpts, cmd.InOrStdin(), cmd.OutOrStdout())
+	}
+	return runInteractiveSetup(setupOpts)
+}
 
-	configPath := filepath.Join(config.Dir(), "config.yaml")
-
-	fmt.Println()
-	fmt.Println(ui.BoldText("Zen Setup"))
-	fmt.Println("═══════════════════════════════════════════════════════════════")
-	fmt.Println()
-	fmt.Println("Prerequisites:")
-	fmt.Println("  gh auth login         — authenticate GitHub CLI")
-	fmt.Println("  a terminal emulator   — iTerm2, Ghostty, kitty, or macOS Terminal")
-	fmt.Println("  claude or codex CLI   — the coding agent zen launches")
-	fmt.Println()
-
-	// Check for existing config
-	if _, err := os.Stat(configPath); err == nil {
-		fmt.Printf("Config already exists: %s\n", configPath)
-		fmt.Print("Overwrite? [y/N]: ")
-		scanner.Scan()
-		if strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
-			fmt.Println("Setup cancelled.")
-			return nil
-		}
-		fmt.Println()
+// runUnattendedSetup writes the config described by opts without prompting.
+func runUnattendedSetup(opts setupOptions, stdin io.Reader, out io.Writer) error {
+	data, err := unattendedConfigData(opts, stdin)
+	if err != nil {
+		return err
 	}
 
-	// Collect repos
-	var repos []repoInput
-	for {
-		fmt.Println(ui.BoldText(fmt.Sprintf("Repository %d", len(repos)+1)))
-		fmt.Println("───────────────────────────────────────────────────────────────")
-
-		shortName := prompt(scanner, "Short name (e.g. apko)", "apko")
-		fullName := promptRequired(scanner, "GitHub full name (e.g. chainguard-dev/apko)")
-		basePath := promptRequired(scanner, "Base path for worktrees (e.g. ~/git/repo-apko)")
-
-		repos = append(repos, repoInput{
-			Short:    shortName,
-			FullName: fullName,
-			BasePath: basePath,
-		})
-		fmt.Println()
-
-		fmt.Print("Add another repo? [y/N]: ")
-		scanner.Scan()
-		if strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
-			fmt.Println()
-			break
-		}
-		fmt.Println()
+	if err := validateSetupConfig(data); err != nil {
+		return err
+	}
+	parsed, err := config.ParseStrict(data)
+	if err != nil {
+		return fmt.Errorf("invalid config: %w", err)
 	}
 
-	// Collect authors
-	fmt.Println("───────────────────────────────────────────────────────────────")
-	authors := promptRequired(scanner, "GitHub username(s) for PR filtering (comma-separated)")
-	fmt.Println()
-
-	// Choose the coding agent
-	agentChoice := prompt(scanner, "Coding agent (claude or codex)", "claude")
-	agentChoice = strings.ToLower(strings.TrimSpace(agentChoice))
-	if agentChoice != "claude" && agentChoice != "codex" {
-		fmt.Printf("  Unknown agent %q, defaulting to claude\n", agentChoice)
-		agentChoice = "claude"
-	}
-	fmt.Println()
-
-	terminalChoice := prompt(scanner, "Terminal (iterm, ghostty, kitty, or macos)", "iterm")
-	terminalChoice = strings.ToLower(strings.TrimSpace(terminalChoice))
-	if terminalChoice != "iterm" && terminalChoice != "ghostty" && terminalChoice != "kitty" && terminalChoice != "macos" {
-		fmt.Printf("  Unknown terminal %q, defaulting to iterm\n", terminalChoice)
-		terminalChoice = "iterm"
-	}
-	fmt.Println()
-
-	// Build config
-	repoMap := make(map[string]config.RepoConfig, len(repos))
-	for _, r := range repos {
-		repoMap[r.Short] = config.RepoConfig{
-			FullName: r.FullName,
-			BasePath: r.BasePath,
+	// A --config-file is installed exactly, so any byte change (comments
+	// included) counts. A config built from flags counts as unchanged when it
+	// configures zen the same way as the file already there, so re-running the
+	// same install still succeeds after an upgrade adds config keys.
+	var same func([]byte) bool
+	if opts.configFile == "" {
+		same = func(existing []byte) bool {
+			old, err := config.Parse(existing)
+			return err == nil && old.Equivalent(parsed)
 		}
 	}
 
-	authorList := strings.Split(authors, ",")
-	for i, a := range authorList {
-		authorList[i] = strings.TrimSpace(a)
+	configPath := config.Path()
+	wrote, err := writeConfig(configPath, data, opts.force, same)
+	if err != nil {
+		return err
+	}
+	if wrote {
+		fmt.Fprintf(out, "Config written to %s\n", configPath)
+	} else {
+		fmt.Fprintf(out, "Config unchanged: %s\n", configPath)
+	}
+	if len(parsed.Authors) == 0 {
+		fmt.Fprintln(out, "Note: no authors configured; the daemon will not create review worktrees on its own")
 	}
 
+	if opts.skipPrompts {
+		return nil
+	}
+	ag := parsed.NewAgent("")
+	installed, err := installPrompts(ag)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Installed %d new %s prompt(s) in %s\n", installed, ag.Kind(), ag.PromptsDir())
+	return nil
+}
+
+// validateSetupConfig is the check every config setup writes must pass: a
+// strict parse (unknown keys and extra documents fail, agent and terminal are
+// checked as Load checks them) plus the repo rules in Config.ValidateRepos.
+func validateSetupConfig(data []byte) error {
+	parsed, err := config.ParseStrict(data)
+	if err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+	if err := parsed.ValidateRepos(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+	return nil
+}
+
+// unattendedConfigData returns the config YAML to install: the --config-file
+// contents as given (comments kept), or a config built from the flags.
+func unattendedConfigData(opts setupOptions, stdin io.Reader) ([]byte, error) {
+	if opts.configFile != "" {
+		if opts.hasConfigFlags() {
+			return nil, errors.New("--config-file cannot be combined with --repo, --author, --agent, --terminal, or --branch-prefix")
+		}
+		if opts.configFile == "-" {
+			data, err := io.ReadAll(stdin)
+			if err != nil {
+				return nil, fmt.Errorf("reading config from stdin: %w", err)
+			}
+			return data, nil
+		}
+		data, err := os.ReadFile(opts.configFile)
+		if err != nil {
+			return nil, fmt.Errorf("reading config file: %w", err)
+		}
+		return data, nil
+	}
+
+	if len(opts.repos) == 0 {
+		return nil, errors.New("unattended setup needs at least one --repo, or a --config-file")
+	}
+	repos := make(map[string]config.RepoConfig, len(opts.repos))
+	for _, spec := range opts.repos {
+		short, repo, err := parseRepoFlag(spec)
+		if err != nil {
+			return nil, err
+		}
+		if _, dup := repos[short]; dup {
+			return nil, fmt.Errorf("--repo %q: short name %q given twice", spec, short)
+		}
+		repos[short] = repo
+	}
+
+	var authors []string
+	for _, a := range opts.authors {
+		if a = strings.TrimSpace(a); a != "" {
+			authors = append(authors, a)
+		}
+	}
+
+	// Write only what was given. Everything else takes zen's defaults when it
+	// loads the config, so a later release that changes a default changes
+	// this machine too, instead of the old value being pinned in the file.
 	cfg := config.Config{
-		Repos:        repoMap,
-		Authors:      authorList,
+		Repos:        repos,
+		Authors:      authors,
+		Agent:        strings.ToLower(strings.TrimSpace(opts.agent)),
+		Terminal:     strings.ToLower(strings.TrimSpace(opts.terminal)),
+		BranchPrefix: strings.TrimSpace(opts.branchPrefix),
+	}
+	return marshalConfig(&cfg)
+}
+
+// marshalConfig renders cfg as YAML without the keys left at their zero value
+// (empty strings and lists, false, 0, and sections with nothing set).
+func marshalConfig(cfg *config.Config) ([]byte, error) {
+	var doc yaml.Node
+	if err := doc.Encode(cfg); err != nil {
+		return nil, fmt.Errorf("marshalling config: %w", err)
+	}
+	pruneZero(&doc)
+	data, err := yaml.Marshal(&doc)
+	if err != nil {
+		return nil, fmt.Errorf("marshalling config: %w", err)
+	}
+	return data, nil
+}
+
+// pruneZero drops mapping entries whose value is a zero scalar or an empty
+// sequence or mapping, recursively, and reports whether n is empty itself.
+func pruneZero(n *yaml.Node) bool {
+	switch n.Kind {
+	case yaml.DocumentNode:
+		for _, c := range n.Content {
+			pruneZero(c)
+		}
+		return false
+	case yaml.MappingNode:
+		kept := n.Content[:0]
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if !pruneZero(n.Content[i+1]) {
+				kept = append(kept, n.Content[i], n.Content[i+1])
+			}
+		}
+		n.Content = kept
+		return len(n.Content) == 0
+	case yaml.SequenceNode:
+		return len(n.Content) == 0
+	case yaml.ScalarNode:
+		switch n.Tag {
+		case "!!null":
+			return true
+		case "!!str":
+			return n.Value == ""
+		case "!!bool":
+			return n.Value == "false"
+		case "!!int":
+			return n.Value == "0"
+		}
+	}
+	return false
+}
+
+// parseRepoFlag parses a --repo value, [short=]owner/name:base_path. The short
+// name defaults to the repository name.
+func parseRepoFlag(spec string) (string, config.RepoConfig, error) {
+	rest := spec
+	short := ""
+	// A short name cannot contain "/", so an "=" after the owner/ belongs to
+	// the base path rather than separating a short name.
+	if before, after, ok := strings.Cut(spec, "="); ok && !strings.Contains(before, "/") {
+		short, rest = strings.TrimSpace(before), after
+		if short == "" {
+			return "", config.RepoConfig{}, fmt.Errorf("--repo %q: empty short name before =", spec)
+		}
+	}
+	fullName, basePath, ok := strings.Cut(rest, ":")
+	fullName, basePath = strings.TrimSpace(fullName), strings.TrimSpace(basePath)
+	if !ok || basePath == "" {
+		return "", config.RepoConfig{}, fmt.Errorf("--repo %q: want [short=]owner/name:base_path", spec)
+	}
+	_, name, ok := strings.Cut(fullName, "/")
+	if !ok || name == "" {
+		return "", config.RepoConfig{}, fmt.Errorf("--repo %q: %q is not owner/name", spec, fullName)
+	}
+	if short == "" {
+		short = name
+	}
+	return short, config.RepoConfig{FullName: fullName, BasePath: basePath}, nil
+}
+
+// newSetupConfig is the config setup writes, with the daemon defaults spelled
+// out so they are visible to edit. An empty terminal is left unset so zen picks
+// one when it runs (tmux inside a tmux session, iTerm otherwise).
+func newSetupConfig(repos map[string]config.RepoConfig, authors []string, agentKind, terminal string) config.Config {
+	return config.Config{
+		Repos:        repos,
+		Authors:      authors,
 		PollInterval: "5m",
-		Agent:        agentChoice,
+		Agent:        agentKind,
 		ClaudeBin:    "claude",
 		CodexBin:     "codex",
-		Terminal:     terminalChoice,
+		Terminal:     terminal,
 		Watch: config.WatchConfig{
 			DispatchInterval:  "10s",
 			CleanupInterval:   "1h",
@@ -135,31 +319,272 @@ func runSetup(cmd *cobra.Command, args []string) error {
 			MaxRetries:        5,
 		},
 	}
+}
 
-	// Marshal to YAML
-	data, err := yaml.Marshal(&cfg)
+// writeConfig writes data to path. An existing file with the same bytes, or
+// one that same (if not nil) accepts, is left alone (wrote is false); any
+// other existing file is replaced only when force is set. The write goes through a temporary file and a rename so
+// a running daemon, which reloads config on every poll, never reads half a
+// file. A symlinked config (stow, chezmoi, home-manager) is written through
+// to its target, even one that does not exist yet, so the link survives, and
+// a replaced file keeps its mode.
+func writeConfig(path string, data []byte, force bool, same func(existing []byte) bool) (wrote bool, err error) {
+	target, err := resolveSymlinks(path)
 	if err != nil {
-		return fmt.Errorf("marshalling config: %w", err)
+		return false, fmt.Errorf("resolving %s: %w", path, err)
+	}
+	mode := fs.FileMode(0o644)
+	existing, err := os.ReadFile(target)
+	switch {
+	case err == nil:
+		if bytes.Equal(existing, data) || (same != nil && same(existing)) {
+			return false, nil
+		}
+		if !force {
+			return false, fmt.Errorf("%s already exists with different content; pass --force to overwrite it", path)
+		}
+		if info, err := os.Stat(target); err == nil {
+			mode = info.Mode().Perm()
+		}
+	case !errors.Is(err, fs.ErrNotExist):
+		return false, fmt.Errorf("reading existing config: %w", err)
 	}
 
-	// Ensure ~/.zen directory exists
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+	if err := replaceFile(target, data, mode); err != nil {
+		if target != path {
+			return false, fmt.Errorf("%s is a symlink to %s, which cannot be replaced (if another tool manages it, change its source instead): %w", path, target, err)
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// geteuid is os.Geteuid, replaceable in tests.
+var geteuid = os.Geteuid
+
+// resolveSymlinks follows path through any chain of symlinks to the file it
+// names. Unlike filepath.EvalSymlinks it succeeds when the final target does
+// not exist yet (a dotfiles link created before its source), returning where
+// that target would be.
+func resolveSymlinks(path string) (string, error) {
+	p := path
+	for range 40 {
+		info, err := os.Lstat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return p, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&fs.ModeSymlink == 0 {
+			return p, nil
+		}
+		// Running as root, a link another user could have planted would let
+		// them point root's write anywhere. Only follow links root owns.
+		if geteuid() == 0 {
+			if uid, ok := ownerUID(info); !ok || uid != 0 {
+				return "", fmt.Errorf("refusing to follow %s as root: the symlink is not owned by root; run zen setup as the user who runs zen", p)
+			}
+		}
+		link, err := os.Readlink(p)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(link) {
+			// Resolve the link's own directory first so ".." in a relative
+			// link means what it means to the kernel.
+			dir, err := filepath.EvalSymlinks(filepath.Dir(p))
+			if err != nil {
+				return "", err
+			}
+			link = filepath.Join(dir, link)
+		}
+		p = link
+	}
+	return "", fmt.Errorf("too many levels of symbolic links")
+}
+
+// ownerUID returns the uid that owns the file info describes.
+func ownerUID(info fs.FileInfo) (uint32, bool) {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return st.Uid, true
+}
+
+// replaceFile atomically replaces path with data: it writes a temporary file
+// in the same directory and renames it over path.
+func replaceFile(path string, data []byte, mode fs.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating directory: %w", err)
 	}
-
-	// Write config file
-	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
+	if err != nil {
 		return fmt.Errorf("writing config: %w", err)
+	}
+	defer os.Remove(tmp.Name()) // no-op after a successful rename
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("writing config: %w", err)
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return fmt.Errorf("writing config: %w", err)
+	}
+	// Flush before the rename, or a crash right after provisioning can leave
+	// an empty config.yaml on some filesystems.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("writing config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+	// Persist the rename too. Best effort: not every platform can sync a
+	// directory, and the file itself is already on disk.
+	if d, err := os.Open(dir); err == nil {
+		d.Sync()
+		d.Close()
+	}
+	return nil
+}
+
+// errStdinClosed is returned when interactive setup runs out of input, such
+// as when a provisioning script runs zen setup without a terminal.
+var errStdinClosed = errors.New("stdin closed before setup finished; for an unattended install pass --repo or --config-file (see zen setup --help)")
+
+// runInteractiveSetup asks for each value on the terminal. --force skips the
+// overwrite question and --skip-prompts skips installing prompts.
+func runInteractiveSetup(opts setupOptions) error {
+	scanner := bufio.NewScanner(os.Stdin)
+
+	configPath := config.Path()
+
+	fmt.Println()
+	fmt.Println(ui.BoldText("Zen Setup"))
+	fmt.Println("═══════════════════════════════════════════════════════════════")
+	fmt.Println()
+	fmt.Println("Prerequisites:")
+	fmt.Println("  gh auth login         — authenticate GitHub CLI")
+	fmt.Println("  a terminal emulator   — iTerm2, Ghostty, kitty, macOS Terminal, or tmux")
+	fmt.Println("  claude or codex CLI   — the coding agent zen launches")
+	fmt.Println()
+
+	// Check for existing config
+	if _, err := os.Stat(configPath); err == nil && !opts.force {
+		fmt.Printf("Config already exists: %s\n", configPath)
+		fmt.Print("Overwrite? [y/N]: ")
+		answer, err := readLine(scanner)
+		if err != nil {
+			return err
+		}
+		if strings.ToLower(answer) != "y" {
+			fmt.Println("Setup cancelled.")
+			return nil
+		}
+		fmt.Println()
+	}
+
+	// Collect repos
+	repoMap := make(map[string]config.RepoConfig)
+	for {
+		fmt.Println(ui.BoldText(fmt.Sprintf("Repository %d", len(repoMap)+1)))
+		fmt.Println("───────────────────────────────────────────────────────────────")
+
+		shortName, err := promptValid(scanner, "Short name (e.g. apko)", "apko", config.ValidateRepoShortName)
+		if err != nil {
+			return err
+		}
+		fullName, err := promptValid(scanner, "GitHub full name (e.g. chainguard-dev/apko)", "", config.ValidateRepoFullName)
+		if err != nil {
+			return err
+		}
+		basePath, err := promptRequired(scanner, "Base path for worktrees (e.g. ~/git/repo-apko)")
+		if err != nil {
+			return err
+		}
+		repoMap[shortName] = config.RepoConfig{FullName: fullName, BasePath: basePath}
+		fmt.Println()
+
+		fmt.Print("Add another repo? [y/N]: ")
+		answer, err := readLine(scanner)
+		if err != nil {
+			return err
+		}
+		fmt.Println()
+		if strings.ToLower(answer) != "y" {
+			break
+		}
+	}
+
+	// Collect authors
+	fmt.Println("───────────────────────────────────────────────────────────────")
+	authors, err := promptRequired(scanner, "GitHub username(s) for PR filtering (comma-separated)")
+	if err != nil {
+		return err
+	}
+	fmt.Println()
+
+	// Choose the coding agent
+	agentChoice, err := prompt(scanner, "Coding agent (claude or codex)", "claude")
+	if err != nil {
+		return err
+	}
+	agentChoice = strings.ToLower(agentChoice)
+	if agentChoice != "claude" && agentChoice != "codex" {
+		fmt.Printf("  Unknown agent %q, defaulting to claude\n", agentChoice)
+		agentChoice = "claude"
+	}
+	fmt.Println()
+
+	terminalChoice, err := prompt(scanner, "Terminal (iterm, ghostty, kitty, macos, or tmux)", "iterm")
+	if err != nil {
+		return err
+	}
+	terminalChoice = strings.ToLower(terminalChoice)
+	switch terminalChoice {
+	case "iterm", "ghostty", "kitty", "macos", "tmux":
+	default:
+		fmt.Printf("  Unknown terminal %q, defaulting to iterm\n", terminalChoice)
+		terminalChoice = "iterm"
+	}
+	fmt.Println()
+
+	authorList := strings.Split(authors, ",")
+	for i, a := range authorList {
+		authorList[i] = strings.TrimSpace(a)
+	}
+
+	cfg := newSetupConfig(repoMap, authorList, agentChoice, terminalChoice)
+	data, err := marshalConfig(&cfg)
+	if err != nil {
+		return err
+	}
+	// Answers are checked as they are given; this applies the same final check
+	// as an unattended install so the two can never write different things.
+	if err := validateSetupConfig(data); err != nil {
+		return err
+	}
+	// The user already confirmed overwriting an existing config above.
+	if _, err := writeConfig(configPath, data, true, nil); err != nil {
+		return err
 	}
 
 	fmt.Println(ui.GreenText("✓ Config written to " + configPath))
 	fmt.Println()
 
 	// Install slash-command prompts for the chosen agent
-	ag := agent.New(agent.Kind(agentChoice), "")
-	installedCount, err := installAgentPrompts(scanner, ag)
-	if err != nil {
-		return err
+	installedCount := 0
+	if !opts.skipPrompts {
+		ag := agent.New(agent.Kind(agentChoice), "")
+		if installedCount, err = installAgentPrompts(scanner, ag); err != nil {
+			return err
+		}
 	}
 
 	fmt.Println("Next steps:")
@@ -179,74 +604,98 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-type repoInput struct {
-	Short    string
-	FullName string
-	BasePath string
+// readLine reads one trimmed line, failing with errStdinClosed at end of input
+// instead of returning "" forever.
+func readLine(scanner *bufio.Scanner) (string, error) {
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return "", fmt.Errorf("reading stdin: %w", err)
+		}
+		fmt.Println()
+		return "", errStdinClosed
+	}
+	return strings.TrimSpace(scanner.Text()), nil
 }
 
 // prompt asks for input with a default value shown in brackets.
-func prompt(scanner *bufio.Scanner, label, defaultVal string) string {
+func prompt(scanner *bufio.Scanner, label, defaultVal string) (string, error) {
 	fmt.Printf("%s [%s]: ", label, defaultVal)
-	scanner.Scan()
-	val := strings.TrimSpace(scanner.Text())
-	if val == "" {
-		return defaultVal
+	val, err := readLine(scanner)
+	if err != nil {
+		return "", err
 	}
-	return val
+	if val == "" {
+		return defaultVal, nil
+	}
+	return val, nil
 }
 
 // promptRequired asks for input and repeats until a non-empty value is given.
-func promptRequired(scanner *bufio.Scanner, label string) string {
+func promptRequired(scanner *bufio.Scanner, label string) (string, error) {
+	return promptValid(scanner, label, "", nil)
+}
+
+// promptValid asks for input until validate accepts it, printing why it did
+// not. An empty answer takes defaultVal; with no default, an answer is
+// required. A nil validate accepts any non-empty answer.
+func promptValid(scanner *bufio.Scanner, label, defaultVal string, validate func(string) error) (string, error) {
 	for {
-		fmt.Printf("%s: ", label)
-		scanner.Scan()
-		val := strings.TrimSpace(scanner.Text())
-		if val != "" {
-			return val
+		if defaultVal != "" {
+			fmt.Printf("%s [%s]: ", label, defaultVal)
+		} else {
+			fmt.Printf("%s: ", label)
 		}
-		fmt.Println("  (required)")
+		val, err := readLine(scanner)
+		if err != nil {
+			return "", err
+		}
+		if val == "" {
+			val = defaultVal
+		}
+		if val == "" {
+			fmt.Println("  (required)")
+			continue
+		}
+		if validate != nil {
+			if err := validate(val); err != nil {
+				fmt.Printf("  %v\n", err)
+				continue
+			}
+		}
+		return val, nil
 	}
 }
 
-// installAgentPrompts prompts the user and installs embedded slash-command
-// prompt files into the chosen agent's prompts directory.
-func installAgentPrompts(scanner *bufio.Scanner, ag agent.Agent) (int, error) {
-	// List available prompts from the embedded FS
+// embeddedPromptNames lists the slash-command prompts built into zen, named
+// without extension.
+func embeddedPromptNames() []string {
 	entries, err := fs.ReadDir(EmbeddedCommands, "commands")
 	if err != nil {
 		// No embedded prompts (shouldn't happen with a proper build)
-		return 0, nil
+		return nil
 	}
-
 	var names []string
 	for _, e := range entries {
 		if !e.IsDir() {
 			names = append(names, strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())))
 		}
 	}
-	if len(names) == 0 {
+	return names
+}
+
+// installPrompts installs every embedded slash-command prompt that the agent
+// does not already have, and returns how many it wrote.
+func installPrompts(ag agent.Agent) (int, error) {
+	entries, err := fs.ReadDir(EmbeddedCommands, "commands")
+	if err != nil {
 		return 0, nil
 	}
-
-	targetDir := ag.PromptsDir()
-	fmt.Printf("Install %s slash-command prompts?\n", ag.Kind())
-	fmt.Printf("  Prompts: %s\n", strings.Join(names, ", "))
-	fmt.Printf("  Target:  %s\n", targetDir)
-	fmt.Print("Install? [Y/n]: ")
-	scanner.Scan()
-	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
-	if answer == "n" || answer == "no" {
-		fmt.Println()
-		return 0, nil
-	}
-
 	installed := 0
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		srcData, err := fs.ReadFile(EmbeddedCommands, filepath.Join("commands", e.Name()))
+		srcData, err := fs.ReadFile(EmbeddedCommands, "commands/"+e.Name())
 		if err != nil {
 			return installed, fmt.Errorf("reading embedded %s: %w", e.Name(), err)
 		}
@@ -259,9 +708,37 @@ func installAgentPrompts(scanner *bufio.Scanner, ag agent.Agent) (int, error) {
 			installed++
 		}
 	}
+	return installed, nil
+}
 
+// installAgentPrompts asks the user, then installs the embedded slash-command
+// prompts into the chosen agent's prompts directory.
+func installAgentPrompts(scanner *bufio.Scanner, ag agent.Agent) (int, error) {
+	names := embeddedPromptNames()
+	if len(names) == 0 {
+		return 0, nil
+	}
+
+	targetDir := ag.PromptsDir()
+	fmt.Printf("Install %s slash-command prompts?\n", ag.Kind())
+	fmt.Printf("  Prompts: %s\n", strings.Join(names, ", "))
+	fmt.Printf("  Target:  %s\n", targetDir)
+	fmt.Print("Install? [Y/n]: ")
+	answer, err := readLine(scanner)
+	if err != nil {
+		return 0, err
+	}
+	answer = strings.ToLower(answer)
+	if answer == "n" || answer == "no" {
+		fmt.Println()
+		return 0, nil
+	}
+
+	installed, err := installPrompts(ag)
+	if err != nil {
+		return installed, err
+	}
 	fmt.Println(ui.GreenText(fmt.Sprintf("✓ Installed %d prompt(s) to %s", installed, targetDir)))
 	fmt.Println()
-
 	return installed, nil
 }

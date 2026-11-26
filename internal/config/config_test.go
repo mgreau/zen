@@ -533,3 +533,37 @@ watch:
 		t.Errorf("CleanupAfterDays = %d, want 7", cfg.Watch.CleanupAfterDays)
 	}
 }
+
+func TestEquivalent(t *testing.T) {
+	parse := func(t *testing.T, s string) *Config {
+		t.Helper()
+		c, err := Parse([]byte(s))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	base := "repos:\n  a:\n    full_name: o/a\n    base_path: /p\nterminal: tmux\n"
+	tests := []struct {
+		name  string
+		other string
+		want  bool
+	}{
+		{"identical", base, true},
+		{"defaults spelled out", base + "poll_interval: 5m\nagent: claude\nclaude_bin: claude\nwatch:\n  dispatch_interval: 10s\n  concurrency: 2\n  max_retries: 5\nslack:\n  emoji: claudecode\n", true},
+		{"same duration written differently", base + "poll_interval: 300s\nwatch:\n  cleanup_after_merge: 60m\n", true},
+		{"empty lists", base + "authors: []\nwatch_paths: []\n", true},
+		{"deprecated key", base + "watch:\n  cleanup_after_days: 9\n", true},
+		{"different value", base + "poll_interval: 10m\n", false},
+		{"different authors", base + "authors: [alice]\n", false},
+		{"different repo", "repos:\n  a:\n    full_name: o/b\n    base_path: /p\nterminal: tmux\n", false},
+		{"digest enabled", base + "watch:\n  digest_interval: 2h\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parse(t, base).Equivalent(parse(t, tt.other)); got != tt.want {
+				t.Errorf("Equivalent = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
