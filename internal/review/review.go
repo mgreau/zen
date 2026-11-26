@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -58,7 +57,7 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 
 	originPath := filepath.Join(basePath, repoShort)
 	worktreeName := wt.PRName(repoShort, prNumber)
-	worktreePath := filepath.Join(basePath, worktreeName)
+	worktreePath := wt.Resolve(cfg, repoShort, worktreeName)
 
 	if _, err := os.Stat(worktreePath); err == nil {
 		return refreshExisting(ctx, ag, repoShort, fullRepo, originPath, worktreePath, prNumber, log, confirmReset)
@@ -77,63 +76,11 @@ func CreateWorktree(ctx context.Context, cfg *config.Config, ag agent.Agent, rep
 
 	log(fmt.Sprintf("PR #%d: %s (by %s)", prNumber, details.Title, details.Author))
 
-	// Create worktree under lock
-	branchName := wt.PRBranch(prNumber)
-
-	repoLock, err := wt.AcquireRepoLock(originPath)
-	if err != nil {
+	// Creation (fetch, worktree add, checkout, nested-exclude, lock cleanup)
+	// lives in worktree.CreateFromPR so the daemon and this path cannot drift.
+	if err := wt.CreateFromPR(ctx, originPath, worktreePath, worktreeName, prNumber, gitTimeout, wt.Logger(log)); err != nil {
 		return nil, err
 	}
-	defer repoLock.Release()
-	wt.GitMu.Lock()
-
-	log(fmt.Sprintf("Fetching pull/%d/head...", prNumber))
-	gitCtx, cancel := context.WithTimeout(ctx, gitTimeout)
-	fetchCmd := exec.CommandContext(gitCtx, "git", "fetch", "origin", fmt.Sprintf("+pull/%d/head:%s", prNumber, branchName))
-	fetchCmd.Dir = originPath
-	if out, err := fetchCmd.CombinedOutput(); err != nil {
-		cancel()
-		wt.GitMu.Unlock()
-		if gitCtx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("git fetch timed out after %s", gitTimeout)
-		}
-		return nil, fmt.Errorf("git fetch: %w: %s", err, string(out))
-	}
-	cancel()
-
-	log(fmt.Sprintf("Creating worktree %s...", worktreeName))
-	gitCtx, cancel = context.WithTimeout(ctx, gitTimeout)
-	// Add with --no-checkout and check out separately, so a failed checkout is
-	// reported on its own and the partial worktree is cleaned up.
-	wtCmd := exec.CommandContext(gitCtx, "git", "worktree", "add", "--no-checkout", worktreePath, branchName)
-	wtCmd.Dir = originPath
-	if out, err := wtCmd.CombinedOutput(); err != nil {
-		cancel()
-		wt.CleanupFailedAdd(originPath, worktreePath, branchName)
-		wt.GitMu.Unlock()
-		if gitCtx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("git worktree add timed out after %s", gitTimeout)
-		}
-		return nil, fmt.Errorf("git worktree add: %w: %s", err, string(out))
-	}
-	cancel()
-
-	gitCtx, cancel = context.WithTimeout(ctx, gitTimeout)
-	checkoutCmd := exec.CommandContext(gitCtx, "git", "checkout")
-	checkoutCmd.Dir = worktreePath
-	if out, err := checkoutCmd.CombinedOutput(); err != nil {
-		cancel()
-		wt.CleanupFailedAdd(originPath, worktreePath, branchName)
-		wt.GitMu.Unlock()
-		if gitCtx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("git checkout in worktree timed out after %s", gitTimeout)
-		}
-		return nil, fmt.Errorf("git checkout in worktree: %w: %s", err, string(out))
-	}
-	cancel()
-
-	wt.GitMu.Unlock()
-	repoLock.Release()
 
 	injectContext(ctx, ag, worktreePath, fullRepo, prNumber, log)
 	prcache.Set(repoShort, prNumber, details.Title, details.Author)
