@@ -74,8 +74,9 @@ func TestFindSessionsWithFixture(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	// Create a fake Claude projects directory
-	projectDir := filepath.Join(tmpDir, ".claude", "projects", "-tmp-fakeworktree")
+	// Create a fake Claude projects directory. Derive its name the way
+	// FindSessions does: /tmp resolves to /private/tmp on macOS.
+	projectDir := ProjectDirPath("/tmp/fakeworktree")
 	os.MkdirAll(projectDir, 0o755)
 
 	// Write some fake session files
