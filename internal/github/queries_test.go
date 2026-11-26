@@ -177,20 +177,20 @@ func TestBuildReviewRequestQueries(t *testing.T) {
 		{
 			name:   "no repo, drafts allowed",
 			wantQ1: "is:pr is:open review-requested:@me",
-			wantQ2: "is:pr is:open reviewed-by:@me review:required",
+			wantQ2: "is:pr is:open reviewed-by:@me review:required -author:@me",
 		},
 		{
 			name:         "no repo, drafts excluded",
 			ignoreDrafts: true,
 			wantQ1:       "is:pr is:open review-requested:@me draft:false",
-			wantQ2:       "is:pr is:open reviewed-by:@me review:required draft:false",
+			wantQ2:       "is:pr is:open reviewed-by:@me review:required -author:@me draft:false",
 		},
 		{
 			name:         "repo + drafts excluded",
 			repoFilter:   "owner/repo",
 			ignoreDrafts: true,
 			wantQ1:       "is:pr is:open review-requested:@me repo:owner/repo draft:false",
-			wantQ2:       "is:pr is:open reviewed-by:@me review:required repo:owner/repo draft:false",
+			wantQ2:       "is:pr is:open reviewed-by:@me review:required -author:@me repo:owner/repo draft:false",
 		},
 	}
 	for _, tt := range tests {
@@ -323,10 +323,17 @@ func TestMergeReviewRequests_dedupByRepoAndNumber(t *testing.T) {
 // paginates at searchPageSize, so a test can build a result set larger than one
 // page and see what each query actually gets back.
 type fakeSearch struct {
-	corpus  []ReviewRequest
-	queries []string
-	afters  []string
+	corpus []ReviewRequest
+	// reviewed is what the re-review query (reviewed-by:@me) returns.
+	reviewed []searchNode
+	queries  []string
+	afters   []string
+	// logins records the login variable sent with each search ("" if none).
+	logins []string
 }
+
+// fakeLogin is what the fake returns for `gh api user`.
+const fakeLogin = "me"
 
 // repoClauseOf extracts the owner/repo from a "repo:owner/name" clause.
 func repoClauseOf(q string) string {
@@ -339,7 +346,10 @@ func repoClauseOf(q string) string {
 }
 
 func (f *fakeSearch) run(_ context.Context, args ...string) ([]byte, error) {
-	var q, after string
+	if len(args) >= 2 && args[0] == "api" && args[1] == "user" {
+		return []byte(fakeLogin + "\n"), nil
+	}
+	var q, after, login string
 	for _, a := range args {
 		if v, ok := strings.CutPrefix(a, "q="); ok {
 			q = v
@@ -347,18 +357,27 @@ func (f *fakeSearch) run(_ context.Context, args ...string) ([]byte, error) {
 		if v, ok := strings.CutPrefix(a, "after="); ok {
 			after = v
 		}
+		if v, ok := strings.CutPrefix(a, "login="); ok {
+			login = v
+		}
 	}
 	f.queries = append(f.queries, q)
 	f.afters = append(f.afters, after)
+	f.logins = append(f.logins, login)
 
-	var matched []ReviewRequest
-	// Only the requested-reviews query matches in this fake; the re-review
-	// query returns an empty page, as it would for a user with no re-reviews.
-	if strings.Contains(q, "review-requested:@me") {
-		repo := repoClauseOf(q)
+	var matched []searchNode
+	repo := repoClauseOf(q)
+	switch {
+	case strings.Contains(q, "review-requested:@me"):
 		for _, rr := range f.corpus {
 			if repo == "" || rr.Repository.NameWithOwner == repo {
-				matched = append(matched, rr)
+				matched = append(matched, searchNode{ReviewRequest: rr})
+			}
+		}
+	case strings.Contains(q, "reviewed-by:@me"):
+		for _, n := range f.reviewed {
+			if repo == "" || n.Repository.NameWithOwner == repo {
+				matched = append(matched, n)
 			}
 		}
 	}
@@ -381,7 +400,7 @@ func (f *fakeSearch) run(_ context.Context, args ...string) ([]byte, error) {
 					HasNextPage bool   `json:"hasNextPage"`
 					EndCursor   string `json:"endCursor"`
 				} `json:"pageInfo"`
-				Nodes []ReviewRequest `json:"nodes"`
+				Nodes []searchNode `json:"nodes"`
 			} `json:"search"`
 		} `json:"data"`
 	}
@@ -416,7 +435,7 @@ func TestSearchReviewRequests_followsPagination(t *testing.T) {
 	f := &fakeSearch{corpus: corpus("owner/mono", 1, 120)}
 	useFakeSearch(t, f)
 
-	got, err := searchReviewRequests(context.Background(), "is:pr is:open review-requested:@me")
+	got, err := searchReviewRequests(context.Background(), reviewRequestSearch, "is:pr is:open review-requested:@me")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,6 +468,241 @@ func TestGetReviewRequests_moreThanOnePageOfResults(t *testing.T) {
 		if rr.Kind != ReviewKindNew {
 			t.Fatalf("PR #%d kind = %q, want %q", rr.Number, rr.Kind, ReviewKindNew)
 		}
+	}
+}
+
+// review describes one of the current user's reviews for reviewedNode. An
+// empty oid models a review whose commit GitHub no longer has. Each entry of
+// replies is one inline comment: true for a reply to an existing thread,
+// false for a comment that starts a new one.
+func review(state, body, oid string, replies ...bool) map[string]any {
+	var commit any
+	if oid != "" {
+		commit = map[string]any{"oid": oid}
+	}
+	comments := []any{}
+	for _, isReply := range replies {
+		var replyTo any
+		if isReply {
+			replyTo = map[string]any{"id": "thread"}
+		}
+		comments = append(comments, map[string]any{"replyTo": replyTo})
+	}
+	return map[string]any{
+		"state":    state,
+		"body":     body,
+		"commit":   commit,
+		"comments": map[string]any{"nodes": comments},
+	}
+}
+
+// reviewedNode builds a re-review search result: a PR at head with the
+// current user's reviews, oldest first, as GitHub returns them.
+func reviewedNode(number int, head string, reviews ...map[string]any) searchNode {
+	raw, err := json.Marshal(map[string]any{
+		"number":        number,
+		"repository":    map[string]any{"name": "mono", "nameWithOwner": "owner/mono"},
+		"headRefOid":    head,
+		"viewerReviews": map[string]any{"nodes": reviews},
+	})
+	if err != nil {
+		panic(err)
+	}
+	var n searchNode
+	if err := json.Unmarshal(raw, &n); err != nil {
+		panic(err)
+	}
+	return n
+}
+
+// rereviewNumbers runs GetReviewRequests against f and returns the PR numbers
+// it lists, failing if any is not a re-review.
+func rereviewNumbers(t *testing.T, f *fakeSearch) string {
+	t.Helper()
+	useFakeSearch(t, f)
+	got, err := GetReviewRequests(context.Background(), "owner/mono", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var numbers []int
+	for _, rr := range got {
+		numbers = append(numbers, rr.Number)
+		if rr.Kind != ReviewKindRereview {
+			t.Errorf("PR #%d kind = %q, want %q", rr.Number, rr.Kind, ReviewKindRereview)
+		}
+	}
+	return fmt.Sprint(numbers)
+}
+
+func TestGetReviewRequests_rereviewOnlyWhenHeadMovedSinceReview(t *testing.T) {
+	noReview := searchNode{ReviewRequest: corpus("owner/mono", 4, 1)[0]}
+	noReview.HeadRefOid = "ddd"
+	f := &fakeSearch{reviewed: []searchNode{
+		reviewedNode(1, "aaa", review("CHANGES_REQUESTED", "fix this", "aaa")), // reviewed at the current head
+		reviewedNode(2, "bbb", review("APPROVED", "", "old")),                  // new commits since the review
+		reviewedNode(3, "ccc", review("COMMENTED", "looks off", "")),           // reviewed commit force-pushed away
+		noReview, // GitHub reports no review by the user
+	}}
+	if got := rereviewNumbers(t, f); got != "[2 3 4]" {
+		t.Fatalf("re-review PRs = %v, want [2 3 4]: #1 was reviewed at its current head", got)
+	}
+}
+
+func TestGetReviewRequests_threadReplyAfterPushIsNotAReview(t *testing.T) {
+	// Reviewed at "old"; the author pushed "new"; the user replied "thanks"
+	// in a thread. GitHub records the reply as a COMMENTED review with an
+	// empty body on "new", but the user never reviewed the new commits.
+	f := &fakeSearch{reviewed: []searchNode{
+		reviewedNode(1, "new",
+			review("CHANGES_REQUESTED", "please fix", "old", false),
+			review("COMMENTED", "", "new", true)),
+		// Only replies in the window: no real review is known, so keep it.
+		reviewedNode(2, "new", review("COMMENTED", "", "new", true, true)),
+	}}
+	if got := rereviewNumbers(t, f); got != "[1 2]" {
+		t.Fatalf("re-review PRs = %v, want [1 2]: a thread reply is not a review of the head", got)
+	}
+}
+
+func TestGetReviewRequests_pendingReviewIsIgnored(t *testing.T) {
+	// An unsubmitted review on the new head must not count as reviewing it.
+	f := &fakeSearch{reviewed: []searchNode{
+		reviewedNode(1, "new",
+			review("COMMENTED", "first pass", "old"),
+			review("PENDING", "draft notes", "new", false)),
+	}}
+	if got := rereviewNumbers(t, f); got != "[1]" {
+		t.Fatalf("re-review PRs = %v, want [1]: a pending review was counted", got)
+	}
+}
+
+func TestGetReviewRequests_realReviewOnNewHeadRemovesIt(t *testing.T) {
+	f := &fakeSearch{reviewed: []searchNode{
+		// Reply after the push, then an approval of the new head.
+		reviewedNode(1, "new",
+			review("COMMENTED", "", "new", true),
+			review("APPROVED", "", "new")),
+		// A COMMENTED review with a body on the new head.
+		reviewedNode(2, "new", review("COMMENTED", "", "new", true), review("COMMENTED", "one more nit", "new")),
+		// "Add single comment": empty body, one inline comment starting a new thread.
+		reviewedNode(3, "new", review("COMMENTED", "", "new", false)),
+		// A batch with a reply and a new comment is a review too.
+		reviewedNode(4, "new", review("COMMENTED", "", "new", true, false)),
+		// A dismissed review was still a review of its commit.
+		reviewedNode(5, "new", review("DISMISSED", "lgtm", "new")),
+		// Control: reply only, so still listed.
+		reviewedNode(6, "new", review("APPROVED", "", "old"), review("COMMENTED", "", "new", true)),
+	}}
+	if got := rereviewNumbers(t, f); got != "[6]" {
+		t.Fatalf("re-review PRs = %v, want [6]: #1-#5 were reviewed at their current head", got)
+	}
+}
+
+func TestGetReviewRequests_explicitRequestSurvivesReviewAtHead(t *testing.T) {
+	// Re-requested after reviewing the current head: the requested-reviews
+	// query still returns it, so the re-review filter must not hide it.
+	f := &fakeSearch{
+		corpus:   corpus("owner/mono", 1, 1),
+		reviewed: []searchNode{reviewedNode(1, "aaa", review("APPROVED", "", "aaa"))},
+	}
+	useFakeSearch(t, f)
+
+	got, err := GetReviewRequests(context.Background(), "owner/mono", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Number != 1 || got[0].Kind != ReviewKindNew {
+		t.Fatalf("got %+v, want PR #1 as %q", got, ReviewKindNew)
+	}
+}
+
+func TestGetReviewRequests_sendsLoginToRereviewSearch(t *testing.T) {
+	f := &fakeSearch{}
+	useFakeSearch(t, f)
+	if _, err := GetReviewRequests(context.Background(), "owner/mono", false); err != nil {
+		t.Fatal(err)
+	}
+	for i, q := range f.queries {
+		want := ""
+		if strings.Contains(q, "reviewed-by:@me") {
+			want = fakeLogin
+		}
+		if f.logins[i] != want {
+			t.Errorf("query %q sent login %q, want %q", q, f.logins[i], want)
+		}
+	}
+}
+
+func TestGetReviewRequestsForRepos_looksUpLoginOnce(t *testing.T) {
+	f := &fakeSearch{}
+	useFakeSearch(t, f)
+	userCalls := 0
+	inner := runGH
+	runGH = func(ctx context.Context, args ...string) ([]byte, error) {
+		if len(args) >= 2 && args[1] == "user" {
+			userCalls++
+		}
+		return inner(ctx, args...)
+	}
+	if _, err := GetReviewRequestsForRepos(context.Background(), []string{"owner/a", "owner/b", "owner/c"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if userCalls != 1 {
+		t.Fatalf("looked up the login %d times for 3 repos, want 1", userCalls)
+	}
+}
+
+func TestRereviewSearch_fetchesWhatTheFilterNeeds(t *testing.T) {
+	for _, want := range []string{
+		"reviews(author: $login",
+		"states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]",
+		"state", "body", "commit { oid }", "replyTo { id }", "headRefOid",
+	} {
+		if !strings.Contains(rereviewSearch, want) {
+			t.Errorf("rereviewSearch is missing %q", want)
+		}
+	}
+	if strings.Contains(rereviewSearch, "PENDING") {
+		t.Error("rereviewSearch must not request PENDING reviews")
+	}
+	if strings.Contains(reviewRequestSearch, "reviews(") {
+		t.Error("reviewRequestSearch should not pay for the reviews window")
+	}
+}
+
+func TestIsRealReview(t *testing.T) {
+	tests := []struct {
+		name string
+		r    map[string]any
+		want bool
+	}{
+		{"approved, no body", review("APPROVED", "", "x"), true},
+		{"changes requested", review("CHANGES_REQUESTED", "no", "x"), true},
+		{"dismissed", review("DISMISSED", "", "x"), true},
+		{"pending", review("PENDING", "notes", "x", false), false},
+		{"commented with body", review("COMMENTED", "nit", "x"), true},
+		{"commented, whitespace body, reply", review("COMMENTED", " \n", "x", true), false},
+		{"thread reply", review("COMMENTED", "", "x", true), false},
+		{"single new comment", review("COMMENTED", "", "x", false), true},
+		{"commented, nothing at all", review("COMMENTED", "", "x"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := reviewedNode(1, "x", tt.r)
+			if got := n.ViewerReviews.Nodes[0].isRealReview(); got != tt.want {
+				t.Fatalf("isRealReview = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSearchNode_reviewedOidStaysOutOfJSON(t *testing.T) {
+	out, err := json.Marshal(reviewedNode(1, "aaa", review("APPROVED", "", "old")).reviewRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "old") {
+		t.Fatalf("ReviewedOid leaked into ReviewRequest JSON: %s", out)
 	}
 }
 
