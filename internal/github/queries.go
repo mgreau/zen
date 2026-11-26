@@ -230,43 +230,106 @@ const reviewRequestSearch = `query($q: String!, $after: String) {
 // Without this a 50-result page silently truncates: review requests in other
 // repositories occupy slots and a configured repository's PR disappears from
 // the poll, so it is neither set up nor refreshed.
+//
+// Any GraphQL error fails the whole search, partial or not: the daemon acts on
+// these results, and acting on an incomplete set is worse than skipping a poll.
 func searchReviewRequests(ctx context.Context, query string) ([]ReviewRequest, error) {
-	var all []ReviewRequest
+	all, err := searchAll[ReviewRequest](ctx, reviewRequestSearch, query, "review requests")
+	if err != nil {
+		return nil, err
+	}
+	return all, nil
+}
+
+// GraphQLError is one entry in a GraphQL response's top-level errors array.
+type GraphQLError struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+// PartialError reports that GitHub answered a GraphQL query with data and
+// errors together, for example FORBIDDEN on results in an organization that
+// enforces SAML SSO the gh token has not been authorized for. The results
+// returned alongside a PartialError are real and complete except for whatever
+// the errors describe.
+type PartialError struct {
+	Errors []GraphQLError
+}
+
+func (e *PartialError) Error() string {
+	seen := make(map[string]bool)
+	var msgs []string
+	for _, ge := range e.Errors {
+		if ge.Message != "" && !seen[ge.Message] {
+			seen[ge.Message] = true
+			msgs = append(msgs, ge.Message)
+		}
+	}
+	if len(msgs) == 0 {
+		return "GitHub returned partial results"
+	}
+	return "GitHub returned partial results: " + strings.Join(msgs, "; ")
+}
+
+// searchAll runs a paginated GraphQL search, following pageInfo to the end
+// (bounded by maxSearchPages). gqlQuery must take $q and $after and select
+// search { pageInfo { hasNextPage endCursor } nodes { ... } }. what names the
+// search in error messages.
+//
+// `gh api graphql` exits non-zero whenever the response has an errors array,
+// but still prints the response, data included, on stdout. So a non-zero exit
+// whose stdout carries search data is a partial result: searchAll keeps the
+// nodes, keeps paginating, and returns everything it got with a *PartialError.
+// A response with no search data at all is a hard failure and returns nil.
+func searchAll[T any](ctx context.Context, gqlQuery, q, what string) ([]T, error) {
+	var all []T
+	var partial []GraphQLError
 	cursor := ""
 	for page := 0; page < maxSearchPages; page++ {
-		args := []string{"api", "graphql", "-f", "query=" + reviewRequestSearch, "-f", "q=" + query}
+		args := []string{"api", "graphql", "-f", "query=" + gqlQuery, "-f", "q=" + q}
 		if cursor != "" {
 			args = append(args, "-f", "after="+cursor)
 		}
-		out, err := runGH(ctx, args...)
-		if err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				return nil, fmt.Errorf("review requests query timed out after %s", apiTimeout)
-			}
-			return nil, fmt.Errorf("GraphQL query failed: %s", ghError(err))
+		out, runErr := runGH(ctx, args...)
+		if runErr != nil && ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("%s query timed out after %s", what, apiTimeout)
 		}
 
 		var result struct {
-			Data struct {
-				Search struct {
+			Data *struct {
+				Search *struct {
 					PageInfo struct {
 						HasNextPage bool   `json:"hasNextPage"`
 						EndCursor   string `json:"endCursor"`
 					} `json:"pageInfo"`
-					Nodes []ReviewRequest `json:"nodes"`
+					Nodes []T `json:"nodes"`
 				} `json:"search"`
 			} `json:"data"`
+			Errors []GraphQLError `json:"errors"`
 		}
-		if err := json.Unmarshal(out, &result); err != nil {
-			return nil, fmt.Errorf("parsing GraphQL response: %w", err)
-		}
+		parseErr := json.Unmarshal(out, &result)
+		hasData := parseErr == nil && result.Data != nil && result.Data.Search != nil
 
-		all = append(all, result.Data.Search.Nodes...)
-		info := result.Data.Search.PageInfo
+		switch {
+		case runErr != nil && !(hasData && len(result.Errors) > 0):
+			return nil, fmt.Errorf("GraphQL query failed: %s", ghError(runErr))
+		case parseErr != nil:
+			return nil, fmt.Errorf("parsing GraphQL response: %w", parseErr)
+		case !hasData:
+			return nil, fmt.Errorf("GraphQL response for %s has no search data", what)
+		}
+		partial = append(partial, result.Errors...)
+
+		search := result.Data.Search
+		all = append(all, search.Nodes...)
+		info := search.PageInfo
 		if !info.HasNextPage || info.EndCursor == "" || info.EndCursor == cursor {
-			return all, nil
+			break
 		}
 		cursor = info.EndCursor
+	}
+	if len(partial) > 0 {
+		return all, &PartialError{Errors: partial}
 	}
 	return all, nil
 }
@@ -379,24 +442,23 @@ func GetApprovedUnmerged(ctx context.Context, repoFilter string, ignoreDrafts bo
 
 // buildMyOpenPRsQuery returns the GitHub search query string for
 // GetMyOpenPRs. Unlike other queries, drafts are always included — a PR's
-// own author wants to see their WIP work, not just review-ready PRs.
+// own author wants to see their WIP work, not just review-ready PRs. Results
+// are sorted oldest first so pagination walks a stable order, and if
+// maxSearchPages ever cuts the list short, the newest PRs are the ones left
+// out rather than an arbitrary set.
 func buildMyOpenPRsQuery(repoFilter string) string {
 	repoClause := ""
 	if repoFilter != "" {
 		repoClause = " repo:" + repoFilter
 	}
-	return fmt.Sprintf("is:pr is:open author:@me%s", repoClause)
+	return fmt.Sprintf("is:pr is:open author:@me%s sort:created-asc", repoClause)
 }
 
-// GetMyOpenPRs fetches the user's own open PRs, enriched with draft state,
-// review decision, mergeability, pending review requests, and the latest
-// commit's CI check rollup — enough to classify each into a status bucket
-// (ready to merge, failing CI, changes requested, in review, in flight, draft).
-func GetMyOpenPRs(ctx context.Context, repoFilter string) ([]MyPR, error) {
-	ctx, cancel := withTimeout(ctx)
-	defer cancel()
-	query := `query($q: String!) {
-  search(query: $q, type: ISSUE, first: 50) {
+// myOpenPRsSearch is one page of GetMyOpenPRs. See reviewRequestSearch for why
+// first is inlined and after may be omitted.
+const myOpenPRsSearch = `query($q: String!, $after: String) {
+  search(query: $q, type: ISSUE, first: 50, after: $after) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       ... on PullRequest {
         number
@@ -422,38 +484,33 @@ func GetMyOpenPRs(ctx context.Context, repoFilter string) ([]MyPR, error) {
   }
 }`
 
-	q := buildMyOpenPRsQuery(repoFilter)
+// GetMyOpenPRs fetches the user's own open PRs, enriched with draft state,
+// review decision, mergeability, pending review requests, and the latest
+// commit's CI check rollup — enough to classify each into a status bucket
+// (ready to merge, failing CI, changes requested, in review, in flight, draft).
+//
+// When GitHub answers with some results and some errors (see PartialError),
+// GetMyOpenPRs returns the results it got together with the *PartialError, so
+// one inaccessible organization does not hide every other PR.
+func GetMyOpenPRs(ctx context.Context, repoFilter string) ([]MyPR, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
-		"-f", "query="+query,
-		"-f", "q="+q,
-	)
-	out, err := cmd.Output()
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("my open PRs query timed out after %s", apiTimeout)
-		}
-		return nil, fmt.Errorf("GraphQL query failed: %s", ghError(err))
+	nodes, err := searchAll[MyPR](ctx, myOpenPRsSearch, buildMyOpenPRsQuery(repoFilter), "my open PRs")
+	var partial *PartialError
+	if err != nil && !errors.As(err, &partial) {
+		return nil, err
 	}
 
-	var result struct {
-		Data struct {
-			Search struct {
-				Nodes []MyPR `json:"nodes"`
-			} `json:"search"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		return nil, fmt.Errorf("parsing GraphQL response: %w", err)
-	}
-
+	// A node GitHub withheld (null, or not a PullRequest) decodes to the zero
+	// MyPR; drop those.
 	var filtered []MyPR
-	for _, pr := range result.Data.Search.Nodes {
+	for _, pr := range nodes {
 		if pr.Number != 0 {
 			filtered = append(filtered, pr)
 		}
 	}
-	return filtered, nil
+	return filtered, err
 }
 
 // ListOpenPRs lists open PRs for a repository using `gh pr list`. When

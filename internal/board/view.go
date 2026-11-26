@@ -14,11 +14,13 @@ var (
 	background = lipgloss.Color("0")
 	red        = lipgloss.Color("9")
 	green      = lipgloss.Color("10")
+	yellow     = lipgloss.Color("11")
 	grey       = lipgloss.Color("245")
 
 	titleStyle     = lipgloss.NewStyle().Bold(true).Foreground(cyan)
 	dimStyle       = lipgloss.NewStyle().Foreground(grey)
 	errorStyle     = lipgloss.NewStyle().Foreground(red)
+	warningStyle   = lipgloss.NewStyle().Foreground(yellow)
 	statusMsgStyle = lipgloss.NewStyle().Foreground(green)
 	footerStyle    = lipgloss.NewStyle().Foreground(grey)
 
@@ -68,6 +70,9 @@ func (m Model) View() string {
 		b.WriteString("\n")
 	case m.statusMsg != "":
 		b.WriteString(statusMsgStyle.Render(m.statusMsg))
+		b.WriteString("\n")
+	case m.warning != nil:
+		b.WriteString(warningStyle.Render("Warning: " + m.warning.Error()))
 		b.WriteString("\n")
 	}
 

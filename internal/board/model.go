@@ -2,10 +2,12 @@ package board
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -56,9 +58,12 @@ type Model struct {
 	myRows      []MyPRRow
 	reviewRows  []ReviewRow
 
-	focus       Focus
-	loading     bool
-	err         error
+	focus   Focus
+	loading bool
+	err     error
+	// warning is set when the last refresh succeeded with incomplete
+	// results (see FetchMyPRs); the tables still show what came back.
+	warning     error
 	statusMsg   string
 	lastUpdated time.Time
 	width       int
@@ -80,7 +85,7 @@ func NewModel(cfg *config.Config) Model {
 	styles.Selected = styles.Selected.Foreground(background).Background(cyan).Bold(true)
 
 	myTable := table.New(
-		table.WithColumns(myColumns(defaultWidth)),
+		table.WithColumns(myColumns(defaultWidth, repoColWidth)),
 		table.WithFocused(true),
 		table.WithHeight(defaultTableHeight),
 	)
@@ -112,11 +117,13 @@ const (
 	defaultTableHeight = 8
 )
 
-// dataMsg carries the result of a fetch.
+// dataMsg carries the result of a fetch. err means nothing usable came back;
+// warning means the rows are usable but incomplete.
 type dataMsg struct {
 	myRows     []MyPRRow
 	reviewRows []ReviewRow
 	err        error
+	warning    error
 }
 
 // tickMsg fires the periodic auto-refresh.
@@ -146,13 +153,24 @@ func fetchCmd(cfg *config.Config) tea.Cmd {
 			reviewRows, err2 = FetchReviewRequests(ctx, cfg)
 		}()
 		wg.Wait()
-
-		err := err1
-		if err == nil {
-			err = err2
-		}
-		return dataMsg{myRows: myRows, reviewRows: reviewRows, err: err}
+		return newDataMsg(myRows, err1, reviewRows, err2)
 	}
+}
+
+// newDataMsg combines the two fetches' results. A partial result from
+// FetchMyPRs (an error wrapping *github.PartialError) becomes a warning so its
+// rows are still shown; any other error from either fetch is a failure.
+func newDataMsg(myRows []MyPRRow, myErr error, reviewRows []ReviewRow, reviewErr error) dataMsg {
+	var warning error
+	var partial *github.PartialError
+	if errors.As(myErr, &partial) {
+		warning, myErr = myErr, nil
+	}
+	err := myErr
+	if err == nil {
+		err = reviewErr
+	}
+	return dataMsg{myRows: myRows, reviewRows: reviewRows, err: err, warning: warning}
 }
 
 func tickCmd() tea.Cmd {
@@ -203,6 +221,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = nil
+		m.warning = msg.warning
 		m.myRows = msg.myRows
 		m.reviewRows = msg.reviewRows
 		// Row counts just changed, so table heights (computed from row
@@ -365,7 +384,7 @@ func (m *Model) resize() {
 
 	m.myTable.SetHeight(myHeight)
 	m.reviewTable.SetHeight(reviewHeight)
-	m.myTable.SetColumns(myColumns(m.width))
+	m.myTable.SetColumns(myColumns(m.width, myRepoColWidth(m.myRows)))
 	m.reviewTable.SetColumns(reviewColumns(m.width))
 	m.myTable.SetWidth(m.width)
 	m.reviewTable.SetWidth(m.width)
@@ -444,8 +463,24 @@ func clampHeight(rowCount int) int {
 	return min(max(rowCount, minTableHeight), maxTableHeight)
 }
 
-func myColumns(totalWidth int) []table.Column {
-	fixed := (statusColWidthMy + colPad) + (prColWidth + colPad) + (repoColWidth + colPad) + (ageColWidth + colPad)
+// maxRepoColWidth caps how far My Pull Requests widens its REPO column for
+// owner/repo labels (see myRepoColWidth), so titles keep their room.
+const maxRepoColWidth = 24
+
+// myRepoColWidth fits the REPO column to the longest label in rows, between
+// repoColWidth and maxRepoColWidth. My Pull Requests labels a PR outside the
+// configured repos by its owner/repo, which the fixed width would truncate
+// to an owner prefix that cannot tell two of that owner's repos apart.
+func myRepoColWidth(rows []MyPRRow) int {
+	w := repoColWidth
+	for _, r := range rows {
+		w = max(w, utf8.RuneCountInString(r.Repo))
+	}
+	return min(w, maxRepoColWidth)
+}
+
+func myColumns(totalWidth, repoWidth int) []table.Column {
+	fixed := (statusColWidthMy + colPad) + (prColWidth + colPad) + (repoWidth + colPad) + (ageColWidth + colPad)
 	title := totalWidth - fixed
 	if title < minTitleWidth {
 		title = minTitleWidth
@@ -453,7 +488,7 @@ func myColumns(totalWidth int) []table.Column {
 	return []table.Column{
 		{Title: "STATUS", Width: statusColWidthMy},
 		{Title: "PR", Width: prColWidth},
-		{Title: "REPO", Width: repoColWidth},
+		{Title: "REPO", Width: repoWidth},
 		{Title: "TITLE", Width: title},
 		{Title: "AGE", Width: ageColWidth},
 	}
